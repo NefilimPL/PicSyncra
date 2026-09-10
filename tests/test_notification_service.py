@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import json
 import re
 import threading
 
@@ -403,6 +404,7 @@ def _service(
     transports: dict[str, FakeTransport] | None = None,
     settings: dict[str, object] | None = None,
     emitted: list[dict[str, object]] | None = None,
+    time_zone: str = "UTC",
 ) -> notification_service.NotificationService:
     channels = transports or {"entra": FakeTransport(), "smtp": FakeTransport()}
     event_sink = emitted if emitted is not None else []
@@ -416,6 +418,7 @@ def _service(
         },
         event_emitter=lambda **kwargs: event_sink.append(kwargs),
         now=lambda: NOW,
+        time_zone_loader=lambda: time_zone,
     )
 
 
@@ -466,6 +469,82 @@ def test_queue_incident_notification_only_when_due_and_escapes_message() -> None
     assert "Aktualizacja &lt;nieudana&gt;" in message["html_body"]
     assert "Ponów &amp; sprawdź" in message["html_body"]
     assert "secret" not in str(message)
+
+
+@pytest.mark.parametrize(
+    ("time_zone", "created_at", "expected"),
+    [
+        (
+            "Europe/Warsaw",
+            "2026-07-17T09:59:00.000Z",
+            "2026-07-17 11:59:00 CEST (Europe/Warsaw)",
+        ),
+        (
+            "Europe/Warsaw",
+            "2026-01-17T09:59:00.000Z",
+            "2026-01-17 10:59:00 CET (Europe/Warsaw)",
+        ),
+        (
+            "Invalid/Time_Zone",
+            "2026-01-17T09:59:00.000Z",
+            "2026-01-17 09:59:00 UTC (UTC)",
+        ),
+    ],
+)
+def test_incident_message_uses_configured_global_time_zone(
+    time_zone: str, created_at: str, expected: str
+) -> None:
+    service = _service(FakeStore(), time_zone=time_zone)
+
+    queued = service.queue_incident_notification(
+        _event(created_at=created_at), _incident()
+    )
+
+    assert queued is not None
+    assert f"Czas: {expected}" in queued["message"]["text_body"]
+
+
+def test_default_time_zone_loader_uses_global_web_display_setting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from picsyncra import config
+
+    monkeypatch.setattr(
+        config,
+        "load_config",
+        lambda *, interactive: {"web_display": {"time_zone": "Europe/Warsaw"}},
+    )
+
+    assert notification_service._default_time_zone_loader() == "Europe/Warsaw"
+
+
+def test_incident_details_attachment_uses_configured_time_zone_for_all_timestamps() -> None:
+    service = _service(FakeStore(), time_zone="Europe/Warsaw")
+    event = _event(
+        created_at="2026-09-10T11:04:10.742Z",
+        details={
+            "sample": {"observed_at": "2026-09-10T11:04:10.736Z"},
+            "history": [{"observed_at": "2026-01-17T09:59:00.000Z"}],
+        },
+    )
+    incident = _incident(
+        first_seen_at="2026-09-10T11:04:00.000Z",
+        last_seen_at="2026-09-10T11:04:10.742Z",
+    )
+
+    queued = service.queue_incident_notification(event, incident)
+
+    assert queued is not None
+    attachment = json.loads(queued["message"]["attachments"][0]["content"])
+    assert attachment["display_time_zone"] == "Europe/Warsaw"
+    assert attachment["event"]["created_at"] == "2026-09-10T13:04:10.742+02:00 [Europe/Warsaw]"
+    assert attachment["event"]["details"]["sample"]["observed_at"] == (
+        "2026-09-10T13:04:10.736+02:00 [Europe/Warsaw]"
+    )
+    assert attachment["event"]["details"]["history"][0]["observed_at"] == (
+        "2026-01-17T10:59:00.000+01:00 [Europe/Warsaw]"
+    )
+    assert attachment["incident"]["first_seen_at"] == "2026-09-10T13:04:00.000+02:00 [Europe/Warsaw]"
 
 
 def test_incident_message_includes_bounded_redacted_occurrence_context() -> None:

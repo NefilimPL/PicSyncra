@@ -256,6 +256,14 @@ def _default_settings_loader() -> dict[str, object]:
     return normalize_email_settings(configured.get(EMAIL_SETTINGS_KEY, {}))
 
 
+def _default_time_zone_loader() -> str:
+    from . import config
+
+    configured = config.load_config(interactive=False)
+    display = config.normalize_web_display_settings(configured.get("web_display"))
+    return str(display.get("time_zone") or "UTC")
+
+
 def _default_user_lookup(username: str) -> dict[str, object] | None:
     from .web_data import find_user
 
@@ -344,8 +352,53 @@ def _safe_technical_value(value: object) -> object:
     return _project_mail_context(redact_value(value), list_limit=None)
 
 
+def _resolved_mail_time_zone(time_zone_name: object) -> tuple[object, str]:
+    requested_name = _text(time_zone_name, 128) or "UTC"
+    try:
+        return ZoneInfo(requested_name), requested_name
+    except Exception:
+        return timezone.utc, "UTC"
+
+
+def _format_attachment_timestamp(value: object, time_zone_name: object) -> object:
+    if not isinstance(value, str):
+        return value
+    original = _text(value)
+    if not original:
+        return ""
+    try:
+        timestamp = datetime.fromisoformat(original.replace("Z", "+00:00"))
+    except ValueError:
+        return original
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=timezone.utc)
+    target_zone, requested_name = _resolved_mail_time_zone(time_zone_name)
+    return (
+        f"{timestamp.astimezone(target_zone).isoformat(timespec='milliseconds')} "
+        f"[{requested_name}]"
+    )
+
+
+def _localize_attachment_timestamps(value: object, time_zone_name: object) -> object:
+    if isinstance(value, Mapping):
+        return {
+            str(key): (
+                _format_attachment_timestamp(item, time_zone_name)
+                if str(key).endswith("_at")
+                else _localize_attachment_timestamps(item, time_zone_name)
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_localize_attachment_timestamps(item, time_zone_name) for item in value]
+    return value
+
+
 def _incident_details_attachment_payload(
-    event: Mapping[str, object], incident: Mapping[str, object]
+    event: Mapping[str, object],
+    incident: Mapping[str, object],
+    *,
+    time_zone_name: object = "UTC",
 ) -> dict[str, str] | None:
     details = _safe_technical_value(event.get("details", {}))
     context = _safe_technical_value(incident.get("context", {}))
@@ -388,18 +441,20 @@ def _incident_details_attachment_payload(
         if _text(incident.get(key))
     }
     incident_data["context"] = context
+    _target_zone, resolved_time_zone_name = _resolved_mail_time_zone(time_zone_name)
+    document = _localize_attachment_timestamps(
+        {
+            "notice": "Sensitive values have been redacted.",
+            "display_time_zone": resolved_time_zone_name,
+            "event": event_data,
+            "incident": incident_data,
+        },
+        resolved_time_zone_name,
+    )
     return {
         "filename": _INCIDENT_DETAILS_ATTACHMENT_FILENAME,
         "content_type": "application/json",
-        "content": json.dumps(
-            {
-                "notice": "Sensitive values have been redacted.",
-                "event": event_data,
-                "incident": incident_data,
-            },
-            ensure_ascii=False,
-            indent=2,
-        ),
+        "content": json.dumps(document, ensure_ascii=False, indent=2),
     }
 
 
@@ -463,8 +518,28 @@ def _exception_attachment_payload(
     }
 
 
+def _format_mail_event_time(value: object, time_zone_name: object) -> str:
+    original = _text(value)
+    if not original:
+        return ""
+    try:
+        timestamp = datetime.fromisoformat(original.replace("Z", "+00:00"))
+    except ValueError:
+        return original
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=timezone.utc)
+    target_zone, requested_name = _resolved_mail_time_zone(time_zone_name)
+    local_time = timestamp.astimezone(target_zone)
+    abbreviation = local_time.tzname() or requested_name
+    return f"{local_time:%Y-%m-%d %H:%M:%S} {abbreviation} ({requested_name})"
+
+
 def _message_payload(
-    event: Mapping[str, object], incident: Mapping[str, object], message_id: str
+    event: Mapping[str, object],
+    incident: Mapping[str, object],
+    message_id: str,
+    *,
+    time_zone_name: object = "UTC",
 ) -> dict[str, object]:
     severity = _text(event.get("severity")).upper()
     summary = _text(event.get("summary")) or "Zdarzenie wymaga uwagi"
@@ -476,7 +551,7 @@ def _message_payload(
     rows = [
         ("Poziom", severity),
         ("Typ", _text(event.get("event_type"))),
-        ("Czas", _text(event.get("created_at"))),
+        ("Czas", _format_mail_event_time(event.get("created_at"), time_zone_name)),
         ("Incydent", _text(incident.get("id"))),
         ("Liczba wystąpień", str(occurrence_count)),
         ("Zadanie", _text(event.get("job_id"))),
@@ -487,7 +562,9 @@ def _message_payload(
         ("Zalecane działanie", _text(event.get("recommended_action"))),
     ]
     attachments: list[dict[str, str]] = []
-    details_attachment = _incident_details_attachment_payload(event, incident)
+    details_attachment = _incident_details_attachment_payload(
+        event, incident, time_zone_name=time_zone_name
+    )
     if details_attachment is not None:
         attachments.append(details_attachment)
         rows.append(
@@ -518,7 +595,11 @@ def _message_payload(
 
 
 def _test_suite_message(
-    scenario: Mapping[str, object], message_id: str, now: datetime
+    scenario: Mapping[str, object],
+    message_id: str,
+    now: datetime,
+    *,
+    time_zone_name: object = "UTC",
 ) -> dict[str, object]:
     created_at = _iso_utc(now)
     event: dict[str, object] = {
@@ -546,7 +627,9 @@ def _test_suite_message(
         "last_seen_at": created_at,
         "context": {"simulation": True},
     }
-    payload = _message_payload(event, incident, message_id)
+    payload = _message_payload(
+        event, incident, message_id, time_zone_name=time_zone_name
+    )
     payload["subject"] = _header_text(
         f"{_TEST_SIMULATION_NOTICE} — {_text(payload.get('subject'))}"
     )
@@ -834,6 +917,7 @@ class NotificationService:
         store: object,
         transport_factory: Callable[[str, Mapping[str, object]], MailTransport] = build_transport,
         settings_loader: Callable[[], Mapping[str, object]] = _default_settings_loader,
+        time_zone_loader: Callable[[], object] = _default_time_zone_loader,
         user_lookup: Callable[[str], Mapping[str, object] | None] = _default_user_lookup,
         event_emitter: Callable[..., object] = _default_event_emitter,
         now: Callable[[], datetime] = _utc_now,
@@ -841,12 +925,19 @@ class NotificationService:
         self.store = store
         self.transport_factory = transport_factory
         self.settings_loader = settings_loader
+        self.time_zone_loader = time_zone_loader
         self.user_lookup = user_lookup
         self.event_emitter = event_emitter
         self.now = now
 
     def _settings(self) -> dict[str, object]:
         return normalize_email_settings(self.settings_loader())
+
+    def _time_zone_name(self) -> str:
+        try:
+            return _text(self.time_zone_loader(), 128) or "UTC"
+        except Exception:
+            return "UTC"
 
     def queue_incident_notification(
         self, event: Mapping[str, object], incident: Mapping[str, object]
@@ -865,7 +956,9 @@ class NotificationService:
         created_at = _iso_utc(self.now())
         delivery_id = f"delivery-{uuid.uuid4().hex}"
         message_id = f"{_text(incident.get('id')) or 'incident'}-{uuid.uuid4().hex}"
-        message = _message_payload(event, incident, message_id)
+        message = _message_payload(
+            event, incident, message_id, time_zone_name=self._time_zone_name()
+        )
         record: dict[str, object] = {
             "id": delivery_id,
             "incident_id": _text(incident.get("id")),
@@ -923,7 +1016,12 @@ class NotificationService:
                 "primary_channel": _text(settings.get("primary_channel")).lower(),
                 "used_channel": "",
                 "recipients": recipients,
-                "message": _message_payload(event, incident_values, message_id),
+                "message": _message_payload(
+                    event,
+                    incident_values,
+                    message_id,
+                    time_zone_name=self._time_zone_name(),
+                ),
                 "attempts": [],
                 "created_at": completed_at,
                 "updated_at": completed_at,
@@ -1456,7 +1554,12 @@ class NotificationService:
                 "incident_id": "",
                 "primary_channel": selected,
                 "recipients": recipients,
-                "message": _test_suite_message(scenario, message_id, self.now()),
+                "message": _test_suite_message(
+                    scenario,
+                    message_id,
+                    self.now(),
+                    time_zone_name=self._time_zone_name(),
+                ),
             }
             try:
                 status, used_channel, attempts = self._deliver_claimed(
