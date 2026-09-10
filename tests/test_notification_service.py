@@ -495,9 +495,12 @@ def test_incident_message_includes_bounded_redacted_occurrence_context() -> None
     assert queued is not None
     message = queued["message"]
     assert "Liczba wystąpień: 7" in message["text_body"]
-    assert '"slot": "01 <front>"' in message["text_body"]
-    assert "01 &lt;front&gt;" in message["html_body"]
-    assert "Brak &amp; blokada" in message["html_body"]
+    assert "Szczegóły techniczne" in message["text_body"]
+    assert '"slot": "01 <front>"' not in message["text_body"]
+    attachment = message["attachments"][0]
+    assert attachment["filename"] == "picsyncra-incident-details.json"
+    assert '"slot": "01 <front>"' in attachment["content"]
+    assert "Brak & blokada" in attachment["content"]
     assert "secret-token" not in str(message)
     assert "smtp-secret" not in str(message)
     assert "private.internal" not in str(message)
@@ -505,6 +508,50 @@ def test_incident_message_includes_bounded_redacted_occurrence_context() -> None
     assert "session-secret" not in str(message)
     assert len(message["text_body"]) <= 10_000
     assert len(message["html_body"]) <= 20_000
+
+
+def test_resource_alert_keeps_trigger_visible_and_attaches_full_technical_data() -> None:
+    store = FakeStore()
+    transport = FakeTransport()
+    service = _service(store, {"entra": transport, "smtp": FakeTransport()})
+    technical_tail = "TECHNICAL_DATA_END_MARKER"
+    event = _event(
+        event_type="backend.resource_high",
+        details={
+            "trigger": {
+                "metric": "disk_io_bytes_per_second",
+                "value": 9.5 * 1024 * 1024,
+                "threshold": 8 * 1024 * 1024,
+                "configured_threshold": 8,
+                "test_mode": "real",
+            },
+            "sample": {"backend": {"disk_io_bytes_per_second": 9.5 * 1024 * 1024}},
+            "history": [{"sequence": index} for index in range(60)],
+            "tail": technical_tail,
+        },
+    )
+
+    queued = service.queue_incident_notification(event, _incident())
+
+    assert queued is not None
+    body = queued["message"]["text_body"]
+    assert "Przekroczona metryka: Dysk I/O" in body
+    assert "Wartość: 9.50 MiB/s" in body
+    assert "Próg: 8.00 MiB/s" in body
+    assert "Tryb: test rzeczywisty" in body
+    assert "Szczegóły techniczne: Pełne dane techniczne znajdują się w załączniku." in body
+    assert technical_tail not in body
+
+    result = service.process_delivery(str(queued["id"]))
+
+    assert result["status"] == "sent"
+    assert len(transport.messages[0].attachments) == 1
+    attachment = transport.messages[0].attachments[0]
+    assert attachment.filename == "picsyncra-incident-details.json"
+    assert attachment.content_type == "application/json"
+    assert technical_tail in attachment.content
+    assert '"sequence": 49' in attachment.content
+    assert '"sequence": 59' in attachment.content
 
 
 def test_error_exception_is_sent_as_bounded_redacted_text_attachment() -> None:
@@ -550,8 +597,12 @@ def test_error_exception_is_sent_as_bounded_redacted_text_attachment() -> None:
 
     assert result["status"] == "sent"
     message = transport.messages[0]
-    assert len(message.attachments) == 1
-    attachment = message.attachments[0]
+    assert len(message.attachments) == 2
+    attachment = next(
+        item
+        for item in message.attachments
+        if item.filename == "picsyncra-exception.txt"
+    )
     assert attachment.filename == "picsyncra-exception.txt"
     assert attachment.content_type == "text/plain"
     assert len(attachment.content.encode("utf-8")) <= 24 * 1024
@@ -580,7 +631,7 @@ def test_error_exception_is_sent_as_bounded_redacted_text_attachment() -> None:
     ],
     ids=["warning-with-exception", "error-without-exception"],
 )
-def test_non_qualifying_incident_has_no_exception_attachment(
+def test_non_qualifying_incident_has_only_technical_details_attachment(
     severity: str, exception_data: dict[str, object]
 ) -> None:
     store = FakeStore()
@@ -594,7 +645,9 @@ def test_non_qualifying_incident_has_no_exception_attachment(
     result = service.process_delivery(str(queued["id"]))
 
     assert result["status"] == "sent"
-    assert transport.messages[0].attachments == ()
+    assert [attachment.filename for attachment in transport.messages[0].attachments] == [
+        "picsyncra-incident-details.json"
+    ]
 
 
 def test_queue_message_subject_cannot_contain_header_newlines() -> None:
@@ -1219,13 +1272,7 @@ def test_send_test_notification_suite_routes_five_scenarios_without_store_writes
         and "bezpieczna symulacja" in message.text_body
         for message in sent_messages
     )
-    expected_attachment_counts = [
-        0,
-        1,
-        0,
-        1,
-        0,
-    ]
+    expected_attachment_counts = [1, 2, 1, 2, 1]
     assert [len(message.attachments) for message in primary.messages] == (
         expected_attachment_counts
     )

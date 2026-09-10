@@ -361,6 +361,32 @@ def test_smtp_transport_serializes_text_attachment(monkeypatch) -> None:
     assert "RuntimeError: safe diagnostic" in smtp.message
 
 
+def test_smtp_transport_serializes_json_attachment_with_its_mime_type(monkeypatch) -> None:
+    smtp = FakeSmtp()
+    monkeypatch.setattr(
+        email_delivery.smtplib,
+        "SMTP",
+        lambda host, port, timeout: smtp,
+    )
+    message = replace(
+        sample_message(),
+        attachments=(
+            MailAttachment(
+                filename="picsyncra-incident-details.json",
+                content_type="application/json",
+                content='{"trigger": {"metric": "cpu_percent"}}',
+            ),
+        ),
+    )
+
+    SmtpMailTransport(
+        {"host": "smtp.example", "port": 25, "security": "none"}
+    ).send(message)
+
+    assert 'filename="picsyncra-incident-details.json"' in smtp.message
+    assert "Content-Type: application/json" in smtp.message
+
+
 def test_smtp_transport_uses_implicit_tls_without_empty_username_login(monkeypatch) -> None:
     smtp = FakeSmtp(send_result={})
     calls: list[tuple[str, int, int, ssl.SSLContext]] = []

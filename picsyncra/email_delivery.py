@@ -202,11 +202,19 @@ class SmtpMailTransport:
         outbound.set_content(message.text_body)
         outbound.add_alternative(message.html_body, subtype="html")
         for attachment in message.attachments:
-            outbound.add_attachment(
-                attachment.content,
-                subtype="plain",
-                filename=attachment.filename,
-            )
+            if attachment.content_type == "application/json":
+                outbound.add_attachment(
+                    attachment.content.encode("utf-8"),
+                    maintype="application",
+                    subtype="json",
+                    filename=attachment.filename,
+                )
+            else:
+                outbound.add_attachment(
+                    attachment.content,
+                    subtype="plain",
+                    filename=attachment.filename,
+                )
 
         client = None
         refused_recipients: object = None

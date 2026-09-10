@@ -34,6 +34,7 @@ DAILY_SUMMARY_RETRY_DELAY = timedelta(minutes=5)
 DAILY_SUMMARY_STALE_CLAIM_AFTER = timedelta(minutes=10)
 _EXCEPTION_ATTACHMENT_FILENAME = "picsyncra-exception.txt"
 _EXCEPTION_ATTACHMENT_LIMIT = 24 * 1024
+_INCIDENT_DETAILS_ATTACHMENT_FILENAME = "picsyncra-incident-details.json"
 _EXCEPTION_SECRET_RE = re.compile(
     r"(?i)(?P<prefix>(?<![\w-])[\"']?(?:credential[_ -]*key[_ -]*id|"
     r"client[_ -]*secret|password|token|key[_ -]*id)[\"']?[ \t]*[:=][ \t]*)"
@@ -322,45 +323,117 @@ _MAIL_CONTEXT_BLOCKED_KEY = re.compile(
 )
 
 
-def _project_mail_context(value: object) -> object:
+def _project_mail_context(
+    value: object, *, list_limit: int | None = 50
+) -> object:
     if isinstance(value, dict):
         return {
-            str(key): _project_mail_context(item)
+            str(key): _project_mail_context(item, list_limit=list_limit)
             for key, item in value.items()
             if not _MAIL_CONTEXT_BLOCKED_KEY.search(str(key))
         }
     if isinstance(value, list):
-        return [_project_mail_context(item) for item in value[:50]]
+        items = value if list_limit is None else value[:list_limit]
+        return [_project_mail_context(item, list_limit=list_limit) for item in items]
     return value
 
 
-def _safe_details(event: Mapping[str, object]) -> str:
+def _safe_technical_value(value: object) -> object:
     from .observability import redact_value
 
-    details = redact_value(event.get("details", {}))
+    return _project_mail_context(redact_value(value), list_limit=None)
+
+
+def _incident_details_attachment_payload(
+    event: Mapping[str, object], incident: Mapping[str, object]
+) -> dict[str, str] | None:
+    details = _safe_technical_value(event.get("details", {}))
+    context = _safe_technical_value(incident.get("context", {}))
     if not isinstance(details, dict):
-        return ""
-    details.pop("suppress_notifications", None)
-    return json.dumps(
-        _project_mail_context(details),
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(", ", ": "),
-    )[:4_000]
-
-
-def _safe_incident_context(incident: Mapping[str, object]) -> str:
-    from .observability import redact_value
-
-    context = redact_value(incident.get("context", {}))
+        details = {}
     if not isinstance(context, dict):
-        return ""
-    return json.dumps(
-        _project_mail_context(context),
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(", ", ": "),
-    )[:4_000]
+        context = {}
+    if not details and not context:
+        return None
+    event_data = {
+        key: _text(event.get(key))
+        for key in (
+            "id",
+            "created_at",
+            "severity",
+            "event_type",
+            "module",
+            "stage",
+            "username",
+            "ean",
+            "product_id",
+            "slot",
+            "job_id",
+            "correlation_id",
+        )
+        if _text(event.get(key))
+    }
+    event_data["details"] = details
+    incident_data = {
+        key: _text(incident.get(key))
+        for key in (
+            "id",
+            "event_type",
+            "severity",
+            "status",
+            "first_seen_at",
+            "last_seen_at",
+            "occurrence_count",
+        )
+        if _text(incident.get(key))
+    }
+    incident_data["context"] = context
+    return {
+        "filename": _INCIDENT_DETAILS_ATTACHMENT_FILENAME,
+        "content_type": "application/json",
+        "content": json.dumps(
+            {
+                "notice": "Sensitive values have been redacted.",
+                "event": event_data,
+                "incident": incident_data,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+    }
+
+
+def _resource_alert_rows(event: Mapping[str, object]) -> list[tuple[str, str]]:
+    details = event.get("details")
+    trigger = details.get("trigger") if isinstance(details, Mapping) else None
+    if not isinstance(trigger, Mapping):
+        return []
+    metric = str(trigger.get("metric") or "")
+    metrics = {
+        "cpu_percent": ("CPU", 1.0, "%"),
+        "memory_percent": ("RAM", 1.0, "%"),
+        "disk_io_bytes_per_second": ("Dysk I/O", 1024 * 1024, "MiB/s"),
+    }
+    description = metrics.get(metric)
+    if description is None:
+        return []
+    label, scale, unit = description
+
+    def formatted(value: object) -> str:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return ""
+        return f"{float(value) / scale:.2f} {unit}"
+
+    rows = [("Przekroczona metryka", label)]
+    value = formatted(trigger.get("value"))
+    threshold = formatted(trigger.get("threshold"))
+    if value:
+        rows.append(("Wartość", value))
+    if threshold:
+        rows.append(("Próg", threshold))
+    if trigger.get("test_mode") == "real":
+        rows.append(("Tryb", "test rzeczywisty"))
+    return rows
 
 
 def _sanitize_exception_attachment(value: object) -> str:
@@ -410,10 +483,19 @@ def _message_payload(
         ("EAN", _text(event.get("ean"))),
         ("Użytkownik", _text(event.get("username"))),
         ("Podsumowanie", summary),
+        *_resource_alert_rows(event),
         ("Zalecane działanie", _text(event.get("recommended_action"))),
-        ("Szczegóły", _safe_details(event)),
-        ("Kontekst incydentu", _safe_incident_context(incident)),
     ]
+    attachments: list[dict[str, str]] = []
+    details_attachment = _incident_details_attachment_payload(event, incident)
+    if details_attachment is not None:
+        attachments.append(details_attachment)
+        rows.append(
+            (
+                "Szczegóły techniczne",
+                "Pełne dane techniczne znajdują się w załączniku.",
+            )
+        )
     populated = [(label, value) for label, value in rows if value]
     text_body = "\n".join(f"{label}: {value}" for label, value in populated)
     html_rows = "".join(
@@ -427,9 +509,11 @@ def _message_payload(
         "text_body": text_body,
         "html_body": f"<h2>Incydent PicSyncra</h2><table>{html_rows}</table>",
     }
-    attachment = _exception_attachment_payload(event)
-    if isinstance(attachment, Mapping):
-        payload["exception_attachment"] = dict(attachment)
+    exception_attachment = _exception_attachment_payload(event)
+    if exception_attachment is not None:
+        attachments.append(exception_attachment)
+    if attachments:
+        payload["attachments"] = attachments
     return payload
 
 
@@ -598,6 +682,13 @@ def _append_runtime_context(
     attachment = message.get("exception_attachment")
     if isinstance(attachment, Mapping):
         enriched["exception_attachment"] = dict(attachment)
+    attachments = message.get("attachments")
+    if isinstance(attachments, list):
+        enriched["attachments"] = [
+            dict(attachment)
+            for attachment in attachments
+            if isinstance(attachment, Mapping)
+        ]
     sections = _runtime_context_lines(context)
     text_sections = []
     html_sections = []
@@ -954,24 +1045,65 @@ class NotificationService:
         message = payload if isinstance(payload, Mapping) else {}
         sender_address, sender_name = _channel_sender(channel, settings)
         recipients = delivery.get("recipients")
-        attachments: tuple[MailAttachment, ...] = ()
-        raw_attachment = message.get("exception_attachment")
-        if isinstance(raw_attachment, Mapping):
+        attachments: list[MailAttachment] = []
+        raw_attachments = message.get("attachments")
+        attachment_values = raw_attachments if isinstance(raw_attachments, list) else []
+        for raw_attachment in attachment_values:
+            if not isinstance(raw_attachment, Mapping):
+                continue
             filename = raw_attachment.get("filename")
             content_type = raw_attachment.get("content_type")
             content = raw_attachment.get("content")
             if (
+                filename == _INCIDENT_DETAILS_ATTACHMENT_FILENAME
+                and content_type == "application/json"
+                and isinstance(content, str)
+            ):
+                try:
+                    parsed_content = json.loads(content)
+                except (TypeError, ValueError):
+                    continue
+                attachments.append(
+                    MailAttachment(
+                        filename=_INCIDENT_DETAILS_ATTACHMENT_FILENAME,
+                        content_type="application/json",
+                        content=json.dumps(
+                            _safe_technical_value(parsed_content),
+                            ensure_ascii=False,
+                            indent=2,
+                        ),
+                    )
+                )
+            elif (
                 filename == _EXCEPTION_ATTACHMENT_FILENAME
                 and content_type == "text/plain"
                 and isinstance(content, str)
             ):
-                attachments = (
+                attachments.append(
                     MailAttachment(
                         filename=_EXCEPTION_ATTACHMENT_FILENAME,
                         content_type="text/plain",
                         content=_sanitize_exception_attachment(content),
-                    ),
+                    )
                 )
+        if not attachments:
+            raw_attachment = message.get("exception_attachment")
+            if isinstance(raw_attachment, Mapping):
+                filename = raw_attachment.get("filename")
+                content_type = raw_attachment.get("content_type")
+                content = raw_attachment.get("content")
+                if (
+                    filename == _EXCEPTION_ATTACHMENT_FILENAME
+                    and content_type == "text/plain"
+                    and isinstance(content, str)
+                ):
+                    attachments.append(
+                        MailAttachment(
+                            filename=_EXCEPTION_ATTACHMENT_FILENAME,
+                            content_type="text/plain",
+                            content=_sanitize_exception_attachment(content),
+                        )
+                    )
         return MailMessage(
             message_id=_text(message.get("message_id")),
             subject=_text(message.get("subject"), 300),
@@ -980,7 +1112,7 @@ class NotificationService:
             sender_address=sender_address,
             sender_name=sender_name,
             recipients=list(recipients) if isinstance(recipients, list) else [],
-            attachments=attachments,
+            attachments=tuple(attachments),
         )
 
     def _with_delivery_context(
