@@ -75,17 +75,17 @@ def test_self_hosted_build_uses_existing_python_instead_of_setup_python() -> Non
 
     assert "uses: actions/setup-python@v6" in source
     assert "if: needs.select-runner.outputs.using_self_hosted != 'true'" in source
-    assert 'python-version: "3.14"' in source
+    assert 'python-version: "3.13"' in source
     assert "PICSYNCRA_PYTHON" in source
-    assert '$versionsToTry = @("3.14", "3.13", "3.12", "3.11")' in source
+    assert '$versionsToTry = @("3.13", "3.12", "3.11")' in source
     assert "HKLM:\\SOFTWARE\\Python\\PythonCore" in source
     assert "HKCU:\\SOFTWARE\\Python\\PythonCore" in source
-    assert '"3.14" = "Python314"' in source
+    assert '"3.14" = "Python314"' not in source
     assert '$dirName\\python.exe' in source
     assert "Resolve Python diagnostics" in source
     assert 'if ($versionsToTry.Contains($version))' in source
     assert '$LASTEXITCODE -eq 0 -and $versionsToTry.Contains($version)' not in source
-    assert "Python.Python.3.14" in source
+    assert "Python.Python.3.14" not in source
     assert "-m PyInstaller" in source
 
 

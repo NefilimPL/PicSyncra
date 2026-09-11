@@ -10,7 +10,7 @@ import shutil
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 import zipfile
 import io
 from pathlib import Path
@@ -37,26 +37,47 @@ def _reset_web_test_storage() -> None:
     gc.collect()
 
 
+def test_cleanup_web_data_directory_retries_locked_sqlite_file() -> None:
+    directory = MagicMock()
+    directory.name = "C:/temp/picsyncra-web-test"
+
+    with (
+        patch.object(shutil, "rmtree", side_effect=[PermissionError(), None]) as rmtree,
+        patch.object(time, "sleep") as sleep,
+        patch(f"{__name__}._reset_web_test_storage") as reset_storage,
+    ):
+        _cleanup_web_data_directory(directory)
+
+    reset_storage.assert_called_once_with()
+    assert rmtree.call_count == 2
+    sleep.assert_called_once_with(0.05)
+    directory.cleanup.assert_called_once_with()
+
+
+def _cleanup_web_data_directory(directory) -> None:
+    _reset_web_test_storage()
+    deadline = time.monotonic() + 5.0
+    while True:
+        gc.collect()
+        try:
+            shutil.rmtree(directory.name)
+            break
+        except FileNotFoundError:
+            break
+        except PermissionError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.05)
+    directory.cleanup()
+
+
 @contextmanager
 def _temporary_web_data_directory():
     directory = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
     try:
         yield directory.name
     finally:
-        _reset_web_test_storage()
-        deadline = time.monotonic() + 5.0
-        while True:
-            gc.collect()
-            try:
-                shutil.rmtree(directory.name)
-                break
-            except FileNotFoundError:
-                break
-            except PermissionError:
-                if time.monotonic() >= deadline:
-                    raise
-                time.sleep(0.05)
-        directory.cleanup()
+        _cleanup_web_data_directory(directory)
 
 
 @unittest.skipIf(
@@ -89,8 +110,8 @@ class WebSmokeCiTests(unittest.TestCase):
 
     def setUp(self) -> None:
         os.environ["PICSYNCRA_WEB_AUTH"] = "0"
-        self._web_data_directory = tempfile.TemporaryDirectory()
-        self.addCleanup(self._web_data_directory.cleanup)
+        self._web_data_directory = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(_cleanup_web_data_directory, self._web_data_directory)
         data_path_patch = patch.object(
             web_app.settings, "AC", self._web_data_directory.name
         )
