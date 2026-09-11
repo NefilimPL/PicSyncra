@@ -7,9 +7,9 @@ import time
 import pytest
 from fastapi import HTTPException
 
-from picorgftp_sql.path_security import PathSecurityError
-from picorgftp_sql.web import app as web_app
-from picorgftp_sql.web.upload_staging import (
+from picsyncra.path_security import PathSecurityError
+from picsyncra.web import app as web_app
+from picsyncra.web.upload_staging import (
     UploadStagingService,
     cleanup_expired_job_directories,
     cleanup_job_directory,

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from picorgftp_sql import github_status
+from picsyncra import github_status
 
 
 def test_dev_version_is_older_than_latest_release() -> None:
@@ -21,9 +21,9 @@ def test_non_semantic_versions_do_not_claim_update() -> None:
 
 def test_public_repository_payload_is_normalized() -> None:
     responses = {
-        "/repos/NefilimPL/PicOrgFTP-SQL": {
-            "full_name": "NefilimPL/PicOrgFTP-SQL",
-            "html_url": "https://github.com/NefilimPL/PicOrgFTP-SQL",
+        "/repos/NefilimPL/PicSyncra": {
+            "full_name": "NefilimPL/PicSyncra",
+            "html_url": "https://github.com/NefilimPL/PicSyncra",
             "private": False,
             "description": "Panel",
             "license": {"spdx_id": "MIT", "name": "MIT License"},
@@ -33,15 +33,15 @@ def test_public_repository_payload_is_normalized() -> None:
                 "type": "User",
             },
         },
-        "/repos/NefilimPL/PicOrgFTP-SQL/releases/latest": {
+        "/repos/NefilimPL/PicSyncra/releases/latest": {
             "tag_name": "v1.2.3",
             "name": "v1.2.3",
-            "html_url": "https://github.com/NefilimPL/PicOrgFTP-SQL/releases/tag/v1.2.3",
+            "html_url": "https://github.com/NefilimPL/PicSyncra/releases/tag/v1.2.3",
             "published_at": "2026-07-01T12:00:00Z",
             "prerelease": False,
             "draft": False,
         },
-        "/repos/NefilimPL/PicOrgFTP-SQL/contributors": [
+        "/repos/NefilimPL/PicSyncra/contributors": [
             {"login": "NefilimPL", "html_url": "https://github.com/NefilimPL", "contributions": 10},
             {"login": "Contributor", "html_url": "https://github.com/Contributor", "contributions": 3},
         ],
@@ -56,7 +56,7 @@ def test_public_repository_payload_is_normalized() -> None:
     assert payload["available"] is True
     assert payload["private"] is False
     assert payload["update_available"] is True
-    assert payload["repository"]["full_name"] == "NefilimPL/PicOrgFTP-SQL"
+    assert payload["repository"]["full_name"] == "NefilimPL/PicSyncra"
     assert payload["latest_release"]["tag_name"] == "v1.2.3"
     assert payload["license"]["spdx_id"] == "MIT"
     assert payload["owner"]["login"] == "NefilimPL"

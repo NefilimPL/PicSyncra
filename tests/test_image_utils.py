@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from PIL import Image
 
-from picorgftp_sql.image_utils import fit_image_to_content, find_content_bbox
+from picsyncra.image_utils import fit_image_to_content, find_content_bbox
 
 
 def test_find_content_bbox_detects_white_border() -> None:

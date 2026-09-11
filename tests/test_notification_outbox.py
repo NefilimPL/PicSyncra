@@ -7,9 +7,9 @@ import sqlite3
 
 import pytest
 
-from picorgftp_sql import notification_service, observability
-from picorgftp_sql.notification_service import NotificationService
-from picorgftp_sql.sqlite_store import SqliteStore
+from picsyncra import notification_service, observability
+from picsyncra.notification_service import NotificationService
+from picsyncra.sqlite_store import SqliteStore
 
 
 UTC = timezone.utc

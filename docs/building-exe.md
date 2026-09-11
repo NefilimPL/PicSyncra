@@ -11,15 +11,15 @@ Pomocnicze skrypty w `Generator exe/` automatyzują lokalne budowanie i generuj�
 Przykład ręcznego budowania:
 
 ```bash
-pyinstaller PicOrgFTP-SQL.pyw \
-  --name PicOrgFTP-SQL \
+pyinstaller PicSyncra.pyw \
+  --name PicSyncra \
   --noconsole \
-  --add-data "picorgftp_sql/Localization;picorgftp_sql/Localization"
+  --add-data "picsyncra/Localization;picsyncra/Localization"
 ```
 
-Runtime szuka tłumaczeń obok pliku wykonywalnego, w katalogu tymczasowym PyInstaller oraz w zainstalowanym pakiecie. Można więc dołączyć albo zaktualizować katalog `Localization` obok `PicOrgFTP-SQL.exe` bez ponownego budowania. Plik `local_settings.json` nadal jest tworzony obok programu.
+Runtime szuka tłumaczeń obok pliku wykonywalnego, w katalogu tymczasowym PyInstaller oraz w zainstalowanym pakiecie. Można więc dołączyć albo zaktualizować katalog `Localization` obok `PicSyncra.exe` bez ponownego budowania. Plik `local_settings.json` nadal jest tworzony obok programu.
 
-Panel webowy używa biblioteki `msal` do uwierzytelniania aplikacji Microsoft Entra i wysyłania przez Microsoft Graph. Zależność jest zadeklarowana w `requirements-web.txt` oraz `requirements-build.txt`; musi być zainstalowana w środowisku, z którego PyInstaller buduje `PicOrgFTP-SQL-WEB.exe`. Workflow instaluje ją przed analizą statyczną i pakowaniem aplikacji. Jeżeli lokalny build korzysta z własnego pliku `.spec` albo zmienionego polecenia PyInstaller, nie należy wyłączać wykrytego statycznie importu MSAL.
+Panel webowy używa biblioteki `msal` do uwierzytelniania aplikacji Microsoft Entra i wysyłania przez Microsoft Graph. Zależność jest zadeklarowana w `requirements-web.txt` oraz `requirements-build.txt`; musi być zainstalowana w środowisku, z którego PyInstaller buduje `PicSyncra-WEB.exe`. Workflow instaluje ją przed analizą statyczną i pakowaniem aplikacji. Jeżeli lokalny build korzysta z własnego pliku `.spec` albo zmienionego polecenia PyInstaller, nie należy wyłączać wykrytego statycznie importu MSAL.
 
 Obecność MSAL w EXE zapewnia tylko obsługę protokołu. Sama wysyłka Graph wymaga skonfigurowanej aplikacji Entra z aplikacyjnym uprawnieniem Microsoft Graph `Mail.Send` i udzieloną przez administratora dzierżawy zgodą administracyjną. Dane logowania i adres nadawcy są ustawiane już w panelu webowym, a nie podczas budowania EXE.
 
@@ -31,9 +31,9 @@ Workflow `.github/workflows/ci.yml` działa na `push` i `pull_request` dla gał�
 
 Workflow `.github/workflows/build-exe.yml` buduje:
 
-- desktopowe `PicOrgFTP-SQL-<tag>.exe`,
-- webowe `PicOrgFTP-SQL-WEB-<tag>.exe`,
-- paczkę `PicOrgFTP-SQL-web-<tag>.zip`.
+- desktopowe `PicSyncra-<tag>.exe`,
+- webowe `PicSyncra-WEB-<tag>.exe`,
+- paczkę `PicSyncra-web-<tag>.zip`.
 
 Build uruchamia się ręcznie albo po publikacji GitHub Release. Przy release workflow próbuje podpiąć wygenerowane pliki do wydania przez GitHub API.
 
@@ -92,7 +92,7 @@ Zwykłe artefakty EXE mają retencję siedmiu dni. Release assets są wysyłane 
 5. Otwórz **Actions -> Build Windows EXE**.
 6. Kliknij **Run workflow**.
 7. W podsumowaniu sprawdź sekcję **Runner selection**.
-8. Po zakończeniu pobierz artefakty `PicOrgFTP-SQL-windows`, `PicOrgFTP-SQL-web-exe` albo `PicOrgFTP-SQL-web`, jeżeli upload artefaktów był dostępny.
+8. Po zakończeniu pobierz artefakty `PicSyncra-windows`, `PicSyncra-web-exe` albo `PicSyncra-web`, jeżeli upload artefaktów był dostępny.
 9. Aby opublikować pliki przy wydaniu, utwórz i opublikuj release z tagiem, np. `v1.2.3`.
 
 Zależności builda są w `requirements-build.txt`. Zależności panelu webowego są w `requirements-web.txt`.

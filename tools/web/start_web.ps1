@@ -1,27 +1,27 @@
 $ErrorActionPreference = "Stop"
 
 $Root = Resolve-Path (Join-Path $PSScriptRoot "..\..")
-$Port = if ($env:PICORG_WEB_PORT) { [int]$env:PICORG_WEB_PORT } else { 8010 }
-$HostAddress = if ($env:PICORG_WEB_HOST) { $env:PICORG_WEB_HOST } else { "0.0.0.0" }
+$Port = if ($env:PICSYNCRA_WEB_PORT) { [int]$env:PICSYNCRA_WEB_PORT } else { 8010 }
+$HostAddress = if ($env:PICSYNCRA_WEB_HOST) { $env:PICSYNCRA_WEB_HOST } else { "0.0.0.0" }
 $LocalUrl = "http://127.0.0.1:$Port"
-$OpenBrowser = $env:PICORG_WEB_NO_BROWSER -ne "1"
-$StarterMenu = $env:PICORG_WEB_STARTER_MENU -ne "0"
-$PidFile = Join-Path $Root ".picorg_web.pid"
+$OpenBrowser = $env:PICSYNCRA_WEB_NO_BROWSER -ne "1"
+$StarterMenu = $env:PICSYNCRA_WEB_STARTER_MENU -ne "0"
+$PidFile = Join-Path $Root ".picsyncra_web.pid"
 $LogDir = Join-Path $Root "logs"
-$OutLog = Join-Path $LogDir "picorg_web_out.log"
-$ErrLog = Join-Path $LogDir "picorg_web_err.log"
+$OutLog = Join-Path $LogDir "picsyncra_web_out.log"
+$ErrLog = Join-Path $LogDir "picsyncra_web_err.log"
 $VenvPython = Join-Path $Root ".venv\Scripts\python.exe"
-$MinPythonVersion = if ($env:PICORG_WEB_MIN_PYTHON) { $env:PICORG_WEB_MIN_PYTHON } else { "3.10" }
-$FirewallEnabled = $env:PICORG_WEB_FIREWALL -ne "0"
-$FirewallRemoveOnStop = $env:PICORG_WEB_FIREWALL_CLOSE -ne "0"
-$CustomFirewallRuleName = [bool]$env:PICORG_WEB_FIREWALL_RULE
-$CustomFirewallBlockRuleName = [bool]$env:PICORG_WEB_FIREWALL_BLOCK_RULE
-$FirewallRuleName = if ($env:PICORG_WEB_FIREWALL_RULE) { $env:PICORG_WEB_FIREWALL_RULE } else { "Allow TCP $Port" }
-$FirewallBlockRuleName = if ($env:PICORG_WEB_FIREWALL_BLOCK_RULE) { $env:PICORG_WEB_FIREWALL_BLOCK_RULE } else { "Block TCP $Port" }
-$FirewallRemoteAddress = if ($env:PICORG_WEB_FIREWALL_REMOTE) { $env:PICORG_WEB_FIREWALL_REMOTE } else { "Any" }
-$FirewallInterfaceAlias = if ($env:PICORG_WEB_FIREWALL_INTERFACE) { $env:PICORG_WEB_FIREWALL_INTERFACE } else { "" }
-$FirewallProfiles = if ($env:PICORG_WEB_FIREWALL_PROFILE) {
-    $env:PICORG_WEB_FIREWALL_PROFILE -split "," | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+$MinPythonVersion = if ($env:PICSYNCRA_WEB_MIN_PYTHON) { $env:PICSYNCRA_WEB_MIN_PYTHON } else { "3.10" }
+$FirewallEnabled = $env:PICSYNCRA_WEB_FIREWALL -ne "0"
+$FirewallRemoveOnStop = $env:PICSYNCRA_WEB_FIREWALL_CLOSE -ne "0"
+$CustomFirewallRuleName = [bool]$env:PICSYNCRA_WEB_FIREWALL_RULE
+$CustomFirewallBlockRuleName = [bool]$env:PICSYNCRA_WEB_FIREWALL_BLOCK_RULE
+$FirewallRuleName = if ($env:PICSYNCRA_WEB_FIREWALL_RULE) { $env:PICSYNCRA_WEB_FIREWALL_RULE } else { "Allow TCP $Port" }
+$FirewallBlockRuleName = if ($env:PICSYNCRA_WEB_FIREWALL_BLOCK_RULE) { $env:PICSYNCRA_WEB_FIREWALL_BLOCK_RULE } else { "Block TCP $Port" }
+$FirewallRemoteAddress = if ($env:PICSYNCRA_WEB_FIREWALL_REMOTE) { $env:PICSYNCRA_WEB_FIREWALL_REMOTE } else { "Any" }
+$FirewallInterfaceAlias = if ($env:PICSYNCRA_WEB_FIREWALL_INTERFACE) { $env:PICSYNCRA_WEB_FIREWALL_INTERFACE } else { "" }
+$FirewallProfiles = if ($env:PICSYNCRA_WEB_FIREWALL_PROFILE) {
+    $env:PICSYNCRA_WEB_FIREWALL_PROFILE -split "," | ForEach-Object { $_.Trim() } | Where-Object { $_ }
 } else {
     @("Any")
 }
@@ -203,7 +203,7 @@ function Get-PythonInstallExecutables {
 
 function Select-WebPython {
     $candidates = @()
-    Add-PythonCandidate ([ref]$candidates) $env:PICORG_WEB_PYTHON
+    Add-PythonCandidate ([ref]$candidates) $env:PICSYNCRA_WEB_PYTHON
     if (Test-Path $VenvPython) {
         Add-PythonCandidate ([ref]$candidates) $VenvPython
     }
@@ -242,7 +242,7 @@ function Select-WebPython {
         $rejected | ForEach-Object { Write-Info "  $_" }
     }
     Write-Info "Zainstaluj Python 3.10+ albo ustaw sciezke:"
-    Write-Info '$env:PICORG_WEB_PYTHON="C:\Path\To\Python312\python.exe"'
+    Write-Info '$env:PICSYNCRA_WEB_PYTHON="C:\Path\To\Python312\python.exe"'
     return $null
 }
 
@@ -269,13 +269,13 @@ function Test-WebProcess($PidValue) {
     $cmd = Get-ProcessCommandLine $PidValue
     if ($cmd) {
         return (
-            ($cmd -like "*uvicorn*" -and $cmd -like "*picorgftp_sql.web.app*") -or
-            $cmd -like "*picorgftp_sql.web_manager*" -or
-            $cmd -like "*PicOrgFTP-SQL-WEB*" -or
+            ($cmd -like "*uvicorn*" -and $cmd -like "*picsyncra.web.app*") -or
+            $cmd -like "*picsyncra.web_manager*" -or
+            $cmd -like "*PicSyncra-WEB*" -or
             $cmd -like "*--service-run*"
         )
     }
-    return $process.ProcessName -in @("python", "pythonw", "PicOrgFTP-SQL-WEB")
+    return $process.ProcessName -in @("python", "pythonw", "PicSyncra-WEB")
 }
 
 function Stop-WebProcessIfSafe($PidValue) {
@@ -362,7 +362,7 @@ function Resolve-PortConflict {
         $webListeners = @($listeners | Where-Object { $_.IsWebPanel })
 
         if ($webListeners.Count -gt 0) {
-            Write-Info "Wykryto juz uruchomiony panel PicOrg Web na porcie $Port."
+            Write-Info "Wykryto juz uruchomiony panel PicSyncra Web na porcie $Port."
             Write-Info "K = uzyj dzialajacego panelu, R = restartuj panel, P = wybierz inny port, Q = przerwij"
             $choice = (Read-Host "Decyzja [K/R/P/Q]").Trim().ToUpperInvariant()
             if (-not $choice) {
@@ -719,7 +719,7 @@ function Ensure-FirewallRule {
         remove_on_stop = $FirewallRemoveOnStop
     }
     if (-not $FirewallEnabled) {
-        Write-Info "Automatyczna regula firewall jest wylaczona (PICORG_WEB_FIREWALL=0)."
+        Write-Info "Automatyczna regula firewall jest wylaczona (PICSYNCRA_WEB_FIREWALL=0)."
         return $result
     }
     if (-not (Get-Command New-NetFirewallRule -ErrorAction SilentlyContinue)) {
@@ -747,14 +747,14 @@ function Ensure-FirewallRule {
     try {
         $ruleArgs = @{
             DisplayName = $FirewallRuleName
-            Group = "PicOrgFTP-SQL"
+            Group = "PicSyncra"
             Direction = "Inbound"
             Protocol = "TCP"
             LocalPort = $Port
             Action = "Allow"
             Profile = $FirewallProfiles
             RemoteAddress = $FirewallRemoteAddress
-            Description = "Created by PicOrgFTP-SQL web start script. RemoveOnStop=$FirewallRemoveOnStop"
+            Description = "Created by PicSyncra web start script. RemoveOnStop=$FirewallRemoveOnStop"
         }
         if ($FirewallInterfaceAlias) {
             $ruleArgs.InterfaceAlias = $FirewallInterfaceAlias
@@ -850,7 +850,7 @@ function Write-PythonInfo {
 function Test-WebAppImport {
     Push-Location $Root
     try {
-        $output = & $Python -c "import picorgftp_sql.web.app" 2>&1
+        $output = & $Python -c "import picsyncra.web.app" 2>&1
         if ($LASTEXITCODE -eq 0) {
             return $true
         }
@@ -893,7 +893,7 @@ $firewallState = Ensure-FirewallRule
 $args = @(
     "-m",
     "uvicorn",
-    "picorgftp_sql.web.app:app",
+    "picsyncra.web.app:app",
     "--host",
     $HostAddress,
     "--port",

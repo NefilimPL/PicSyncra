@@ -4,12 +4,37 @@ from __future__ import annotations
 
 from pathlib import Path
 import shutil
+import subprocess
+import sys
 import unittest
 from unittest.mock import Mock, patch
 
 from openpyxl import Workbook
 
-from picorgftp_sql import excel_utils
+from picsyncra import excel_utils
+
+
+def test_excel_utils_imports_without_tkinter() -> None:
+    """The web panel imports these helpers even when a frozen EXE lacks Tk."""
+    script = """
+import builtins
+original_import = builtins.__import__
+def block_tkinter(name, *args, **kwargs):
+    if name == 'tkinter' or name.startswith('tkinter.'):
+        raise ModuleNotFoundError(\"No module named 'tkinter'\", name='tkinter')
+    return original_import(name, *args, **kwargs)
+builtins.__import__ = block_tkinter
+import picsyncra.excel_utils
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def _workspace_temp(name: str) -> Path:

@@ -9,7 +9,7 @@ import uuid
 from pathlib import Path
 from unittest.mock import patch
 
-from picorgftp_sql import settings
+from picsyncra import settings
 
 TEST_TEMP_ROOT = Path(__file__).resolve().parents[1] / "pytest-temp"
 
@@ -24,7 +24,7 @@ class SettingsBaseDirTests(unittest.TestCase):
     def test_interactive_first_run_prompts_instead_of_using_default_root(self) -> None:
         settings_path = r"C:\App\local_settings.json"
         fallback_dir = r"C:\App"
-        selected_dir = r"D:\PicOrgData"
+        selected_dir = r"D:\PicSyncraData"
 
         with (
             patch.object(settings, "HEADLESS_ENV", False),
@@ -50,7 +50,7 @@ class SettingsBaseDirTests(unittest.TestCase):
 
     def test_interactive_uses_saved_override_without_prompting(self) -> None:
         settings_path = r"C:\App\local_settings.json"
-        selected_dir = r"D:\PicOrgData"
+        selected_dir = r"D:\PicSyncraData"
 
         with (
             patch.object(settings, "HEADLESS_ENV", False),

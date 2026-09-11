@@ -10,9 +10,9 @@ import re
 from pathlib import Path
 
 
-VERSION_ENV_VAR = "PICORGFTP_SQL_VERSION"
+VERSION_ENV_VAR = "PICSYNCRA_VERSION"
 DEFAULT_VERSION = "dev"
-DEFAULT_PRODUCT_NAME = "PicOrgFTP-SQL"
+DEFAULT_PRODUCT_NAME = "PicSyncra"
 DEFAULT_COMPANY_NAME = "NefilimPL"
 
 
@@ -45,7 +45,7 @@ def read_build_version(repo_root: Path, explicit_version: str | None = None) -> 
     if env_version:
         return _clean_version(env_version)
 
-    version_path = repo_root / "picorgftp_sql" / "VERSION"
+    version_path = repo_root / "picsyncra" / "VERSION"
     try:
         return _clean_version(version_path.read_text(encoding="utf-8"))
     except OSError:
@@ -239,7 +239,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--product-name",
-        help="Windows ProductName value. Defaults to GitHub repo name or PicOrgFTP-SQL.",
+        help="Windows ProductName value. Defaults to GitHub repo name or PicSyncra.",
     )
     parser.add_argument(
         "--company-name",

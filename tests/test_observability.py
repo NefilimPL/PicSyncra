@@ -4,8 +4,8 @@ from datetime import datetime, timezone
 
 import pytest
 
-from picorgftp_sql import observability
-from picorgftp_sql.sqlite_store import SqliteStore
+from picsyncra import observability
+from picsyncra.sqlite_store import SqliteStore
 
 
 UTC = timezone.utc
@@ -199,7 +199,7 @@ def test_emit_event_coalesces_and_queues_due_incident_best_effort(monkeypatch) -
     queued: list[tuple[dict[str, object], dict[str, object]]] = []
     monkeypatch.setattr(observability, "observability_store", lambda: fake)
     monkeypatch.setattr(
-        "picorgftp_sql.notification_service.queue_incident_notification",
+        "picsyncra.notification_service.queue_incident_notification",
         lambda event, incident: (
             queued.append((dict(event), dict(incident))) or {"status": "pending"}
         ),
@@ -233,7 +233,7 @@ def test_non_info_event_enters_stream_once_with_incident_id(
     store = PublishingStore(str(tmp_path / "events.sqlite"))
     monkeypatch.setattr(observability, "observability_store", lambda: store)
     monkeypatch.setattr(
-        "picorgftp_sql.notification_service.queue_incident_notification",
+        "picsyncra.notification_service.queue_incident_notification",
         lambda *_args: {"status": "pending"},
     )
 
@@ -264,7 +264,7 @@ def test_durable_outbox_keeps_notification_window_claim_after_event_commit(
         raise AssertionError("production outbox must not queue after commit")
 
     monkeypatch.setattr(
-        "picorgftp_sql.notification_service.queue_incident_notification",
+        "picsyncra.notification_service.queue_incident_notification",
         forbidden_post_commit_queue,
     )
     first_now = datetime(2026, 7, 17, 10, 0, tzinfo=UTC)
@@ -304,7 +304,7 @@ def test_emit_event_suppress_notifications_prevents_recursive_queue(monkeypatch)
     queued: list[object] = []
     monkeypatch.setattr(observability, "observability_store", lambda: fake)
     monkeypatch.setattr(
-        "picorgftp_sql.notification_service.queue_incident_notification",
+        "picsyncra.notification_service.queue_incident_notification",
         lambda *_args: queued.append(object()),
     )
 

@@ -11,9 +11,9 @@ from threading import Barrier
 
 import pytest
 
-from picorgftp_sql.data_store import SqliteDataStoreAdapter
-from picorgftp_sql import sqlite_store
-from picorgftp_sql.sqlite_store import SqliteStore
+from picsyncra.data_store import SqliteDataStoreAdapter
+from picsyncra import sqlite_store
+from picsyncra.sqlite_store import SqliteStore
 
 
 def _event(
@@ -1267,13 +1267,13 @@ def test_every_store_connection_registers_deterministic_unicode_lower(
     for _ in range(2):
         with store.connection() as conn:
             assert conn.execute(
-                "SELECT picorg_lower(?)",
+                "SELECT picsyncra_lower(?)",
                 ("BŁĄD ŻÓŁĆ",),
             ).fetchone()[0] == "błąd żółć"
             function = next(
                 row
                 for row in conn.execute("PRAGMA function_list")
-                if row[0] == "picorg_lower" and row[4] == 1
+                if row[0] == "picsyncra_lower" and row[4] == 1
             )
             assert int(function[5]) & 0x800
 

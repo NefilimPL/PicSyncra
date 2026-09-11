@@ -7,7 +7,7 @@ function loadBrowserScript(relativePath) {
 }
 
 function resetBrowserGlobals() {
-  global.window = { PicOrg: {} };
+  global.window = { PicSyncra: {} };
 }
 
 function deferred() {

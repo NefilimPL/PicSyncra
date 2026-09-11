@@ -13,9 +13,9 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from picorgftp_sql.image_pipeline import ImagePipelineOptions, process_image
-from picorgftp_sql.web import app as web_app
-from picorgftp_sql.web.process_queue import ProcessQueueService, QueueLimits
+from picsyncra.image_pipeline import ImagePipelineOptions, process_image
+from picsyncra.web import app as web_app
+from picsyncra.web.process_queue import ProcessQueueService, QueueLimits
 
 
 def _p95(samples: list[float]) -> float:

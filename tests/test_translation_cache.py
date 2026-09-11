@@ -3,14 +3,14 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 import threading
 
-from picorgftp_sql.services.translation_service import TranslationResult
+from picsyncra.services.translation_service import TranslationResult
 
 
 KEY = ("google", "en", "cache-key", "Biala szafka")
 
 
 def test_cache_shares_one_successful_loader_between_concurrent_callers() -> None:
-    from picorgftp_sql.services.translation_cache import TranslationCache
+    from picsyncra.services.translation_cache import TranslationCache
 
     cache = TranslationCache()
     started = threading.Event()
@@ -37,7 +37,7 @@ def test_cache_shares_one_successful_loader_between_concurrent_callers() -> None
 
 
 def test_cache_does_not_store_results_with_warning() -> None:
-    from picorgftp_sql.services.translation_cache import TranslationCache
+    from picsyncra.services.translation_cache import TranslationCache
 
     cache = TranslationCache()
     calls = 0
@@ -54,7 +54,7 @@ def test_cache_does_not_store_results_with_warning() -> None:
 
 
 def test_cache_expires_successful_result() -> None:
-    from picorgftp_sql.services.translation_cache import TranslationCache
+    from picsyncra.services.translation_cache import TranslationCache
 
     cache = TranslationCache(ttl_seconds=10)
     calls = 0

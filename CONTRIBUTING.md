@@ -1,6 +1,6 @@
 # Contributing
 
-Dzięki za chęć pracy nad PicOrgFTP-SQL. Ten projekt jest aplikacją desktopową z dodatkowymi ścieżkami web, FTP, SQL, Pimcore i buildami EXE, więc najlepiej trzymać zmiany możliwie wąsko.
+Dzięki za chęć pracy nad PicSyncra. Ten projekt jest aplikacją desktopową z dodatkowymi ścieżkami web, FTP, SQL, Pimcore i buildami EXE, więc najlepiej trzymać zmiany możliwie wąsko.
 
 ## Przygotowanie środowiska
 
@@ -25,13 +25,13 @@ Nie wszystkie zestawy zależności są potrzebne do każdej zmiany.
 Aplikacja desktopowa:
 
 ```powershell
-python PicOrgFTP-SQL.pyw
+python PicSyncra.pyw
 ```
 
 Panel webowy:
 
 ```powershell
-python -m uvicorn picorgftp_sql.web.app:app --host 0.0.0.0 --port 8000
+python -m uvicorn picsyncra.web.app:app --host 0.0.0.0 --port 8000
 ```
 
 ## Testy

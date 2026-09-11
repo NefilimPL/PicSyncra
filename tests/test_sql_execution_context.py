@@ -40,7 +40,7 @@ class _Connection:
 
 
 def test_context_reuses_one_connection_for_same_profile() -> None:
-    from picorgftp_sql.services.sql_execution_context import SqlExecutionContext
+    from picsyncra.services.sql_execution_context import SqlExecutionContext
 
     connection = _Connection(["A", "B"])
     connector = Mock(return_value=connection)
@@ -55,8 +55,8 @@ def test_context_reuses_one_connection_for_same_profile() -> None:
 
 
 def test_context_uses_the_supplied_query_executor() -> None:
-    from picorgftp_sql.services.pimcore_sql_service import SqlValueResult
-    from picorgftp_sql.services.sql_execution_context import SqlExecutionContext
+    from picsyncra.services.pimcore_sql_service import SqlValueResult
+    from picsyncra.services.sql_execution_context import SqlExecutionContext
 
     connection = _Connection(["unused"])
     executor = Mock(return_value=SqlValueResult("A", []))

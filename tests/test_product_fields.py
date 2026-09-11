@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from picorgftp_sql.product_fields import (
+from picsyncra.product_fields import (
     PRODUCT_FIELD_KEYS,
     effective_product_values,
     missing_required_fields,

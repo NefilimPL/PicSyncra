@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from picorgftp_sql.sqlite_store import SqliteStore
+from picsyncra.sqlite_store import SqliteStore
 
 
 UTC = timezone.utc
@@ -55,7 +55,7 @@ def _graph_result(*, expires_at: datetime, code: str = "ok", key_id: str = "key-
 
 @pytest.fixture
 def monitor(tmp_path, monkeypatch):
-    import picorgftp_sql.entra_secret_monitor as module
+    import picsyncra.entra_secret_monitor as module
 
     store = SqliteStore(str(tmp_path / "app.sqlite"))
     store.initialize()
@@ -141,7 +141,7 @@ def test_due_reminder_retries_after_claim_failure_without_duplicate_event_or_out
     monitor, monkeypatch
 ):
     module, store = monitor
-    import picorgftp_sql.observability as observability
+    import picsyncra.observability as observability
 
     monkeypatch.setattr(observability, "observability_store", lambda: store)
     monkeypatch.setattr(module, "emit_event", observability.emit_event)
@@ -219,7 +219,7 @@ def test_changed_graph_credential_key_id_with_same_expiry_can_send_new_reminder(
 
 
 def test_real_reader_expired_credential_reaches_expired_monitor_event(monitor, monkeypatch):
-    import picorgftp_sql.entra_secret_expiry as expiry
+    import picsyncra.entra_secret_expiry as expiry
 
     module, _store = monitor
     events = []

@@ -6,8 +6,8 @@ from pathlib import Path
 from unittest.mock import patch
 import json
 
-from picorgftp_sql import config, data_store, excel_utils, storage_settings
-from picorgftp_sql.sqlite_store import SqliteStore
+from picsyncra import config, data_store, excel_utils, storage_settings
+from picsyncra.sqlite_store import SqliteStore
 
 
 def teardown_function() -> None:

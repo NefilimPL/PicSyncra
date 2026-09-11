@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import json
 import re
 import threading
 
 import pytest
 
-from picorgftp_sql import notification_service
-from picorgftp_sql.notification_scheduler import WakeableDeadlineScheduler
-from picorgftp_sql.sqlite_store import SqliteStore
+from picsyncra import notification_service
+from picsyncra.notification_scheduler import WakeableDeadlineScheduler
+from picsyncra.sqlite_store import SqliteStore
 
 
 UTC = timezone.utc
@@ -32,7 +33,7 @@ def _settings(**overrides: object) -> dict[str, object]:
             "username": "sender",
             "password": "secret",
             "from_address": "alerts@example.com",
-            "from_name": "PicOrgFTP-SQL",
+            "from_name": "PicSyncra",
         },
         "rules": {
             severity: {
@@ -403,6 +404,7 @@ def _service(
     transports: dict[str, FakeTransport] | None = None,
     settings: dict[str, object] | None = None,
     emitted: list[dict[str, object]] | None = None,
+    time_zone: str = "UTC",
 ) -> notification_service.NotificationService:
     channels = transports or {"entra": FakeTransport(), "smtp": FakeTransport()}
     event_sink = emitted if emitted is not None else []
@@ -416,6 +418,7 @@ def _service(
         },
         event_emitter=lambda **kwargs: event_sink.append(kwargs),
         now=lambda: NOW,
+        time_zone_loader=lambda: time_zone,
     )
 
 
@@ -468,6 +471,82 @@ def test_queue_incident_notification_only_when_due_and_escapes_message() -> None
     assert "secret" not in str(message)
 
 
+@pytest.mark.parametrize(
+    ("time_zone", "created_at", "expected"),
+    [
+        (
+            "Europe/Warsaw",
+            "2026-07-17T09:59:00.000Z",
+            "2026-07-17 11:59:00 CEST (Europe/Warsaw)",
+        ),
+        (
+            "Europe/Warsaw",
+            "2026-01-17T09:59:00.000Z",
+            "2026-01-17 10:59:00 CET (Europe/Warsaw)",
+        ),
+        (
+            "Invalid/Time_Zone",
+            "2026-01-17T09:59:00.000Z",
+            "2026-01-17 09:59:00 UTC (UTC)",
+        ),
+    ],
+)
+def test_incident_message_uses_configured_global_time_zone(
+    time_zone: str, created_at: str, expected: str
+) -> None:
+    service = _service(FakeStore(), time_zone=time_zone)
+
+    queued = service.queue_incident_notification(
+        _event(created_at=created_at), _incident()
+    )
+
+    assert queued is not None
+    assert f"Czas: {expected}" in queued["message"]["text_body"]
+
+
+def test_default_time_zone_loader_uses_global_web_display_setting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from picsyncra import config
+
+    monkeypatch.setattr(
+        config,
+        "load_config",
+        lambda *, interactive: {"web_display": {"time_zone": "Europe/Warsaw"}},
+    )
+
+    assert notification_service._default_time_zone_loader() == "Europe/Warsaw"
+
+
+def test_incident_details_attachment_uses_configured_time_zone_for_all_timestamps() -> None:
+    service = _service(FakeStore(), time_zone="Europe/Warsaw")
+    event = _event(
+        created_at="2026-09-10T11:04:10.742Z",
+        details={
+            "sample": {"observed_at": "2026-09-10T11:04:10.736Z"},
+            "history": [{"observed_at": "2026-01-17T09:59:00.000Z"}],
+        },
+    )
+    incident = _incident(
+        first_seen_at="2026-09-10T11:04:00.000Z",
+        last_seen_at="2026-09-10T11:04:10.742Z",
+    )
+
+    queued = service.queue_incident_notification(event, incident)
+
+    assert queued is not None
+    attachment = json.loads(queued["message"]["attachments"][0]["content"])
+    assert attachment["display_time_zone"] == "Europe/Warsaw"
+    assert attachment["event"]["created_at"] == "2026-09-10T13:04:10.742+02:00 [Europe/Warsaw]"
+    assert attachment["event"]["details"]["sample"]["observed_at"] == (
+        "2026-09-10T13:04:10.736+02:00 [Europe/Warsaw]"
+    )
+    assert attachment["event"]["details"]["history"][0]["observed_at"] == (
+        "2026-01-17T10:59:00.000+01:00 [Europe/Warsaw]"
+    )
+    assert attachment["incident"]["first_seen_at"] == "2026-09-10T13:04:00.000+02:00 [Europe/Warsaw]"
+
+
 def test_incident_message_includes_bounded_redacted_occurrence_context() -> None:
     store = FakeStore()
     service = _service(store)
@@ -495,9 +574,12 @@ def test_incident_message_includes_bounded_redacted_occurrence_context() -> None
     assert queued is not None
     message = queued["message"]
     assert "Liczba wystąpień: 7" in message["text_body"]
-    assert '"slot": "01 <front>"' in message["text_body"]
-    assert "01 &lt;front&gt;" in message["html_body"]
-    assert "Brak &amp; blokada" in message["html_body"]
+    assert "Szczegóły techniczne" in message["text_body"]
+    assert '"slot": "01 <front>"' not in message["text_body"]
+    attachment = message["attachments"][0]
+    assert attachment["filename"] == "picsyncra-incident-details.json"
+    assert '"slot": "01 <front>"' in attachment["content"]
+    assert "Brak & blokada" in attachment["content"]
     assert "secret-token" not in str(message)
     assert "smtp-secret" not in str(message)
     assert "private.internal" not in str(message)
@@ -505,6 +587,50 @@ def test_incident_message_includes_bounded_redacted_occurrence_context() -> None
     assert "session-secret" not in str(message)
     assert len(message["text_body"]) <= 10_000
     assert len(message["html_body"]) <= 20_000
+
+
+def test_resource_alert_keeps_trigger_visible_and_attaches_full_technical_data() -> None:
+    store = FakeStore()
+    transport = FakeTransport()
+    service = _service(store, {"entra": transport, "smtp": FakeTransport()})
+    technical_tail = "TECHNICAL_DATA_END_MARKER"
+    event = _event(
+        event_type="backend.resource_high",
+        details={
+            "trigger": {
+                "metric": "disk_io_bytes_per_second",
+                "value": 9.5 * 1024 * 1024,
+                "threshold": 8 * 1024 * 1024,
+                "configured_threshold": 8,
+                "test_mode": "real",
+            },
+            "sample": {"backend": {"disk_io_bytes_per_second": 9.5 * 1024 * 1024}},
+            "history": [{"sequence": index} for index in range(60)],
+            "tail": technical_tail,
+        },
+    )
+
+    queued = service.queue_incident_notification(event, _incident())
+
+    assert queued is not None
+    body = queued["message"]["text_body"]
+    assert "Przekroczona metryka: Dysk I/O" in body
+    assert "Wartość: 9.50 MiB/s" in body
+    assert "Próg: 8.00 MiB/s" in body
+    assert "Tryb: test rzeczywisty" in body
+    assert "Szczegóły techniczne: Pełne dane techniczne znajdują się w załączniku." in body
+    assert technical_tail not in body
+
+    result = service.process_delivery(str(queued["id"]))
+
+    assert result["status"] == "sent"
+    assert len(transport.messages[0].attachments) == 1
+    attachment = transport.messages[0].attachments[0]
+    assert attachment.filename == "picsyncra-incident-details.json"
+    assert attachment.content_type == "application/json"
+    assert technical_tail in attachment.content
+    assert '"sequence": 49' in attachment.content
+    assert '"sequence": 59' in attachment.content
 
 
 def test_error_exception_is_sent_as_bounded_redacted_text_attachment() -> None:
@@ -550,9 +676,13 @@ def test_error_exception_is_sent_as_bounded_redacted_text_attachment() -> None:
 
     assert result["status"] == "sent"
     message = transport.messages[0]
-    assert len(message.attachments) == 1
-    attachment = message.attachments[0]
-    assert attachment.filename == "picorgftp-sql-exception.txt"
+    assert len(message.attachments) == 2
+    attachment = next(
+        item
+        for item in message.attachments
+        if item.filename == "picsyncra-exception.txt"
+    )
+    assert attachment.filename == "picsyncra-exception.txt"
     assert attachment.content_type == "text/plain"
     assert len(attachment.content.encode("utf-8")) <= 24 * 1024
     persisted_message = store.deliveries[str(queued["id"])]["message"]
@@ -580,7 +710,7 @@ def test_error_exception_is_sent_as_bounded_redacted_text_attachment() -> None:
     ],
     ids=["warning-with-exception", "error-without-exception"],
 )
-def test_non_qualifying_incident_has_no_exception_attachment(
+def test_non_qualifying_incident_has_only_technical_details_attachment(
     severity: str, exception_data: dict[str, object]
 ) -> None:
     store = FakeStore()
@@ -594,7 +724,9 @@ def test_non_qualifying_incident_has_no_exception_attachment(
     result = service.process_delivery(str(queued["id"]))
 
     assert result["status"] == "sent"
-    assert transport.messages[0].attachments == ()
+    assert [attachment.filename for attachment in transport.messages[0].attachments] == [
+        "picsyncra-incident-details.json"
+    ]
 
 
 def test_queue_message_subject_cannot_contain_header_newlines() -> None:
@@ -1219,13 +1351,7 @@ def test_send_test_notification_suite_routes_five_scenarios_without_store_writes
         and "bezpieczna symulacja" in message.text_body
         for message in sent_messages
     )
-    expected_attachment_counts = [
-        0,
-        1,
-        0,
-        1,
-        0,
-    ]
+    expected_attachment_counts = [1, 2, 1, 2, 1]
     assert [len(message.attachments) for message in primary.messages] == (
         expected_attachment_counts
     )

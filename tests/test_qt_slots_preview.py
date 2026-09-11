@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from picorgftp_sql.qt_slots_preview import assign_sample_paths_to_slots
+from picsyncra.qt_slots_preview import assign_sample_paths_to_slots
 
 
 def test_assign_sample_paths_prefers_filename_slot_prefix() -> None:

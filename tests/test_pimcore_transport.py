@@ -9,7 +9,7 @@ import certifi
 import pytest
 import requests
 
-from picorgftp_sql.services.pimcore_service import (
+from picsyncra.services.pimcore_service import (
     PimcoreApiError,
     PimcoreClient,
     pimcore_client_scope,

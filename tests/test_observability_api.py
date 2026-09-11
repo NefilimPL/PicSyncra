@@ -16,10 +16,10 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
-from picorgftp_sql import data_store, web_data
-from picorgftp_sql.resource_monitor import ResourceMonitor
-from picorgftp_sql.sqlite_store import SqliteStore
-from picorgftp_sql.web import app as web_app
+from picsyncra import data_store, web_data
+from picsyncra.resource_monitor import ResourceMonitor
+from picsyncra.sqlite_store import SqliteStore
+from picsyncra.web import app as web_app
 
 
 def _event(
@@ -47,12 +47,15 @@ def _event(
 
 @pytest.fixture
 def api_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    previous_auth = os.environ.get("PICORG_WEB_AUTH")
-    os.environ["PICORG_WEB_AUTH"] = "1"
+    previous_auth = os.environ.get("PICSYNCRA_WEB_AUTH")
+    os.environ["PICSYNCRA_WEB_AUTH"] = "1"
     with web_app._RATE_LIMITS_LOCK:
         web_app._RATE_LIMITS.clear()
     database_path = tmp_path / "app.sqlite"
     monkeypatch.setattr(web_app.settings, "AC", str(tmp_path))
+    monkeypatch.setattr(
+        web_app.settings, "LISTS_WORKBOOK_PATH", str(tmp_path / "lists.xlsx")
+    )
     monkeypatch.setattr(
         web_app.storage_settings, "resolve_sqlite_path", lambda: str(database_path)
     )
@@ -66,9 +69,9 @@ def api_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         web_app._RATE_LIMITS.clear()
     data_store.reset_active_store_cache()
     if previous_auth is None:
-        os.environ.pop("PICORG_WEB_AUTH", None)
+        os.environ.pop("PICSYNCRA_WEB_AUTH", None)
     else:
-        os.environ["PICORG_WEB_AUTH"] = previous_auth
+        os.environ["PICSYNCRA_WEB_AUTH"] = previous_auth
 
 
 def _login(client: TestClient, username: str = "admin", password: str = "admin") -> str:
@@ -196,12 +199,12 @@ def test_settings_api_rejects_invalid_time_zone_without_replacing_saved_value(
 
     valid = client.post(
         "/api/settings",
-        headers={"X-PicOrg-CSRF": csrf},
+        headers={"X-PicSyncra-CSRF": csrf},
         json={"web_display": {"time_zone": "Europe/Warsaw"}},
     )
     invalid = client.post(
         "/api/settings",
-        headers={"X-PicOrg-CSRF": csrf},
+        headers={"X-PicSyncra-CSRF": csrf},
         json={"web_display": {"time_zone": "CEST"}},
     )
 
@@ -228,7 +231,7 @@ def test_failed_sqlite_repair_api_preserves_the_cached_store(
     csrf = _login(client)
 
     response = client.post(
-        "/api/settings/sqlite/repair", headers={"X-PicOrg-CSRF": csrf}
+        "/api/settings/sqlite/repair", headers={"X-PicSyncra-CSRF": csrf}
     )
 
     assert response.status_code == 200, response.text
@@ -252,7 +255,7 @@ def test_successful_sqlite_repair_api_invalidates_the_cached_store(
     csrf = _login(client)
 
     response = client.post(
-        "/api/settings/sqlite/repair", headers={"X-PicOrg-CSRF": csrf}
+        "/api/settings/sqlite/repair", headers={"X-PicSyncra-CSRF": csrf}
     )
 
     assert response.status_code == 200, response.text
@@ -615,7 +618,7 @@ def test_entra_expiry_endpoints_require_admin_csrf_and_return_only_public_status
     get_response = client.get("/api/settings/email/entra-expiry")
     post_response = client.post(
         "/api/settings/email/entra-expiry/refresh",
-        headers={"X-PicOrg-CSRF": csrf},
+        headers={"X-PicSyncra-CSRF": csrf},
         json={},
     )
 
@@ -646,7 +649,7 @@ def test_direct_entra_test_mail_refreshes_status_only_after_entra_success(
 
     success = client.post(
         "/api/settings/email/test",
-        headers={"X-PicOrg-CSRF": csrf},
+        headers={"X-PicSyncra-CSRF": csrf},
         json={"channel": "entra", "recipient": "admin@example.com", "use_fallback": False},
     )
 
@@ -661,7 +664,7 @@ def test_direct_entra_test_mail_refreshes_status_only_after_entra_success(
 
     failed = client.post(
         "/api/settings/email/test",
-        headers={"X-PicOrg-CSRF": csrf},
+        headers={"X-PicSyncra-CSRF": csrf},
         json={"channel": "entra", "recipient": "admin@example.com", "use_fallback": False},
     )
 
@@ -704,7 +707,7 @@ def test_notification_test_suite_uses_selected_channel_and_requires_csrf(
 
     response = client.post(
         "/api/settings/email/test-suite",
-        headers={"X-PicOrg-CSRF": csrf},
+        headers={"X-PicSyncra-CSRF": csrf},
         json={"channel": "smtp", "use_fallback": False},
     )
 
@@ -1237,7 +1240,7 @@ def test_non_admin_cannot_inspect_incident_delivery_status(api_environment) -> N
 
 def test_partial_delivery_projection_exposes_only_safe_counts_status_and_codes(
 ) -> None:
-    from picorgftp_sql.web.app import _public_incident_delivery
+    from picsyncra.web.app import _public_incident_delivery
 
     projected = _public_incident_delivery(
         {
@@ -1526,7 +1529,7 @@ def test_mark_read_state_is_scoped_to_current_authenticated_user(api_environment
 
     marked = client.post(
         "/api/observability/read",
-        headers={"X-PicOrg-CSRF": csrf},
+        headers={"X-PicSyncra-CSRF": csrf},
         json={
             "severity": "warning",
             "event_id": "evt-warning",
@@ -1582,7 +1585,7 @@ def test_clear_logs_clears_operational_tables_but_preserves_audits(
     ):
         response = client.post(
             "/api/logs/clear",
-            headers={"X-PicOrg-CSRF": csrf},
+            headers={"X-PicSyncra-CSRF": csrf},
             json={"password": "admin"},
         )
 
@@ -1651,7 +1654,7 @@ def test_health_reports_local_components_and_last_known_integrations(
         "2026-07-16T10:01:00.000Z"
     )
     assert "password" not in response.text.lower()
-    assert "private" not in response.text.lower()
+    assert "c:/private/path" not in response.text.lower()
 
 
 def test_health_returns_cached_resource_projection_without_sampling(
@@ -1711,7 +1714,7 @@ def test_resource_monitor_endpoints_require_admin_and_csrf(
     operator_csrf = _login(client, "operator", "secret")
     forbidden = client.post(
         path,
-        headers={"X-PicOrg-CSRF": operator_csrf},
+        headers={"X-PicSyncra-CSRF": operator_csrf},
         json=body,
     )
 
@@ -1739,7 +1742,7 @@ def test_safe_resource_simulation_records_one_labelled_test_event(
 
     response = client.post(
         "/api/resource-monitor/simulate-safe",
-        headers={"X-PicOrg-CSRF": csrf},
+        headers={"X-PicSyncra-CSRF": csrf},
         json={},
     )
 
@@ -1775,7 +1778,7 @@ def test_safe_resource_simulation_reports_web_event_persistence_failure(
 
     response = client.post(
         "/api/resource-monitor/simulate-safe",
-        headers={"X-PicOrg-CSRF": csrf},
+        headers={"X-PicSyncra-CSRF": csrf},
         json={},
     )
 
@@ -1834,7 +1837,7 @@ def test_real_resource_test_returns_monitor_result_without_direct_event(
 
     response = client.post(
         "/api/resource-monitor/real-test",
-        headers={"X-PicOrg-CSRF": csrf},
+        headers={"X-PicSyncra-CSRF": csrf},
         json={"kind": "memory"},
     )
 
@@ -1864,7 +1867,7 @@ def test_real_resource_test_reports_trigger_event_persistence_failure(
 
     response = client.post(
         "/api/resource-monitor/real-test",
-        headers={"X-PicOrg-CSRF": csrf},
+        headers={"X-PicSyncra-CSRF": csrf},
         json={"kind": "memory"},
     )
 
@@ -1892,7 +1895,7 @@ def test_real_resource_test_maps_monitor_rejections_to_safe_http_statuses(
 
     response = client.post(
         "/api/resource-monitor/real-test",
-        headers={"X-PicOrg-CSRF": csrf},
+        headers={"X-PicSyncra-CSRF": csrf},
         json={"kind": "cpu"},
     )
 
@@ -1937,6 +1940,32 @@ def test_resource_monitor_lifecycle_runs_once_and_in_runtime_order(
         "notification.stop"
     )
     assert data_store.get_sqlite_store(database_path) is not cached_store
+
+
+def test_disabled_ocr_queue_clears_stale_work_during_startup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _StoreProbe:
+        def clear_ocr_crop_queue(self):
+            store_opened.set()
+            return []
+
+    store_opened = threading.Event()
+    monkeypatch.setitem(web_app.config.CONFIG, "ocr", {"background_enabled": False})
+    monkeypatch.setattr(web_app, "initialize_application_runtime", lambda **_kwargs: {})
+    monkeypatch.setattr(web_app, "cleanup_web_ftp_cache", lambda **_kwargs: None)
+    monkeypatch.setattr(web_app, "cleanup_web_upload_cache", lambda **_kwargs: None)
+    monkeypatch.setattr(web_app, "_prune_live_events_if_due", lambda **_kwargs: None)
+    monkeypatch.setattr(web_app, "_start_backup_scheduler", lambda: None)
+    monkeypatch.setattr(web_app, "_stop_backup_scheduler", lambda: None)
+    monkeypatch.setattr(web_app, "start_notification_worker", lambda: None)
+    monkeypatch.setattr(web_app, "stop_notification_worker", lambda: None)
+    monkeypatch.setattr(web_app, "observability_store", lambda: _StoreProbe())
+
+    with TestClient(web_app.create_app()):
+        store_opened.wait(timeout=0.2)
+
+    assert store_opened.is_set()
 
 
 def test_health_is_critical_when_job_processor_is_shutdown_even_if_storage_is_online(
@@ -2029,7 +2058,7 @@ def test_operational_clear_invalidates_cached_health_integrations(
         ):
             response = client.post(
                 "/api/logs/clear",
-                headers={"X-PicOrg-CSRF": csrf},
+                headers={"X-PicSyncra-CSRF": csrf},
                 json={"password": "admin"},
             )
 

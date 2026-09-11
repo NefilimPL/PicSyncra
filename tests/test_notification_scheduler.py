@@ -1,9 +1,9 @@
 import threading
 
-from picorgftp_sql import sqlite_store
-from picorgftp_sql.data_store import SqliteDataStoreAdapter
-from picorgftp_sql.notification_scheduler import WakeableDeadlineScheduler
-from picorgftp_sql.sqlite_store import SqliteStore
+from picsyncra import sqlite_store
+from picsyncra.data_store import SqliteDataStoreAdapter
+from picsyncra.notification_scheduler import WakeableDeadlineScheduler
+from picsyncra.sqlite_store import SqliteStore
 
 
 def seed_pending_delivery(store, delivery_id, next_attempt_at):

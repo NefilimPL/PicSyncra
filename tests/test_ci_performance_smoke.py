@@ -8,8 +8,8 @@ import time
 import unittest
 from unittest.mock import patch
 
-os.environ.setdefault("PICORGFTP_SQL_HEADLESS", "1")
-os.environ.setdefault("PICORG_WEB_AUTH", "0")
+os.environ.setdefault("PICSYNCRA_HEADLESS", "1")
+os.environ.setdefault("PICSYNCRA_WEB_AUTH", "0")
 
 try:
     from fastapi.testclient import TestClient
@@ -19,14 +19,14 @@ except Exception as exc:  # pragma: no cover - depends on CI test dependencies
 else:
     TEST_CLIENT_IMPORT_ERROR = None
 
-from picorgftp_sql.web import app as web_app
-from picorgftp_sql.web.process_progress import ProcessProgressGate
-from picorgftp_sql.web_workflow import (
+from picsyncra.web import app as web_app
+from picsyncra.web.process_progress import ProcessProgressGate
+from picsyncra.web_workflow import (
     WebProductForm,
     normalized_product_payload,
     validate_product_form,
 )
-from picorgftp_sql.workflow_utils import (
+from picsyncra.workflow_utils import (
     build_product_directory,
     build_slot_filename,
     parse_slot_filename,
@@ -34,7 +34,7 @@ from picorgftp_sql.workflow_utils import (
 
 
 def _budget(seconds: float) -> float:
-    multiplier = float(os.environ.get("PICORG_PERF_BUDGET_MULTIPLIER", "1.0"))
+    multiplier = float(os.environ.get("PICSYNCRA_PERF_BUDGET_MULTIPLIER", "1.0"))
     return seconds * multiplier
 
 

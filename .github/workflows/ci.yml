@@ -21,8 +21,8 @@ concurrency:
 
 env:
   CI: "1"
-  PICORGFTP_SQL_HEADLESS: "1"
-  PICORG_WEB_AUTH: "0"
+  PICSYNCRA_HEADLESS: "1"
+  PICSYNCRA_WEB_AUTH: "0"
   PYTHONUTF8: "1"
   QT_QPA_PLATFORM: "offscreen"
 
@@ -48,15 +48,15 @@ jobs:
       - name: Python syntax compile
         run: >
           python -m compileall -q
-          PicOrgFTP-SQL.pyw
-          PicOrgFTP-SQL-WEB.pyw
-          PicOrgFTP-SQL-QtSlots.pyw
-          picorgftp_sql
+          PicSyncra.pyw
+          PicSyncra-WEB.pyw
+          PicSyncra-QtSlots.pyw
+          picsyncra
           tests
           tools
 
       - name: Web JavaScript syntax
-        run: node --check picorgftp_sql/web/static/app.js
+        run: node --check picsyncra/web/static/app.js
 
       - name: Workflow trigger sanity
         shell: pwsh

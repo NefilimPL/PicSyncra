@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 import threading
 
-from picorgftp_sql.web import active_clients
-from picorgftp_sql.web.active_clients import ActiveClientRegistry
+from picsyncra.web import active_clients
+from picsyncra.web.active_clients import ActiveClientRegistry
 
 
 def client_record(username: str, generation: int) -> dict[str, object]:

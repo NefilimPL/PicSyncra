@@ -5,7 +5,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 import threading
 
-from picorgftp_sql.services.ftp_listing_cache import (
+from picsyncra.services.ftp_listing_cache import (
     RemoteFileRecord,
     RemoteListingCache,
 )

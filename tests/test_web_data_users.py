@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import gc
 import json
 from pathlib import Path
 import shutil
@@ -11,19 +12,38 @@ import unittest
 from unittest.mock import Mock, patch
 import uuid
 
-from picorgftp_sql import data_store, email_settings, storage_settings, web_data
-from picorgftp_sql.sqlite_store import SqliteStore
+from picsyncra import data_store, email_settings, storage_settings, web_data
+from picsyncra.sqlite_store import SqliteStore
 
 
 def _workspace_temp(name: str) -> Path:
     root = Path(__file__).resolve().parents[1] / "tmp_test" / name
     if root.exists():
-        shutil.rmtree(root)
+        _remove_workspace_temp(root)
     root.mkdir(parents=True)
     return root
 
 
+def _remove_workspace_temp(path: Path) -> None:
+    """Release SQLite test state before removing its Windows-hosted directory."""
+
+    data_store.reset_active_store_cache()
+    deadline = time.monotonic() + 5.0
+    while True:
+        gc.collect()
+        try:
+            shutil.rmtree(path)
+            return
+        except PermissionError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.05)
+
+
 class WebDataUserTests(unittest.TestCase):
+    def setUp(self) -> None:
+        data_store.reset_active_store_cache()
+
     def tearDown(self) -> None:
         web_data._FILE_INDEX = None
         web_data._FILE_INDEX_KEY = None
@@ -36,7 +56,7 @@ class WebDataUserTests(unittest.TestCase):
             with patch.object(web_data.settings, "AC", str(temp_dir)):
                 user = web_data.authenticate_user("admin", "admin")
         finally:
-            shutil.rmtree(temp_dir)
+            _remove_workspace_temp(temp_dir)
 
         self.assertIsNotNone(user)
         self.assertEqual(user["role"], "admin")
@@ -91,7 +111,7 @@ class WebDataUserTests(unittest.TestCase):
                 stored = json.loads(users_path.read_text(encoding="utf-8"))
                 second = web_data.find_user("operator")
         finally:
-            shutil.rmtree(temp_dir)
+            _remove_workspace_temp(temp_dir)
 
         self.assertIsNotNone(first)
         self.assertEqual(uuid.UUID(first["id"]).version, 4)
@@ -200,7 +220,7 @@ class WebDataUserTests(unittest.TestCase):
 
                 users = web_data.update_user("operator", enabled=False, current_username="admin")
         finally:
-            shutil.rmtree(temp_dir)
+            _remove_workspace_temp(temp_dir)
 
         operator = next(user for user in users if user["username"] == "operator")
         self.assertFalse(operator["enabled"])
@@ -230,7 +250,7 @@ class WebDataUserTests(unittest.TestCase):
                 self.assertEqual(operator["failed_login_count"], 0)
                 self.assertIsNotNone(web_data.authenticate_user("operator", "secret"))
         finally:
-            shutil.rmtree(temp_dir)
+            _remove_workspace_temp(temp_dir)
 
     def test_failed_login_locks_admin_until_manual_unlock(self) -> None:
         temp_dir = _workspace_temp("web_data_users_admin_lock")
@@ -248,7 +268,7 @@ class WebDataUserTests(unittest.TestCase):
                 web_data.unlock_user("admin")
                 self.assertIsNotNone(web_data.authenticate_user("admin", "admin"))
         finally:
-            shutil.rmtree(temp_dir)
+            _remove_workspace_temp(temp_dir)
 
     def test_password_change_bumps_session_and_extension_versions(self) -> None:
         temp_dir = _workspace_temp("web_data_users_session_version")
@@ -264,7 +284,7 @@ class WebDataUserTests(unittest.TestCase):
             self.assertEqual(after["session_version"], 1)
             self.assertEqual(after["extension_token_version"], 1)
         finally:
-            shutil.rmtree(temp_dir)
+            _remove_workspace_temp(temp_dir)
 
     def test_extension_token_issue_and_use_metadata_is_public(self) -> None:
         temp_dir = _workspace_temp("web_data_users_extension_metadata")
@@ -280,7 +300,7 @@ class WebDataUserTests(unittest.TestCase):
             self.assertTrue(issued["extension_token_issued_at"])
             self.assertTrue(used["extension_token_last_used_at"])
         finally:
-            shutil.rmtree(temp_dir)
+            _remove_workspace_temp(temp_dir)
 
     def test_add_list_value_rejects_case_insensitive_duplicate(self) -> None:
         with (
@@ -437,7 +457,7 @@ class WebDataUserTests(unittest.TestCase):
                 scoped = Path(web_data._ftp_cache_dir("5901234567890", cache_scope="admin-session"))
                 unscoped = Path(web_data._ftp_cache_dir("5901234567890"))
         finally:
-            shutil.rmtree(temp_dir)
+            _remove_workspace_temp(temp_dir)
 
         self.assertEqual(scoped, temp_dir / "web_ftp_cache" / "admin-session" / "5901234567890")
         self.assertEqual(unscoped, temp_dir / "web_ftp_cache" / "5901234567890")
@@ -465,7 +485,7 @@ class WebDataUserTests(unittest.TestCase):
             self.assertFalse(old_file.exists())
             self.assertTrue(new_file.exists())
         finally:
-            shutil.rmtree(temp_dir)
+            _remove_workspace_temp(temp_dir)
 
     def test_invalidate_ftp_preview_cache_removes_changed_slot_file(self) -> None:
         temp_dir = _workspace_temp("web_data_ftp_cache_invalidate")
@@ -482,7 +502,7 @@ class WebDataUserTests(unittest.TestCase):
                     cache_scope="admin-session",
                 )
         finally:
-            shutil.rmtree(temp_dir)
+            _remove_workspace_temp(temp_dir)
 
         self.assertEqual(result["deleted"], 1)
         self.assertEqual(result["errors"], [])
@@ -507,7 +527,7 @@ class WebDataUserTests(unittest.TestCase):
                 self.assertEqual(Path(result), cached)
                 connect_ftp.assert_not_called()
         finally:
-            shutil.rmtree(temp_dir)
+            _remove_workspace_temp(temp_dir)
 
     def test_cache_ftp_preview_downloads_directly_without_remote_listing(self) -> None:
         temp_dir = _workspace_temp("web_data_ftp_direct_download")
@@ -537,7 +557,7 @@ class WebDataUserTests(unittest.TestCase):
             self.assertEqual(ftp.command, "RETR 5901234567890_03.jpg")
             list_remote.assert_not_called()
         finally:
-            shutil.rmtree(temp_dir)
+            _remove_workspace_temp(temp_dir)
 
     def test_save_web_entry_preserves_ean_for_existing_product_id_when_missing(self) -> None:
         with (
@@ -606,7 +626,7 @@ class WebDataUserTests(unittest.TestCase):
                     include_sql=False,
                 )
         finally:
-            shutil.rmtree(temp_dir)
+            _remove_workspace_temp(temp_dir)
 
         self.assertEqual(len(photos), 1)
         self.assertEqual(photos[0]["prefix"], "03")
@@ -708,7 +728,7 @@ class WebDataUserTests(unittest.TestCase):
                     include_sql=True,
                 )
         finally:
-            shutil.rmtree(temp_dir)
+            _remove_workspace_temp(temp_dir)
 
         self.assertEqual(len(photos), 1)
         self.assertEqual(photos[0]["prefix"], "03")
@@ -766,7 +786,7 @@ class WebDataUserTests(unittest.TestCase):
                     include_sql=True,
                 )
         finally:
-            shutil.rmtree(temp_dir)
+            _remove_workspace_temp(temp_dir)
 
         self.assertEqual(len(photos), 1)
         self.assertEqual(photos[0]["prefix"], "03")
@@ -806,7 +826,7 @@ class WebDataUserTests(unittest.TestCase):
         finally:
             for name, value in old_values.items():
                 setattr(web_data.settings, name, value)
-            shutil.rmtree(temp_dir)
+            _remove_workspace_temp(temp_dir)
 
     def test_web_base_dir_change_reports_inaccessible_path(self) -> None:
         temp_dir = _workspace_temp("web_data_base_dir_invalid")
@@ -826,7 +846,7 @@ class WebDataUserTests(unittest.TestCase):
             self.assertIn("Nie mozna uzyc katalogu bazowego", str(caught.exception))
             self.assertFalse(settings_path.exists())
         finally:
-            shutil.rmtree(temp_dir)
+            _remove_workspace_temp(temp_dir)
 
     def test_update_settings_reloads_target_config_after_base_dir_change(self) -> None:
         old_config = {"old_only": True, web_data.LOCAL_FILE_INDEX_KEY: False}
@@ -849,7 +869,7 @@ class WebDataUserTests(unittest.TestCase):
             patch.object(web_data, "settings_snapshot", return_value={}),
         ):
             web_data.update_settings(
-                {"app": {"base_dir": "C:\\PicOrgFTP-SQL", web_data.LOCAL_FILE_INDEX_KEY: True}}
+                {"app": {"base_dir": "C:\\PicSyncra", web_data.LOCAL_FILE_INDEX_KEY: True}}
             )
 
         self.assertEqual(len(saved_configs), 1)
@@ -964,7 +984,7 @@ class WebDataUserTests(unittest.TestCase):
             )
             reset_store.assert_called()
         finally:
-            shutil.rmtree(temp_dir)
+            _remove_workspace_temp(temp_dir)
 
     def test_update_settings_preserves_unsubmitted_encrypted_secrets(self) -> None:
         preserve = web_data._preserve_unsubmitted_config_secrets(
@@ -1316,7 +1336,7 @@ class WebDataUserTests(unittest.TestCase):
             self.assertTrue(any(user["username"] == "operator" for user in users))
             self.assertFalse((temp_dir / web_data.WEB_USERS_PATH).exists())
         finally:
-            shutil.rmtree(temp_dir)
+            _remove_workspace_temp(temp_dir)
 
     def test_sqlite_mode_records_history_without_json_file(self) -> None:
         temp_dir = _workspace_temp("web_data_sqlite_history")
@@ -1342,7 +1362,7 @@ class WebDataUserTests(unittest.TestCase):
             self.assertEqual(snapshot["groups"][0]["ean"], "5901234567890")
             self.assertFalse((temp_dir / web_data.WEB_HISTORY_PATH).exists())
         finally:
-            shutil.rmtree(temp_dir)
+            _remove_workspace_temp(temp_dir)
 
     def test_record_history_appends_to_sqlite_without_full_history_load(self) -> None:
         store = Mock()
@@ -1389,7 +1409,7 @@ class WebDataUserTests(unittest.TestCase):
                 ["MAGGIORE"],
             )
         finally:
-            shutil.rmtree(temp_dir)
+            _remove_workspace_temp(temp_dir)
 
     def test_file_index_status_accepts_iso_generated_at(self) -> None:
         class Index:
@@ -1453,7 +1473,7 @@ class WebDataUserTests(unittest.TestCase):
             self.assertEqual(snapshot["database_location_mode"], "custom")
             self.assertTrue(snapshot["database_path"].endswith("data.sqlite"))
         finally:
-            shutil.rmtree(temp_dir)
+            _remove_workspace_temp(temp_dir)
 
     def test_settings_snapshot_exposes_backup_settings(self) -> None:
         temp_dir = _workspace_temp("web_data_backup_settings")
@@ -1482,7 +1502,7 @@ class WebDataUserTests(unittest.TestCase):
             self.assertEqual(snapshot["sqlite_backup"]["days"], ["mon"])
             self.assertEqual(snapshot["sqlite_backup_dir"], str(temp_dir / "BACKUP"))
         finally:
-            shutil.rmtree(temp_dir)
+            _remove_workspace_temp(temp_dir)
 
     def test_entra_settings_change_invalidates_and_refreshes_without_secret_logging(self) -> None:
         original_config = dict(web_data.config.CONFIG)
@@ -1502,8 +1522,8 @@ class WebDataUserTests(unittest.TestCase):
                 patch.object(web_data, "save_config"),
                 patch.object(web_data.config, "initialize_config", return_value=web_data.config.CONFIG),
                 patch.object(web_data, "settings_snapshot", return_value={}),
-                patch("picorgftp_sql.observability.observability_store", return_value=store),
-                patch("picorgftp_sql.entra_secret_monitor.refresh_entra_secret_status") as refresh,
+                patch("picsyncra.observability.observability_store", return_value=store),
+                patch("picsyncra.entra_secret_monitor.refresh_entra_secret_status") as refresh,
                 patch.object(web_data, "log_error") as log_error,
             ):
                 web_data.update_settings(

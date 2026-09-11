@@ -1,6 +1,6 @@
 """Tests for the durable process-progress persistence gate."""
 
-from picorgftp_sql.web.process_progress import ProcessProgressGate
+from picsyncra.web.process_progress import ProcessProgressGate
 
 
 def test_progress_gate_coalesces_percent_only_updates():

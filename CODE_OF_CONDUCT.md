@@ -2,7 +2,7 @@
 
 ## Cel
 
-Chcemy, aby praca nad projektem była rzeczowa, spokojna i skupiona na rozwiązaniach. Ten dokument dotyczy issue, pull requestów, dyskusji i innych kanałów związanych z PicOrgFTP-SQL.
+Chcemy, aby praca nad projektem była rzeczowa, spokojna i skupiona na rozwiązaniach. Ten dokument dotyczy issue, pull requestów, dyskusji i innych kanałów związanych z PicSyncra.
 
 ## Oczekiwane zachowania
 

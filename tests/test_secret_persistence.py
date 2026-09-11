@@ -8,10 +8,10 @@ from pathlib import Path
 
 import pytest
 
-from picorgftp_sql import config, logging_utils, observability, redaction, web_data
-from picorgftp_sql.redaction import redact_sensitive_value
-from picorgftp_sql.sqlite_store import SqliteStore
-from picorgftp_sql.web import app as web_app
+from picsyncra import config, logging_utils, observability, redaction, web_data
+from picsyncra.redaction import redact_sensitive_value
+from picsyncra.sqlite_store import SqliteStore
+from picsyncra.web import app as web_app
 
 
 def _assert_secret_absent(value: object, sentinel: str) -> None:
@@ -186,7 +186,7 @@ def test_recursive_redaction_stringifies_and_sanitizes_unknown_objects() -> None
 
 def test_unterminated_quoted_backslashes_are_processed_within_fixed_timeout() -> None:
     script = (
-        "from picorgftp_sql.redaction import sanitize_free_text\n"
+        "from picsyncra.redaction import sanitize_free_text\n"
         "sanitize_free_text('password=\"' + chr(92) * 4000)\n"
     )
 
@@ -420,7 +420,7 @@ def test_event_mirror_and_legacy_text_files_receive_only_sanitized_values(
             ),
         },
     )
-    web_log = (Path(web_app.settings.LOG_DIR) / "picorg_web_events.log").read_text(
+    web_log = (Path(web_app.settings.LOG_DIR) / "picsyncra_web_events.log").read_text(
         encoding="utf-8"
     )
 

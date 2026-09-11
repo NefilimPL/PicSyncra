@@ -6,7 +6,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from picorgftp_sql.services.pimcore_service import (
+from picsyncra.services.pimcore_service import (
     PimcoreApiError,
     PimcoreClient,
     PimcoreConflictError,

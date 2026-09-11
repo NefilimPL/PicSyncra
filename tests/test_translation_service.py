@@ -1,7 +1,7 @@
 import json
 from unittest.mock import Mock
 
-from picorgftp_sql.services.translation_service import clear_translation_cache, translate_text
+from picsyncra.services.translation_service import clear_translation_cache, translate_text
 
 
 class Response:

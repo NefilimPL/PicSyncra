@@ -8,10 +8,10 @@ import subprocess
 import threading
 import time
 
-from picorgftp_sql import notification_service
-from picorgftp_sql.notification_scheduler import WakeableDeadlineScheduler
-from picorgftp_sql.sqlite_store import SqliteStore
-from picorgftp_sql.web.active_clients import ActiveClientRegistry
+from picsyncra import notification_service
+from picsyncra.notification_scheduler import WakeableDeadlineScheduler
+from picsyncra.sqlite_store import SqliteStore
+from picsyncra.web.active_clients import ActiveClientRegistry
 
 
 UTC = timezone.utc
@@ -108,7 +108,7 @@ def _notification_settings() -> dict[str, object]:
             "username": "sender",
             "password": "secret",
             "from_address": "alerts@example.com",
-            "from_name": "PicOrgFTP-SQL",
+            "from_name": "PicSyncra",
         },
         "rules": {},
     }
@@ -245,13 +245,13 @@ def test_five_real_javascript_pollers_stay_within_active_and_hidden_budgets() ->
     assert node is not None, "Node.js is required for the runtime poller benchmark"
     module_path = (
         Path(__file__).parents[1]
-        / "picorgftp_sql"
+        / "picsyncra"
         / "web"
         / "static"
         / "runtime-status.js"
     )
     script = """
-global.window = { PicOrg: {} };
+global.window = { PicSyncra: {} };
 require(__MODULE__);
 
 class FakeTimer {
@@ -296,7 +296,7 @@ async function simulateClient() {
   let inFlight = 0;
   let maxInFlight = 0;
   let detailRefreshes = 0;
-  const poller = new window.PicOrg.RuntimeStatusPoller({
+  const poller = new window.PicSyncra.RuntimeStatusPoller({
     fetchStatus: async () => {
       if (hidden) hiddenRequests += 1;
       else activeRequests += 1;

@@ -1,8 +1,8 @@
 $ErrorActionPreference = "Stop"
 
 $Root = Resolve-Path (Join-Path $PSScriptRoot "..\..")
-$Port = if ($env:PICORG_WEB_PORT) { [int]$env:PICORG_WEB_PORT } else { 8010 }
-$PidFile = Join-Path $Root ".picorg_web.pid"
+$Port = if ($env:PICSYNCRA_WEB_PORT) { [int]$env:PICSYNCRA_WEB_PORT } else { 8010 }
+$PidFile = Join-Path $Root ".picsyncra_web.pid"
 
 function Write-Info($Text) {
     Write-Host "[WEB] $Text"
@@ -28,15 +28,15 @@ function Test-WebProcess($PidValue) {
         $cmd = [string]$proc.CommandLine
         if ($cmd) {
             return (
-                ($cmd -like "*uvicorn*" -and $cmd -like "*picorgftp_sql.web.app*") -or
-                $cmd -like "*picorgftp_sql.web_manager*" -or
-                $cmd -like "*PicOrgFTP-SQL-WEB*" -or
+                ($cmd -like "*uvicorn*" -and $cmd -like "*picsyncra.web.app*") -or
+                $cmd -like "*picsyncra.web_manager*" -or
+                $cmd -like "*PicSyncra-WEB*" -or
                 $cmd -like "*--service-run*"
             )
         }
     } catch {
     }
-    return $process.ProcessName -in @("python", "pythonw", "PicOrgFTP-SQL-WEB")
+    return $process.ProcessName -in @("python", "pythonw", "PicSyncra-WEB")
 }
 
 function Get-PortListenerPids {

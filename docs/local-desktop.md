@@ -1,6 +1,6 @@
 # Praca lokalna i aplikacja desktopowa
 
-Ten dokument opisuje główny, lokalny tryb pracy PicOrgFTP-SQL: aplikację desktopową uruchamianą na komputerze operatora.
+Ten dokument opisuje główny, lokalny tryb pracy PicSyncra: aplikację desktopową uruchamianą na komputerze operatora.
 
 ## Działanie
 
@@ -31,7 +31,7 @@ Działania programu są zapisywane w `logs/changes_log.txt`, a błędy w `logs/e
 
 ## Konfiguracja lokalna
 
-Aplikacja zapisuje pliki robocze w katalogu zdefiniowanym w `local_settings.json`, znajdującym się obok `PicOrgFTP-SQL.pyw`. Plik tworzy się automatycznie przy pierwszym uruchomieniu. Jeżeli nie zawiera ścieżki, aplikacja poprosi o wskazanie folderu i zapisze wybór.
+Aplikacja zapisuje pliki robocze w katalogu zdefiniowanym w `local_settings.json`, znajdującym się obok `PicSyncra.pyw`. Plik tworzy się automatycznie przy pierwszym uruchomieniu. Jeżeli nie zawiera ścieżki, aplikacja poprosi o wskazanie folderu i zapisze wybór.
 
 W ścieżkach na Windows można używać ukośników, np. `C:/TEST/GUI_ZDJ`, aby uniknąć podwójnego wpisywania ukośników odwrotnych. Jeżeli zapisany katalog stanie się niedostępny, aplikacja poprosi o wybór nowej lokalizacji.
 
@@ -49,18 +49,18 @@ Sekcje `ftp`, `sql` i `mysql` zawierają odpowiednio pola `host` albo `server`, 
 ## Uruchomienie
 
 ```powershell
-python PicOrgFTP-SQL.pyw
+python PicSyncra.pyw
 ```
 
 Wariant Qt slotów:
 
 ```powershell
-python PicOrgFTP-SQL-QtSlots.pyw
+python PicSyncra-QtSlots.pyw
 ```
 
 ## Zrzuty ekranu
 
-<img width="1920" height="1040" alt="PicOrgFTP-SQL desktop" src="https://github.com/user-attachments/assets/8d2f9c31-1103-4368-bea2-7b6899d92761" />
+<img width="1920" height="1040" alt="PicSyncra desktop" src="https://github.com/user-attachments/assets/8d2f9c31-1103-4368-bea2-7b6899d92761" />
 
 <img width="1082" height="812" alt="Widok formularza" src="https://github.com/user-attachments/assets/48f3f87e-b4bd-402b-bcbf-16d5a160ed0d" />
 
@@ -68,6 +68,6 @@ python PicOrgFTP-SQL-QtSlots.pyw
 
 <img width="1080" height="780" alt="Widok aplikacji" src="https://github.com/user-attachments/assets/953f09d3-e6f2-4c14-96a0-7193689fe16a" />
 
-<img width="1082" height="812" alt="PicOrgFTP-SQL desktop" src="https://github.com/user-attachments/assets/0b5cbd68-d42e-49ed-b912-7542d6f965b8" />
+<img width="1082" height="812" alt="PicSyncra desktop" src="https://github.com/user-attachments/assets/0b5cbd68-d42e-49ed-b912-7542d6f965b8" />
 
 <img width="842" height="417" alt="Widok ustawień" src="https://github.com/user-attachments/assets/4ee9558d-6ebf-4d57-84fc-004e2d2c9c8e" />

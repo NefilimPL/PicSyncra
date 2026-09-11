@@ -3,7 +3,7 @@ from fastapi.testclient import TestClient
 
 
 def test_runtime_router_delegates_status_index_and_presence_operations() -> None:
-    from picorgftp_sql.web.runtime_api import RuntimeApiDependencies, build_runtime_router
+    from picsyncra.web.runtime_api import RuntimeApiDependencies, build_runtime_router
 
     app = FastAPI()
     app.include_router(

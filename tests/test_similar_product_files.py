@@ -1,10 +1,10 @@
-from picorgftp_sql import similar_product_files
-from picorgftp_sql.similar_product_files import (
+from picsyncra import similar_product_files
+from picsyncra.similar_product_files import (
     _merged_names,
     find_similar_file_candidates,
     normalize_similar_file_settings,
 )
-from picorgftp_sql import common, config
+from picsyncra import common, config
 from copy import deepcopy
 from unittest.mock import patch
 

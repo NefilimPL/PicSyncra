@@ -5,8 +5,8 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from picorgftp_sql.services import sql_service
-from picorgftp_sql.services.sql_service import (
+from picsyncra.services import sql_service
+from picsyncra.services.sql_service import (
     build_column_detection_query,
     detect_available_columns,
     extract_presence_context,
@@ -83,7 +83,7 @@ class SqlServiceTests(unittest.TestCase):
                 return None
 
         with patch(
-            "picorgftp_sql.services.sql_service.connect_db",
+            "picsyncra.services.sql_service.connect_db",
             return_value=Connection(),
         ):
             result = detect_available_columns(
@@ -154,7 +154,7 @@ class SqlServiceTests(unittest.TestCase):
             def close(self):
                 return None
 
-        with patch("picorgftp_sql.services.sql_service.connect_db", return_value=Connection()):
+        with patch("picsyncra.services.sql_service.connect_db", return_value=Connection()):
             presence, values = query_presence_details(
                 [("03", "img_03", "DETAIL_pic")],
                 "object_query_1",

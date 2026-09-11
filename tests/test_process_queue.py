@@ -4,7 +4,7 @@ import threading
 
 import pytest
 
-from picorgftp_sql.web.process_queue import (
+from picsyncra.web.process_queue import (
     OwnerQueueLimit,
     ProcessQueueFull,
     ProcessQueueService,

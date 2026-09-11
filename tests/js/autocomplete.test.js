@@ -4,12 +4,12 @@ const { deferred, loadBrowserScript, resetBrowserGlobals } = require("./helpers"
 
 test("controller merges the latest remote values with local values", async () => {
   resetBrowserGlobals();
-  loadBrowserScript("picorgftp_sql/web/static/latest-request.js");
-  loadBrowserScript("picorgftp_sql/web/static/autocomplete.js");
+  loadBrowserScript("picsyncra/web/static/latest-request.js");
+  loadBrowserScript("picsyncra/web/static/autocomplete.js");
 
   const rendered = [];
   const remote = deferred();
-  const controller = new window.PicOrg.AutocompleteController({
+  const controller = new window.PicSyncra.AutocompleteController({
     fieldName: "name",
     localSuggestions: () => ["LOCAL"],
     remoteSuggestions: () => remote.promise,
@@ -28,14 +28,14 @@ test("controller merges the latest remote values with local values", async () =>
 
 test("controller ignores remote results after the request context changes", async () => {
   resetBrowserGlobals();
-  loadBrowserScript("picorgftp_sql/web/static/latest-request.js");
-  loadBrowserScript("picorgftp_sql/web/static/autocomplete.js");
+  loadBrowserScript("picsyncra/web/static/latest-request.js");
+  loadBrowserScript("picsyncra/web/static/autocomplete.js");
 
   const scheduled = [];
   const rendered = [];
   const remote = deferred();
   let requestSnapshot = { signature: "name\u0000AL", payload: { name: "AL" } };
-  const controller = new window.PicOrg.AutocompleteController({
+  const controller = new window.PicSyncra.AutocompleteController({
     fieldName: "name",
     localSuggestions: () => ["ALFA"],
     remoteSuggestions: () => remote.promise,
@@ -62,13 +62,13 @@ test("controller ignores remote results after the request context changes", asyn
 
 test("controller skips remote work when local visible results fill the panel", () => {
   resetBrowserGlobals();
-  loadBrowserScript("picorgftp_sql/web/static/latest-request.js");
-  loadBrowserScript("picorgftp_sql/web/static/autocomplete.js");
+  loadBrowserScript("picsyncra/web/static/latest-request.js");
+  loadBrowserScript("picsyncra/web/static/autocomplete.js");
 
   const scheduled = [];
   const rendered = [];
   const local = Array.from({ length: 80 }, (_value, index) => `ALFA-${index}`);
-  const controller = new window.PicOrg.AutocompleteController({
+  const controller = new window.PicSyncra.AutocompleteController({
     fieldName: "name",
     localSuggestions: () => local,
     remoteSuggestions: () => Promise.resolve([]),

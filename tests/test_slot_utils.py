@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import unittest
 
-from picorgftp_sql.slot_utils import (
+from picsyncra.slot_utils import (
     next_slot_prefix,
     normalize_slot_definitions,
     normalize_slot_prefix,

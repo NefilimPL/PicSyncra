@@ -11,10 +11,10 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-INDEX_HTML = ROOT / "picorgftp_sql" / "web" / "static" / "index.html"
-LOGIN_HTML = ROOT / "picorgftp_sql" / "web" / "static" / "login.html"
-APP_JS = ROOT / "picorgftp_sql" / "web" / "static" / "app.js"
-APP_CSS = ROOT / "picorgftp_sql" / "web" / "static" / "app.css"
+INDEX_HTML = ROOT / "picsyncra" / "web" / "static" / "index.html"
+LOGIN_HTML = ROOT / "picsyncra" / "web" / "static" / "login.html"
+APP_JS = ROOT / "picsyncra" / "web" / "static" / "app.js"
+APP_CSS = ROOT / "picsyncra" / "web" / "static" / "app.css"
 
 
 class _HtmlCollector(HTMLParser):
@@ -61,6 +61,273 @@ def _parse(path: Path) -> _HtmlCollector:
 
 
 class WebUiIntegrityTests(unittest.TestCase):
+    def test_photo_loading_overlay_does_not_interpret_status_as_html(self) -> None:
+        js_source = APP_JS.read_text(encoding="utf-8")
+        renderer_start = js_source.index("function createSlotNode")
+        renderer_end = js_source.index("function renderSlot(prefix)", renderer_start)
+        renderer = js_source[renderer_start:renderer_end]
+
+        self.assertNotIn("overlay.innerHTML", renderer)
+        self.assertIn("textContent = photoLoadingText()", renderer)
+
+    def test_pimcore_editor_exposes_a_compact_live_ocr_sidebar(self) -> None:
+        html = _parse(INDEX_HTML)
+        source = APP_JS.read_text(encoding="utf-8")
+        css = APP_CSS.read_text(encoding="utf-8")
+
+        self.assertEqual(html.ids.get("pimcoreCreateOcrPanel"), "aside")
+        self.assertEqual(html.ids.get("pimcoreEditOcrPanel"), "aside")
+        self.assertIn("function renderPimcoreOcrPanel", source)
+        self.assertIn("function refreshOpenPimcoreOcrPanels", source)
+        self.assertIn("pimcore-runtime-layout", css)
+        self.assertIn("pimcore-ocr-sidebar", css)
+
+    def test_cached_or_moved_slot_image_is_activated_for_ocr_in_its_destination(self) -> None:
+        source = APP_JS.read_text(encoding="utf-8")
+        web_item = source[
+            source.index("function webImageCacheItem") : source.index(
+                "async function cacheWebImageForSlot",
+                source.index("function webImageCacheItem"),
+            )
+        ]
+        activation = source[
+            source.index("async function ensureSlotOcrCollection") : source.index(
+                "function acceptSimilarCandidate",
+                source.index("async function ensureSlotOcrCollection"),
+            )
+        ]
+        similar = source[
+            source.index("function acceptSimilarCandidate") : source.index(
+                "function pendingSimilarCandidatePrefixes",
+                source.index("function acceptSimilarCandidate"),
+            )
+        ]
+        assignment = source[
+            source.index("function setSlotAssignment") : source.index(
+                "function moveSlotContent",
+                source.index("function setSlotAssignment"),
+            )
+        ]
+        web_assignment = source[
+            source.index("async function addSelectedWebImagesToSlots") : source.index(
+                "function imageFromBrowserExtensionItem",
+                source.index("async function addSelectedWebImagesToSlots"),
+            )
+        ]
+
+        self.assertIn("ocr_state: payload.ocr_state", web_item)
+        self.assertIn('requestJson("/api/ocr/slot-assignment"', activation)
+        self.assertIn("ensureSlotOcrCollection(prefix", similar)
+        self.assertIn("ensureSlotOcrCollection(prefix", assignment)
+        self.assertIn("ensureSlotOcrCollection(prefix", web_assignment)
+
+    def test_settings_ui_contains_module_status_tab_and_refresh_contract(self) -> None:
+        html = INDEX_HTML.read_text(encoding="utf-8")
+        source = APP_JS.read_text(encoding="utf-8")
+
+        self.assertIn('data-settings-tab="module-status"', html)
+        self.assertIn('src="/static/module-build-status.js', html)
+        self.assertIn('"/api/settings/module-status"', source)
+        self.assertIn("Odswiez porownanie", source)
+        self.assertIn("function renderSettingsModuleStatus()", source)
+        self.assertIn("utilities.commitUrl", source)
+        self.assertIn('link.target = "_blank"', source)
+
+    def test_ocr_background_queue_renders_safe_rows_in_workspace_position(self) -> None:
+        html = INDEX_HTML.read_text(encoding="utf-8")
+        source = APP_JS.read_text(encoding="utf-8")
+        renderer = source[
+            source.index("function renderOcrBackgroundQueue") : source.index(
+                "function renderSettingsOcr", source.index("function renderOcrBackgroundQueue")
+            )
+        ]
+        node = Path(r"C:\Program Files\nodejs\node.exe")
+        if not node.exists():
+            self.skipTest("Node.js is required for the OCR queue rendering contract")
+        script = f"""
+const makeNode = (tag) => ({{
+  tag, className: "", textContent: "", hidden: false, src: "", alt: "",
+  children: [],
+  append(...items) {{ this.children.push(...items); }},
+  appendChild(item) {{ this.children.push(item); return item; }},
+  replaceChildren(...items) {{ this.children = items; this.textContent = ""; }},
+  classList: {{ toggle() {{}}, add() {{}}, remove() {{}} }},
+}});
+const document = {{ createElement: makeNode }};
+const ocrBackgroundQueuePanel = makeNode("section");
+const ocrBackgroundQueueSummary = makeNode("span");
+const ocrBackgroundQueueList = makeNode("div");
+{renderer}
+renderOcrBackgroundQueue({{
+  jobs: [
+    {{ kind: "fast", thumbnail_url: "/api/file?token=crop-1", status: "processing", result: [] }},
+    {{ kind: "accurate", thumbnail_url: "/api/file?token=crop-2", status: "completed", result: ["20kg \\u2192 20"] }},
+  ],
+  remaining_count: 7,
+}});
+console.log(JSON.stringify({{
+  hidden: ocrBackgroundQueuePanel.hidden,
+  summary: ocrBackgroundQueueSummary.textContent,
+  firstImage: ocrBackgroundQueueList.children[0]?.children[0]?.src || "",
+  secondImage: ocrBackgroundQueueList.children[1]?.children[0]?.src || "",
+  firstText: ocrBackgroundQueueList.children[0]?.children[1]?.textContent || "",
+  secondText: ocrBackgroundQueueList.children[1]?.children[1]?.textContent || "",
+}}));
+renderOcrBackgroundQueue({{ jobs: [], remaining_count: 0 }});
+console.log(JSON.stringify({{ emptyText: ocrBackgroundQueueList.textContent }}));
+"""
+        completed = subprocess.run(
+            [str(node), "-e", script],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        result, empty = [json.loads(line) for line in completed.stdout.splitlines()]
+
+        self.assertFalse(result["hidden"])
+        self.assertEqual(result["summary"], "+7 kolejnych")
+        self.assertEqual(result["firstImage"], "/api/file?token=crop-1")
+        self.assertEqual(result["secondImage"], "/api/file?token=crop-2")
+        self.assertIn("Szybki model", result["firstText"])
+        self.assertIn("zdjec", empty["emptyText"])
+        self.assertIn("20kg → 20", result["secondText"])
+        self.assertIn('id="ocrBackgroundQueuePanel"', html)
+        self.assertGreater(html.index('id="ocrBackgroundQueuePanel"'), html.index('id="processQueuePanel"'))
+        self.assertLess(html.index('id="ocrBackgroundQueuePanel"'), html.index('id="slotsTitle"'))
+
+    def test_clearing_slot_reports_its_removed_file_token_to_ocr(self) -> None:
+        source = APP_JS.read_text(encoding="utf-8")
+        clear_assignment = source[
+            source.index("function clearSlotAssignment") : source.index(
+                "function setSlotFile", source.index("function clearSlotAssignment")
+            )
+        ]
+        node = Path(r"C:\Program Files\nodejs\node.exe")
+        if not node.exists():
+            self.skipTest("Node.js is required for the OCR slot activity contract")
+        script = f"""
+const state = {{
+  files: new Map(), loadedPhotos: new Map([["01", {{ token: "old-slot-token" }}]]),
+  slotFits: new Map(), slotSources: new Map(), userSelectedSlotSources: new Map(),
+}};
+const calls = [];
+const bumpSlotRevision = () => {{}};
+const markSlotDeletion = () => {{}};
+const revokeFilePreviewUrl = () => {{}};
+const dismissSimilarCandidate = () => {{}};
+const slotAssignmentToken = (prefix) => state.loadedPhotos.get(prefix)?.token || "";
+const recordOcrActivity = (payload) => calls.push(payload);
+{clear_assignment}
+clearSlotAssignment("01");
+console.log(JSON.stringify(calls));
+"""
+        completed = subprocess.run(
+            [str(node), "-e", script],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+
+        self.assertEqual(
+            json.loads(completed.stdout),
+            [{"removedSlotToken": "old-slot-token"}],
+        )
+
+    def test_ocr_slot_polling_keeps_queue_and_refinement_states_live(self) -> None:
+        source = APP_JS.read_text(encoding="utf-8")
+        state_helpers = source[
+            source.index("function isOcrSlotStateInProgress") : source.index(
+                "function updateSlotPreview", source.index("function isOcrSlotStateInProgress")
+            )
+        ]
+        node = Path(r"C:\Program Files\nodejs\node.exe")
+        if not node.exists():
+            self.skipTest("Node.js is required for the OCR slot state contract")
+        completed = subprocess.run(
+            [
+                str(node),
+                "-e",
+                f"{state_helpers}\nconsole.log(JSON.stringify([\"queued\", \"scanning\", \"refining\", \"completed\"].map(isOcrSlotStateInProgress)));",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+
+        self.assertEqual(json.loads(completed.stdout), [True, True, True, False])
+        self.assertIn("isOcrSlotStateInProgress(item?.ocr_state)", source)
+        self.assertIn("isOcrSlotStateInProgress(photo?.ocr_state)", source)
+
+    def test_settings_ocr_tab_has_diagnostic_controls_and_overlay_contract(self) -> None:
+        html = _parse(INDEX_HTML)
+        source = APP_JS.read_text(encoding="utf-8")
+        css = APP_CSS.read_text(encoding="utf-8")
+
+        self.assertTrue(html.has_tag("button", **{"data-settings-tab": "ocr"}))
+        self.assertIn("function renderSettingsOcr()", source)
+        self.assertIn("function renderOcrDiagnostics", source)
+        self.assertIn("function renderOcrLivePreview", source)
+        self.assertIn("showEvent(event)", source)
+        self.assertIn("candidate_regions", source)
+        self.assertIn("crop_started", source)
+        self.assertIn("PicSyncra.OcrDiagnostics", source)
+        self.assertIn("applyProgressEvent", source)
+        self.assertNotIn("createImageBitmap", source)
+        self.assertNotIn("data-ocr-candidate-index", source)
+        self.assertIn("await renderOcrLivePreview(selected)", source)
+        self.assertIn("data-ocr-region-id", source)
+        self.assertIn("setOcrRegionFocus", source)
+        self.assertIn("ocr-diagnostic-focus-active", css)
+        self.assertIn("ocr-focused", css)
+        self.assertNotIn("0 0 0 9999px", css)
+        self.assertIn("/api/settings/ocr/status", source)
+        self.assertIn("/api/settings/ocr/runs", source)
+        self.assertIn("ocr_max_memory_mode", source)
+        self.assertIn("ocr_max_memory_percent", source)
+        self.assertIn("ocr_max_memory_gb", source)
+        self.assertIn("ocr_max_disk_busy_percent", source)
+        self.assertIn("ocr_accurate_confidence_threshold", source)
+        self.assertIn(
+            'selectField("ocr_max_memory_mode", "Miekki prog RAM systemu", ocrSettings.max_memory_mode || "percent", [\n'
+            '    ["percent", "Procent calego RAM"],\n'
+            '    ["gigabytes", "GB aktualnego uzycia"],',
+            source,
+        )
+        self.assertIn("Aktualne uzycie RAM", source)
+        self.assertIn('"Miekki prog RAM systemu"', source)
+        self.assertIn(
+            '"OCR sprawdza uzycie przed kazdym etapem i czeka przed rozpoczeciem kolejnego; nie przerywa etapu, ktory juz trwa."',
+            source,
+        )
+        self.assertIn("Aktualna aktywnosc dysku", source)
+        self.assertIn('"Proces OCR"', source)
+        self.assertIn('"Zadanie przekazane do procesu OCR; oczekiwanie na rozpoczecie etapu."', source)
+        self.assertIn("data-ocr-overlay", source)
+        self.assertIn("model.version", source)
+        self.assertIn("%", source)
+        self.assertIn("ocr-diagnostic-overlay", css)
+        self.assertIn("ocr-diagnostic-live-status", css)
+        self.assertIn("ocr-diagnostic-model-columns", css)
+        self.assertIn("ocr-diagnostic-detail-panel", css)
+        self.assertIn('data-ocr-label-position="rail"', css)
+        self.assertIn('requestJson("/api/ocr/jobs")', source)
+        self.assertIn("ocr-background-queue", css)
+        self.assertIn("slot-ocr-state", source)
+        self.assertIn("ocr-collecting", css)
+        self.assertIn('requestJson("/api/ocr/validate"', source)
+        self.assertIn('requestJson("/api/ocr/approval"', source)
+        self.assertIn("pimcore-runtime-ocr-mismatch", css)
+        self.assertIn("function openOcrAnnotatedImage", source)
+        self.assertIn('requestJson(`/api/ocr/scan?token=${encodeURIComponent(token)}`)', source)
+        self.assertIn("ocr-slot-open-overlay", css)
+        self.assertIn('overlay.className = "ocr-slot-open-overlay";', source)
+        self.assertIn("function refreshOcrSlotStates", source)
+        self.assertIn('requestJson(`/api/ocr/scan?token=${encodeURIComponent(token)}`)', source)
+        self.assertIn('createPoller("ocr-slot-state", 1500, refreshOcrSlotStates)', source)
+
     def test_pimcore_export_selection_has_a_legacy_chrome_border_fallback(self) -> None:
         css = APP_CSS.read_text(encoding="utf-8")
 
@@ -678,6 +945,8 @@ const markSlotDeletion = () => {{}};
 const renderSlot = () => {{}};
 const pendingSimilarCandidatePrefixes = () => state.files.has("01") ? [] : ["01"];
 const openSimilarDecisionModal = () => {{}};
+const ensureSlotOcrCollection = () => Promise.resolve();
+const formStatus = {{ textContent: "" }};
 async function requestJson(_url, options) {{
   submittedForms.push(Object.fromEntries(options.body.entries()));
   return {{ job: {{}} }};
@@ -1042,6 +1311,8 @@ const createSlotFileUpload = (_prefix, file) => ({{ file }});
 const dismissSimilarCandidate = () => {{}};
 const updateSubmitButtonState = () => {{}};
 const uploadSlotFile = () => {{}};
+const slotAssignmentToken = () => "";
+const recordOcrActivity = () => {{}};
 let immediateRefreshes = 0;
 let debouncedRefreshes = 0;
 let occupiedAtRefresh = [];
@@ -1212,7 +1483,13 @@ console.log(JSON.stringify({{
         self.assertIn("function renderSimilarDecisionModal()", source)
         helpers = source[
             source.index("function defaultSlotSource") : source.index(
-                "function selectedPhotoToken", source.index("function defaultSlotSource")
+                "async function ensureSlotOcrCollection", source.index("function defaultSlotSource")
+            )
+        ]
+        accept = source[
+            source.index("function acceptSimilarCandidate") : source.index(
+                "function pendingSimilarCandidatePrefixes",
+                source.index("function acceptSimilarCandidate"),
             )
         ]
         decision_helpers = source[
@@ -1257,7 +1534,10 @@ const similarDecisionModal = new Element();
 const document = {{ createElement: () => new Element() }};
 const markSlotDeletion = () => {{}};
 const renderSlot = () => {{}};
+const ensureSlotOcrCollection = () => Promise.resolve();
+const formStatus = {{ textContent: "" }};
 {helpers}
+{accept}
 {decision_helpers}
 state.similarCandidates.set("01", {{ id: "one", filename: "one.jpg", thumb_url: "/thumb/one", source_color: "Czarny" }});
 state.similarCandidates.set("02", {{ id: "two", filename: "two.pdf", url: "/file/two", is_pdf: true, source_color: "Biały" }});
@@ -1418,6 +1698,7 @@ const hasPendingUserChanges = () => true;
 const pendingChangedSlotPrefixes = () => new Set();
 const FormData = class {{}};
 const requestJson = () => {{ requests += 1; return Promise.resolve({{}}); }};
+const recordOcrActivity = () => {{}};
 {submit_product}
 (async () => {{
   await submitProductForm();
@@ -1482,7 +1763,7 @@ console.log(JSON.stringify(selectedSimilarSlotPrefixes(rows)));
 
     def test_header_stacks_latency_above_compact_system_status(self) -> None:
         markup = INDEX_HTML.read_text(encoding="utf-8")
-        css = (ROOT / "picorgftp_sql" / "web" / "static" / "app.css").read_text(
+        css = (ROOT / "picsyncra" / "web" / "static" / "app.css").read_text(
             encoding="utf-8"
         )
         source = APP_JS.read_text(encoding="utf-8")
@@ -1491,7 +1772,7 @@ console.log(JSON.stringify(selectedSimilarSlotPrefixes(rows)));
         location_start = markup.index('class="header-location"')
         stack_source = markup[stack_start:location_start]
 
-        self.assertLess(markup.index("PicOrgFTP-SQL Web"), stack_start)
+        self.assertLess(markup.index("PicSyncra Web"), stack_start)
         self.assertLess(stack_start, location_start)
         self.assertLess(
             stack_source.index('id="backendHealthStatus"'),
@@ -1600,7 +1881,7 @@ console.log(JSON.stringify({{
         ]
         self.assertIn("async function fetchRuntimeStatus()", source)
         self.assertIn('requestJson("/api/runtime-status")', source)
-        self.assertIn("new PicOrg.RuntimeStatusPoller", source)
+        self.assertIn("new PicSyncra.RuntimeStatusPoller", source)
         node = Path(r"C:\Program Files\nodejs\node.exe")
         if not node.exists():
             self.skipTest("Node.js is required for the browser health rerender contract test")
@@ -1802,7 +2083,7 @@ async function requestJson() {{
         html = _parse(INDEX_HTML)
         source = APP_JS.read_text(encoding="utf-8")
         css = (
-            ROOT / "picorgftp_sql" / "web" / "static" / "app.css"
+            ROOT / "picsyncra" / "web" / "static" / "app.css"
         ).read_text(encoding="utf-8")
 
         self.assertTrue(html.has_tag("button", **{"data-settings-tab": "mail"}))
@@ -1838,7 +2119,7 @@ async function requestJson() {{
     def test_user_settings_forms_send_optional_email_fields(self) -> None:
         source = APP_JS.read_text(encoding="utf-8")
         css = (
-            ROOT / "picorgftp_sql" / "web" / "static" / "app.css"
+            ROOT / "picsyncra" / "web" / "static" / "app.css"
         ).read_text(encoding="utf-8")
         users_source = source[
             source.index("function renderSettingsUsers") : source.index(
@@ -1860,7 +2141,7 @@ async function requestJson() {{
         html_source = INDEX_HTML.read_text(encoding="utf-8")
         js_source = APP_JS.read_text(encoding="utf-8")
         css_source = (
-            ROOT / "picorgftp_sql" / "web" / "static" / "app.css"
+            ROOT / "picsyncra" / "web" / "static" / "app.css"
         ).read_text(encoding="utf-8")
 
         brand_start = html_source.index('<div class="topbar-brand">')
@@ -1896,7 +2177,7 @@ async function requestJson() {{
         self.assertIn("pollBackendHealth().catch(() => {})", js_source)
         self.assertIn("async function fetchRuntimeStatus()", js_source)
         self.assertIn('requestJson("/api/runtime-status")', js_source)
-        self.assertIn("new PicOrg.RuntimeStatusPoller", js_source)
+        self.assertIn("new PicSyncra.RuntimeStatusPoller", js_source)
         self.assertNotIn("backendHealthDetailsList.innerHTML", js_source)
         self.assertIn("backendHealthDetailsList.replaceChildren", js_source)
         self.assertIn("observed_at", js_source)
@@ -1927,7 +2208,7 @@ async function requestJson() {{
         html_source = INDEX_HTML.read_text(encoding="utf-8")
         js_source = APP_JS.read_text(encoding="utf-8")
         css_source = (
-            ROOT / "picorgftp_sql" / "web" / "static" / "app.css"
+            ROOT / "picsyncra" / "web" / "static" / "app.css"
         ).read_text(encoding="utf-8")
 
         self.assertIn('id="resourceStatus"', html_source)
@@ -1978,7 +2259,7 @@ async function requestJson() {{
         self.assertIn("resourceMonitorTestState.message", monitor_source)
         self.assertIn("await pollBackendHealth()", monitor_source)
         self.assertIn("async function fetchRuntimeStatus()", source)
-        self.assertIn("new PicOrg.RuntimeStatusPoller", source)
+        self.assertIn("new PicSyncra.RuntimeStatusPoller", source)
 
         self.assertIn("const FTP_PREVIEW_CACHE_LIMIT = 120;", source)
         helper_start = source.index("function setFtpPreviewCache")
@@ -2014,7 +2295,7 @@ async function requestJson() {{
         html_source = INDEX_HTML.read_text(encoding="utf-8")
         js_source = APP_JS.read_text(encoding="utf-8")
         css_source = (
-            ROOT / "picorgftp_sql" / "web" / "static" / "app.css"
+            ROOT / "picsyncra" / "web" / "static" / "app.css"
         ).read_text(encoding="utf-8")
 
         for tab in ("live", "critical", "error", "warning", "jobs"):
@@ -2053,7 +2334,7 @@ async function requestJson() {{
     def test_incident_cards_render_safe_delivery_status_details(self) -> None:
         js_source = APP_JS.read_text(encoding="utf-8")
         css_source = (
-            ROOT / "picorgftp_sql" / "web" / "static" / "app.css"
+            ROOT / "picsyncra" / "web" / "static" / "app.css"
         ).read_text(encoding="utf-8")
 
         for status, label in (
@@ -2192,7 +2473,7 @@ async function requestJson() {{
     def test_web_settings_builds_vertical_product_field_rows(self) -> None:
         source = APP_JS.read_text(encoding="utf-8")
         css = (
-            ROOT / "picorgftp_sql" / "web" / "static" / "app.css"
+            ROOT / "picsyncra" / "web" / "static" / "app.css"
         ).read_text(encoding="utf-8")
 
         self.assertIn("function productFieldSettingsList", source)
@@ -2226,7 +2507,7 @@ async function requestJson() {{
         source = INDEX_HTML.read_text(encoding="utf-8")
         html = _parse(INDEX_HTML)
         css = (
-            ROOT / "picorgftp_sql" / "web" / "static" / "app.css"
+            ROOT / "picsyncra" / "web" / "static" / "app.css"
         ).read_text(encoding="utf-8")
 
         self.assertIn("githubStatusButton", html.button_ids)
@@ -2236,7 +2517,7 @@ async function requestJson() {{
         self.assertTrue(html.has_tag("button", id="githubStatusButton", type="button"))
         self.assertLess(
             source.index('id="githubStatusButton"'),
-            source.index("<strong>PicOrgFTP-SQL Web</strong>"),
+            source.index("<strong>PicSyncra Web</strong>"),
         )
         self.assertIn('viewBox="0 0 16 16" width="24" height="24"', source)
         self.assertIn(".github-status-button", css)
@@ -2248,7 +2529,7 @@ async function requestJson() {{
     def test_app_js_renders_active_user_presence(self) -> None:
         source = APP_JS.read_text(encoding="utf-8")
         css = (
-            ROOT / "picorgftp_sql" / "web" / "static" / "app.css"
+            ROOT / "picsyncra" / "web" / "static" / "app.css"
         ).read_text(encoding="utf-8")
 
         self.assertIn("function renderActiveUsersPresence", source)
@@ -2275,7 +2556,7 @@ async function requestJson() {{
     def test_app_js_marks_presence_client_and_leaves_on_pagehide(self) -> None:
         source = APP_JS.read_text(encoding="utf-8")
 
-        self.assertIn('CLIENT_ID_HEADER = "X-PicOrg-Client-Id"', source)
+        self.assertIn('CLIENT_ID_HEADER = "X-PicSyncra-Client-Id"', source)
         self.assertIn("function activePresenceClientId", source)
         self.assertIn("function notifyActiveUsersPresenceLeave", source)
         self.assertIn("/api/server/presence/leave", source)
@@ -2399,6 +2680,11 @@ async function requestJson() {{
         ):
             self.assertIn(element_id, html.ids)
 
+    def test_pimcore_template_builder_has_ocr_validation_control(self) -> None:
+        html = _parse(INDEX_HTML)
+
+        self.assertIn("pimcoreTemplateOcrValidation", html.ids)
+
     def test_app_js_persists_and_previews_pimcore_mapping_templates(self) -> None:
         source = APP_JS.read_text(encoding="utf-8")
 
@@ -2423,6 +2709,10 @@ async function requestJson() {{
         self.assertIn('["Mnoz", "*"]', source)
         self.assertIn('["Oblicz", "oblicz()"]', source)
         self.assertIn("insertPimcoreTemplateText(token)", source)
+        self.assertIn("function pimcoreOcrValidationFromRow", source)
+        self.assertIn("ocr_validation", source)
+        self.assertIn("function pimcoreSlotTokens", source)
+        self.assertIn("slot_tokens: pimcoreSlotTokens()", source)
 
     def test_runtime_pimcore_forms_load_samples_and_recalculate_saved_templates(self) -> None:
         source = APP_JS.read_text(encoding="utf-8")
@@ -2435,6 +2725,359 @@ async function requestJson() {{
         self.assertIn("pimcore-recalculate-field", source)
         self.assertIn("async function recalculateAllPimcoreEditFields", source)
         self.assertIn("pimcoreEditRecalculateAllButton", source)
+
+    def test_typing_in_an_ocr_validated_runtime_field_requests_validation(self) -> None:
+        """Catches manual fields that wait for blur instead of checking OCR."""
+
+        source = APP_JS.read_text(encoding="utf-8")
+        populate = source[
+            source.index("function populatePimcoreRuntimeForm") : source.index(
+                "function pimcoreRuntimeWarnings",
+                source.index("function populatePimcoreRuntimeForm"),
+            )
+        ]
+        validation = source[
+            source.index("async function validatePimcoreOcrFields") : source.index(
+                "function pimcoreRuntimeRecalculateStatus",
+                source.index("async function validatePimcoreOcrFields"),
+            )
+        ]
+        ocr_slot_tokens = source[
+            source.index("function pimcoreOcrSlotTokens") : source.index(
+                "function renderPimcoreTemplateTokens",
+                source.index("function pimcoreOcrSlotTokens"),
+            )
+        ]
+        node = Path(r"C:\Program Files\nodejs\node.exe")
+        if not node.exists():
+            self.skipTest("Node.js is required for the Pimcore OCR interaction contract")
+        script = f"""
+let runtimeInput;
+const calls = [];
+const makeNode = (tag) => {{
+  const node = {{
+    tag, className: "", textContent: "", dataset: {{}}, value: "", id: "",
+    required: false, readOnly: false, autocomplete: "", children: [], listeners: {{}},
+    append(...items) {{ this.children.push(...items); }},
+    appendChild(item) {{ this.children.push(item); return item; }},
+    addEventListener(name, handler) {{ this.listeners[name] = handler; }},
+  }};
+  if (tag === "input") runtimeInput = node;
+  return node;
+}};
+const document = {{ createElement: makeNode }};
+const window = {{ setTimeout, clearTimeout }};
+const state = {{ settings: {{ ocr_available: true }} }};
+const pimcoreSlotTokens = () => ({{ "20": "signed-slot" }});
+class FormData {{
+  constructor(source) {{ this.source = source; }}
+  entries() {{ return Object.entries(this.source.elements).map(([name, input]) => [name, input.value]); }}
+}}
+const formPayload = () => ({{}});
+const requestJson = async (url, options) => {{
+  calls.push({{ url, body: JSON.parse(options.body) }});
+  return {{ mismatch: false, images: [] }};
+}};
+const renderPimcoreOcrMismatch = () => {{}};
+const clearPimcoreOcrMismatch = () => {{}};
+const updatePimcoreCreateSubmitState = () => {{}};
+const updatePimcoreEditSubmitState = () => {{}};
+const updatePimcoreRuntimeFieldChangeState = () => {{}};
+const pimcoreRuntimeLayoutGroups = (schema) => [{{ name: "", rows: [{{ fields: schema }}] }}];
+const pimcoreRuntimeSection = () => makeNode("section");
+const pimcoreRuntimeRow = () => makeNode("div");
+{ocr_slot_tokens}
+{validation}
+{populate}
+const form = {{ textContent: "", elements: {{}}, append() {{}} }};
+const schema = [{{ source: "HEIGHT", label: "Wysokosc", ocr_validation: true, value_template: "" }}];
+populatePimcoreRuntimeForm(form, schema, {{ HEIGHT: "22078978" }});
+form.elements.HEIGHT = runtimeInput;
+runtimeInput.listeners.input();
+runtimeInput.value = "22078979";
+runtimeInput.listeners.input();
+await new Promise((resolve) => setTimeout(resolve, 450));
+console.log(JSON.stringify(calls));
+"""
+        completed = subprocess.run(
+            [str(node), "-e", script],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+
+        calls = json.loads(completed.stdout)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["url"], "/api/ocr/validate")
+        self.assertEqual(calls[0]["body"]["field_id"], "HEIGHT")
+
+    def test_global_runtime_recalculation_validates_manual_ocr_fields(self) -> None:
+        """Catches global recalculation that validates only template-backed fields."""
+
+        source = APP_JS.read_text(encoding="utf-8")
+        validation = source[
+            source.index("async function validatePimcoreOcrFields") : source.index(
+                "function pimcoreRuntimeRecalculateStatus",
+                source.index("async function validatePimcoreOcrFields"),
+            )
+        ]
+        ocr_slot_tokens = source[
+            source.index("function pimcoreOcrSlotTokens") : source.index(
+                "function renderPimcoreTemplateTokens",
+                source.index("function pimcoreOcrSlotTokens"),
+            )
+        ]
+        renderer = source[
+            source.index("async function renderPimcoreRuntimeTemplates") : source.index(
+                "function pimcoreEditHasRuntimeTemplates",
+                source.index("async function renderPimcoreRuntimeTemplates"),
+            )
+        ]
+        node = Path(r"C:\Program Files\nodejs\node.exe")
+        if not node.exists():
+            self.skipTest("Node.js is required for the Pimcore OCR interaction contract")
+        script = f"""
+const calls = [];
+const form = {{
+  dataset: {{ pimcoreMode: "create" }},
+  elements: {{
+    WIDTH: {{ value: "120", dataset: {{}} }},
+    HEIGHT: {{ value: "22078978", dataset: {{}} }},
+  }},
+}};
+const pimcoreCreateForm = form;
+const pimcoreEditForm = {{}};
+const state = {{ settings: {{ ocr_available: true }} }};
+const pimcoreSlotTokens = () => ({{ "20": "signed-slot" }});
+class FormData {{
+  constructor(source) {{ this.source = source; }}
+  entries() {{ return Object.entries(this.source.elements).map(([name, input]) => [name, input.value]); }}
+}}
+const formPayload = () => ({{}});
+const requestJson = async (url, options) => {{
+  calls.push({{ url, body: JSON.parse(options.body) }});
+  if (url === "/api/pimcore/render-templates") return {{ values: {{}}, integrations: {{}} }};
+  return {{ mismatch: false, images: [] }};
+}};
+const updatePimcoreRuntimeFieldChangeState = () => {{}};
+const updatePimcoreRuntimeCalculatedState = () => {{}};
+const renderPimcoreOcrMismatch = () => {{}};
+const updatePimcoreCreateSubmitState = () => {{}};
+const updatePimcoreEditSubmitState = () => {{}};
+{ocr_slot_tokens}
+{validation}
+{renderer}
+const schema = [
+  {{ source: "WIDTH", value_template: "{{WIDTH}}", ocr_validation: false }},
+  {{ source: "HEIGHT", pimcore_field: "height", value_template: "{{PRODUCT:height}}", ocr_validation: true }},
+];
+await renderPimcoreRuntimeTemplates(form, schema);
+console.log(JSON.stringify(calls.filter((call) => call.url === "/api/ocr/validate")));
+"""
+        completed = subprocess.run(
+            [str(node), "-e", script],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+
+        calls = json.loads(completed.stdout)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["body"]["field_id"], "height")
+        self.assertEqual(calls[0]["body"]["value"], "22078978")
+
+    def test_ocr_validation_activates_template_ui_and_field_recalculation(self) -> None:
+        """An OCR-only mapping remains manually editable but gets its runtime controls."""
+
+        source = APP_JS.read_text(encoding="utf-8")
+        template_controls = source[
+            source.index("function pimcoreTemplateBuilderButton") : source.index(
+                "function pimcoreSlotTokens", source.index("function pimcoreTemplateBuilderButton")
+            )
+        ]
+        runtime_form = source[
+            source.index("function populatePimcoreRuntimeForm") : source.index(
+                "const pimcoreOcrValidationTimers",
+                source.index("function populatePimcoreRuntimeForm"),
+            )
+        ]
+        node = Path(r"C:\Program Files\nodejs\node.exe")
+        if not node.exists():
+            self.skipTest("Node.js is required for the Pimcore OCR runtime contract")
+        script = f"""
+const buttons = [];
+const makeNode = (tag) => {{
+  const node = {{
+    tag, className: "", textContent: "", title: "", dataset: {{}}, value: "", id: "",
+    children: [], listeners: {{}}, required: false, readOnly: false, autocomplete: "",
+    append(...items) {{ this.children.push(...items); }},
+    appendChild(item) {{ this.children.push(item); return item; }},
+    addEventListener(name, handler) {{ this.listeners[name] = handler; }},
+    setAttribute() {{}},
+  }};
+  if (tag === "button") buttons.push(node);
+  return node;
+}};
+const document = {{ createElement: makeNode }};
+const rowButton = makeNode("button");
+const configuredRow = {{
+  dataset: {{ valueTemplate: "", ocrValidation: "true" }},
+  classList: {{ contains: () => false }},
+  querySelector(selector) {{
+    if (selector === ".pimcore-template-button") return rowButton;
+    if (selector === '[name="mapping_type"]') return {{ value: "input" }};
+    return null;
+  }},
+}};
+const updatePimcoreRuntimeFieldChangeState = () => {{}};
+const schedulePimcoreOcrFieldValidation = () => {{}};
+const pimcoreRuntimeLayoutGroups = (schema) => [{{ name: "", rows: [{{ fields: schema }}] }}];
+const pimcoreRuntimeSection = () => makeNode("section");
+const pimcoreRuntimeRow = () => makeNode("div");
+{template_controls}
+{runtime_form}
+updatePimcoreTemplateButton(configuredRow);
+const form = {{ textContent: "", elements: {{}}, children: [], append(...items) {{ this.children.push(...items); }} }};
+populatePimcoreRuntimeForm(
+  form,
+  [{{ source: "HEIGHT", label: "Wysokosc", value_template: "", ocr_validation: true }}],
+  {{ HEIGHT: "220" }},
+  {{ allowRecalculate: true }},
+);
+console.log(JSON.stringify({{
+  templateLabel: rowButton.textContent,
+  hasFieldRecalculate: buttons.some((button) => button.className.includes("pimcore-recalculate-field")),
+}}));
+"""
+        completed = subprocess.run(
+            [str(node), "-e", script],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+
+        controls = json.loads(completed.stdout)
+        self.assertEqual(controls["templateLabel"], "Zmien szablon")
+        self.assertTrue(controls["hasFieldRecalculate"])
+
+    def test_ocr_completion_revalidates_open_pimcore_forms(self) -> None:
+        """A completed scan must compare the current form values without editing them."""
+
+        source = APP_JS.read_text(encoding="utf-8")
+        state_helpers = source[
+            source.index("function isOcrSlotStateInProgress") : source.index(
+                "function updateSlotPreview", source.index("function isOcrSlotStateInProgress")
+            )
+        ]
+        refresh_slots = source[
+            source.index("async function refreshOcrSlotStates") : source.index(
+                "function renderSettingsOcr", source.index("async function refreshOcrSlotStates")
+            )
+        ]
+        node = Path(r"C:\Program Files\nodejs\node.exe")
+        if not node.exists():
+            self.skipTest("Node.js is required for the OCR completion contract")
+        script = f"""
+let revalidations = 0;
+const state = {{
+  files: new Map([["20", {{ token: "signed-slot", ocr_state: "refining" }}]]),
+  loadedPhotos: new Map(),
+}};
+const slotFileToken = (item) => item.token;
+const requestJson = async () => ({{ state: "completed" }});
+const updateSlotPreview = () => {{}};
+const revalidateOpenPimcoreOcrFields = async () => {{ revalidations += 1; }};
+{state_helpers}
+{refresh_slots}
+await refreshOcrSlotStates();
+console.log(JSON.stringify({{ state: state.files.get("20").ocr_state, revalidations }}));
+"""
+        completed = subprocess.run(
+            [str(node), "-e", script],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["state"], "completed")
+        self.assertEqual(result["revalidations"], 1)
+
+    def test_applying_a_calculated_value_revalidates_it_against_ocr(self) -> None:
+        """Manual input wins until the user explicitly accepts the calculated value."""
+
+        source = APP_JS.read_text(encoding="utf-8")
+        calculated_state = source[
+            source.index("function updatePimcoreRuntimeCalculatedState") : source.index(
+                "function clearPimcoreOcrMismatch",
+                source.index("function updatePimcoreRuntimeCalculatedState"),
+            )
+        ]
+        node = Path(r"C:\Program Files\nodejs\node.exe")
+        if not node.exists():
+            self.skipTest("Node.js is required for the Pimcore calculated-value contract")
+        script = f"""
+const created = [];
+const makeNode = (tag) => {{
+  const node = {{
+    tag, className: "", textContent: "", title: "", hidden: false, children: [], listeners: {{}},
+    append(...items) {{ this.children.push(...items); }},
+    appendChild(item) {{ this.children.push(item); return item; }},
+    addEventListener(name, handler) {{ this.listeners[name] = handler; }},
+    setAttribute() {{}},
+    querySelector(selector) {{
+      if (selector === "span") return this.children.find((item) => item.tag === "span") || null;
+      return null;
+    }},
+  }};
+  created.push(node);
+  return node;
+}};
+const document = {{ createElement: makeNode }};
+let calculatedInfo = null;
+const field = {{
+  classList: {{ toggle() {{}} }},
+  querySelector(selector) {{
+    if (selector === ".pimcore-runtime-calculated") return calculatedInfo;
+    if (selector === "input") return input;
+    return null;
+  }},
+  appendChild(item) {{ calculatedInfo = item; }},
+}};
+const input = {{ value: "manual", dataset: {{}}, closest: () => field }};
+const form = {{ elements: {{ HEIGHT: input }} }};
+let validationSource = "";
+const clearPimcoreRuntimeConflict = () => {{}};
+const updatePimcoreRuntimeFieldChangeState = () => {{}};
+const updatePimcoreRuntimeOriginalState = () => {{}};
+const updatePimcoreCreateSubmitState = () => {{}};
+const updatePimcoreEditSubmitState = () => {{}};
+const pimcoreRuntimeActions = (...items) => {{ const actions = makeNode("actions"); actions.append(...items); return actions; }};
+const schedulePimcoreOcrFieldValidation = (_form, _schema, source) => {{ validationSource = source; }};
+{calculated_state}
+updatePimcoreRuntimeCalculatedState(
+  form,
+  {{ calculated_values: {{ HEIGHT: "calculated" }}, changed: {{ HEIGHT: true }} }},
+  [{{ source: "HEIGHT", ocr_validation: true }}],
+);
+created.find((node) => node.className.includes("pimcore-runtime-apply-action")).listeners.click();
+console.log(JSON.stringify({{ value: input.value, validationSource }}));
+"""
+        completed = subprocess.run(
+            [str(node), "-e", script],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["value"], "calculated")
+        self.assertEqual(result["validationSource"], "HEIGHT")
 
     def test_runtime_pimcore_create_modal_recalculates_and_reopens_for_missing_product(
         self,
@@ -2465,7 +3108,7 @@ async function requestJson() {{
 
     def test_sql_profile_ui_and_pimcore_sql_mapping_controls_exist(self) -> None:
         source = APP_JS.read_text(encoding="utf-8")
-        css = (ROOT / "picorgftp_sql" / "web" / "static" / "app.css").read_text(
+        css = (ROOT / "picsyncra" / "web" / "static" / "app.css").read_text(
             encoding="utf-8"
         )
         html = INDEX_HTML.read_text(encoding="utf-8")
@@ -2492,7 +3135,7 @@ async function requestJson() {{
 
     def test_pimcore_mapping_layout_controls_and_runtime_sections_exist(self) -> None:
         source = APP_JS.read_text(encoding="utf-8")
-        css = (ROOT / "picorgftp_sql" / "web" / "static" / "app.css").read_text(
+        css = (ROOT / "picsyncra" / "web" / "static" / "app.css").read_text(
             encoding="utf-8"
         )
 
@@ -2525,7 +3168,7 @@ async function requestJson() {{
 
     def test_pimcore_runtime_difference_actions_are_compact_icon_buttons(self) -> None:
         source = APP_JS.read_text(encoding="utf-8")
-        css = (ROOT / "picorgftp_sql" / "web" / "static" / "app.css").read_text(
+        css = (ROOT / "picsyncra" / "web" / "static" / "app.css").read_text(
             encoding="utf-8"
         )
 
@@ -2566,7 +3209,7 @@ async function requestJson() {{
 
     def test_pimcore_edit_recalculation_blocks_submit_until_resolved(self) -> None:
         source = APP_JS.read_text(encoding="utf-8")
-        css = (ROOT / "picorgftp_sql" / "web" / "static" / "app.css").read_text(
+        css = (ROOT / "picsyncra" / "web" / "static" / "app.css").read_text(
             encoding="utf-8"
         )
 
@@ -2723,7 +3366,7 @@ async function requestJson() {{
     def test_pimcore_ui_uses_example_placeholder_without_private_default(self) -> None:
         source = APP_JS.read_text(encoding="utf-8")
         html_source = INDEX_HTML.read_text(encoding="utf-8")
-        css = (ROOT / "picorgftp_sql" / "web" / "static" / "app.css").read_text(
+        css = (ROOT / "picsyncra" / "web" / "static" / "app.css").read_text(
             encoding="utf-8"
         )
 
@@ -2827,9 +3470,9 @@ async function requestJson() {{
         self.assertNotIn('value="admin"', login_source)
 
     def test_login_js_remembers_last_successful_username(self) -> None:
-        source = (ROOT / "picorgftp_sql" / "web" / "static" / "login.js").read_text(encoding="utf-8")
+        source = (ROOT / "picsyncra" / "web" / "static" / "login.js").read_text(encoding="utf-8")
 
-        self.assertIn('LAST_LOGIN_USERNAME_KEY = "picorg-last-login-username"', source)
+        self.assertIn('LAST_LOGIN_USERNAME_KEY = "picsyncra-last-login-username"', source)
         self.assertIn("localStorage.getItem(LAST_LOGIN_USERNAME_KEY)", source)
         self.assertIn("localStorage.setItem(LAST_LOGIN_USERNAME_KEY, username)", source)
         self.assertLess(
@@ -2926,7 +3569,7 @@ async function requestJson() {{
         html_source = INDEX_HTML.read_text(encoding="utf-8")
         js_source = APP_JS.read_text(encoding="utf-8")
         css_source = (
-            ROOT / "picorgftp_sql" / "web" / "static" / "app.css"
+            ROOT / "picsyncra" / "web" / "static" / "app.css"
         ).read_text(encoding="utf-8")
 
         for element_id in (
@@ -2987,7 +3630,7 @@ async function requestJson() {{
         renderer_end = source.index("function incidentValue", renderer_start)
         renderer = source[renderer_start:renderer_end]
         css_source = (
-            ROOT / "picorgftp_sql" / "web" / "static" / "app.css"
+            ROOT / "picsyncra" / "web" / "static" / "app.css"
         ).read_text(encoding="utf-8")
 
         self.assertIn("log-event-compact", renderer)
@@ -3007,7 +3650,7 @@ async function requestJson() {{
     def test_history_changes_formats_structured_values_and_unknown_durations(self) -> None:
         source = APP_JS.read_text(encoding="utf-8")
         css_source = (
-            ROOT / "picorgftp_sql" / "web" / "static" / "app.css"
+            ROOT / "picsyncra" / "web" / "static" / "app.css"
         ).read_text(encoding="utf-8")
         self.assertIn("function formatHistoryDuration", source)
         value_start = source.index("function historyChangeValue")

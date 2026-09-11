@@ -33,15 +33,16 @@ _ZDJECIA PRZEROBIONE_/
 .superpowers/
 \__pycache__/
 .pytest_cache/
+.pytest-tmp/
 .tmp-test/
 pytest-cache-files-*/
 pytest-temp/
 tmp_test/
 tmp[a-z0-9_]*/
-.picorg_web.pid
+.picsyncra_web.pid
 logs/
-picorg_web_*.log
-picorg_web_uvicorn.*.log
+picsyncra_web_*.log
+picsyncra_web_uvicorn.*.log
 
 # PyInstaller / EXE build artifacts
 build/

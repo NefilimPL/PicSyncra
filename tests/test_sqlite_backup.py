@@ -2,21 +2,23 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-from picorgftp_sql import data_store, sqlite_backup, storage_settings
+from picsyncra import data_store, sqlite_backup, storage_settings
 
 
 def _create_db(path: Path) -> None:
-    with sqlite3.connect(path) as conn:
-        conn.execute("CREATE TABLE schema_version (version INTEGER NOT NULL, applied_at TEXT NOT NULL)")
-        conn.execute("INSERT INTO schema_version VALUES (3, '2026-06-25T13:02:34.300Z')")
-        conn.execute("CREATE TABLE app_config_values (path TEXT PRIMARY KEY, value_json TEXT NOT NULL, updated_at TEXT NOT NULL)")
-        conn.execute("INSERT INTO app_config_values VALUES ('database.query', '\"secret query\"', '2026-06-25T13:02:34.300Z')")
+    with closing(sqlite3.connect(path)) as conn:
+        with conn:
+            conn.execute("CREATE TABLE schema_version (version INTEGER NOT NULL, applied_at TEXT NOT NULL)")
+            conn.execute("INSERT INTO schema_version VALUES (3, '2026-06-25T13:02:34.300Z')")
+            conn.execute("CREATE TABLE app_config_values (path TEXT PRIMARY KEY, value_json TEXT NOT NULL, updated_at TEXT NOT NULL)")
+            conn.execute("INSERT INTO app_config_values VALUES ('database.query', '\"secret query\"', '2026-06-25T13:02:34.300Z')")
 
 
 def test_backup_creates_sqlite_copy_and_metadata(tmp_path: Path) -> None:
@@ -45,7 +47,7 @@ def test_backup_retention_keeps_newest_manual_and_scheduled(tmp_path: Path) -> N
     backup_dir = tmp_path / "BACKUP"
     backup_dir.mkdir()
     for index in range(4):
-        db = backup_dir / f"picorgftp_sql-20260625-130{index}00-manual.sqlite"
+        db = backup_dir / f"picsyncra-20260625-130{index}00-manual.sqlite"
         db.write_text("x", encoding="utf-8")
         db.with_suffix(".json").write_text(
             json.dumps(
@@ -62,8 +64,8 @@ def test_backup_retention_keeps_newest_manual_and_scheduled(tmp_path: Path) -> N
     assert removed["removed"] == 2
     remaining = sorted(path.name for path in backup_dir.glob("*.sqlite"))
     assert remaining == [
-        "picorgftp_sql-20260625-130200-manual.sqlite",
-        "picorgftp_sql-20260625-130300-manual.sqlite",
+        "picsyncra-20260625-130200-manual.sqlite",
+        "picsyncra-20260625-130300-manual.sqlite",
     ]
 
 
@@ -170,6 +172,35 @@ def test_due_schedule_slots_respects_explicit_day_hour_slots() -> None:
     assert sqlite_backup.due_schedule_slots(settings_payload, tuesday) == []
 
 
+@pytest.mark.parametrize(
+    ("now", "configured_slot", "expected_run_slot"),
+    [
+        # Europe/Warsaw is UTC+2 in September (CEST).
+        (datetime(2026, 9, 10, 15, 0, tzinfo=timezone.utc), "thu:17", "2026-09-10T15"),
+        # Europe/Warsaw is UTC+1 in January (CET).
+        (datetime(2026, 1, 14, 16, 0, tzinfo=timezone.utc), "wed:17", "2026-01-14T16"),
+    ],
+)
+def test_due_schedule_slots_matches_the_configured_time_zone(
+    now: datetime,
+    configured_slot: str,
+    expected_run_slot: str,
+) -> None:
+    """Catches backup slots being compared with UTC instead of the configured zone."""
+
+    due = sqlite_backup.due_schedule_slots(
+        {
+            "enabled": True,
+            "slots": [configured_slot],
+            "last_run_slots": [],
+        },
+        now,
+        time_zone_name="Europe/Warsaw",
+    )
+
+    assert due == [expected_run_slot]
+
+
 def test_mark_schedule_slots_run_keeps_recent_slots() -> None:
     updated = sqlite_backup.mark_schedule_slots_run(
         {"last_run_slots": ["2026-06-21T08"]},
@@ -181,7 +212,7 @@ def test_mark_schedule_slots_run_keeps_recent_slots() -> None:
 
 def test_restore_backup_creates_pre_restore_backup_and_replaces_database(tmp_path: Path) -> None:
     active = tmp_path / "active.sqlite"
-    backup = tmp_path / "BACKUP" / "picorgftp_sql-20260625-130234-manual.sqlite"
+    backup = tmp_path / "BACKUP" / "picsyncra-20260625-130234-manual.sqlite"
     backup.parent.mkdir()
     _create_db(active)
     _create_db(backup)
@@ -239,6 +270,22 @@ def test_diff_databases_masks_secret_values(tmp_path: Path) -> None:
     assert "secret" not in json.dumps(diff)
     assert "ftp.password" in json.dumps(diff)
     assert "present" in json.dumps(diff)
+
+
+def test_diff_databases_closes_both_database_files_before_returning(tmp_path: Path) -> None:
+    """Database comparison must not leave Windows file handles open."""
+
+    active = tmp_path / "active.sqlite"
+    backup = tmp_path / "backup.sqlite"
+    _create_db(active)
+    _create_db(backup)
+
+    sqlite_backup.diff_databases(str(active), str(backup), [str(tmp_path)])
+
+    active.unlink()
+    backup.unlink()
+    assert not active.exists()
+    assert not backup.exists()
 
 
 def test_diff_databases_rejects_backup_outside_trusted_directories(tmp_path: Path) -> None:

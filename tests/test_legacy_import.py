@@ -8,9 +8,9 @@ from pathlib import Path
 from openpyxl import Workbook, load_workbook
 import pytest
 
-from picorgftp_sql import config, sqlite_store
-from picorgftp_sql.legacy_import import import_legacy_to_sqlite
-from picorgftp_sql.sqlite_store import (
+from picsyncra import config, sqlite_store
+from picsyncra.legacy_import import import_legacy_to_sqlite
+from picsyncra.sqlite_store import (
     ProductEanConflictError,
     SqliteStore,
 )

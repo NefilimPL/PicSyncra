@@ -6,8 +6,8 @@ from unittest.mock import patch
 
 import pytest
 
-from picorgftp_sql import common, config, email_settings, web_data
-from picorgftp_sql.email_settings import (
+from picsyncra import common, config, email_settings, web_data
+from picsyncra.email_settings import (
     EMAIL_CLIENT_SECRET,
     EMAIL_SETTINGS_KEY,
     EMAIL_SMTP_PASSWORD,

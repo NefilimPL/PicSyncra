@@ -8,17 +8,17 @@ from threading import Lock
 
 import pytest
 
-from picorgftp_sql import logging_utils, storage_settings
-from picorgftp_sql import data_store
-from picorgftp_sql.data_store import (
+from picsyncra import logging_utils, storage_settings
+from picsyncra import data_store
+from picsyncra.data_store import (
     get_active_store,
     get_sqlite_store,
     invalidate_sqlite_store,
     reset_active_store_cache,
 )
-from picorgftp_sql.observability import observability_store
-from picorgftp_sql import sqlite_store
-from picorgftp_sql.sqlite_store import SqliteStore
+from picsyncra.observability import observability_store
+from picsyncra import sqlite_store
+from picsyncra.sqlite_store import SqliteStore
 
 
 def test_initialize_runs_schema_once_for_parallel_callers(tmp_path, monkeypatch):
@@ -84,7 +84,7 @@ def test_wal_fallback_initializes_and_logs_one_redacted_warning(tmp_path, monkey
     private_path = tmp_path / "private-user-record.sqlite"
     store = SqliteStore(str(private_path))
     legacy_log_path = tmp_path / "fallback-info.log"
-    logger = logging.getLogger("picorgftp_sql.sqlite.wal")
+    logger = logging.getLogger("picsyncra.sqlite.wal")
     records = []
 
     class RecordCapture(logging.Handler):
@@ -201,14 +201,14 @@ def test_failed_storage_settings_write_preserves_store_cache(tmp_path, monkeypat
     )
     monkeypatch.setattr(storage_settings.settings, "BASE_DIR_SETTINGS_PATH", str(settings_path))
     reset_active_store_cache()
-    original_write_text = Path.write_text
+    original_replace = storage_settings.os.replace
 
-    def fail_settings_write(path, *args, **kwargs):
-        if path == settings_path:
+    def fail_settings_publish(_source, destination):
+        if Path(destination).resolve() == settings_path.resolve():
             raise OSError("disk full")
-        return original_write_text(path, *args, **kwargs)
+        return original_replace(_source, destination)
 
-    monkeypatch.setattr(Path, "write_text", fail_settings_write)
+    monkeypatch.setattr(storage_settings.os, "replace", fail_settings_publish)
     try:
         active_store = get_active_store().store
 

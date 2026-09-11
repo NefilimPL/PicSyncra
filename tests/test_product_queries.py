@@ -10,12 +10,12 @@ from unittest.mock import Mock
 from openpyxl import Workbook
 import pytest
 
-from picorgftp_sql.product_queries import (
+from picsyncra.product_queries import (
     ProductSearchCriteria,
     filter_product_records,
 )
-from picorgftp_sql import data_store, excel_utils, web_data
-from picorgftp_sql.sqlite_store import ProductEanConflictError, SqliteStore
+from picsyncra import data_store, excel_utils, web_data
+from picsyncra.sqlite_store import ProductEanConflictError, SqliteStore
 
 
 RECORDS = [

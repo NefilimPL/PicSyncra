@@ -34,23 +34,23 @@ class WindowsVersionInfoTests(unittest.TestCase):
     def test_generated_version_info_contains_expected_metadata(self) -> None:
         text = version_info.build_version_info_text(
             version="v0.4.0",
-            file_description="PicOrgFTP-SQL desktop application",
-            internal_name="PicOrgFTP-SQL",
-            original_filename="PicOrgFTP-SQL.exe",
-            product_name="PicOrgFTP-SQL",
+            file_description="PicSyncra desktop application",
+            internal_name="PicSyncra",
+            original_filename="PicSyncra.exe",
+            product_name="PicSyncra",
             company_name="NefilimPL",
             legal_copyright="Copyright (C) NefilimPL",
         )
 
         self.assertIn("filevers=(0, 4, 0, 0)", text)
-        self.assertIn("StringStruct('FileDescription', 'PicOrgFTP-SQL desktop application')", text)
+        self.assertIn("StringStruct('FileDescription', 'PicSyncra desktop application')", text)
         self.assertIn("StringStruct('FileVersion', 'v0.4.0')", text)
-        self.assertIn("StringStruct('OriginalFilename', 'PicOrgFTP-SQL.exe')", text)
+        self.assertIn("StringStruct('OriginalFilename', 'PicSyncra.exe')", text)
 
     def test_read_build_version_uses_env_before_version_file(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             repo_root = Path(temp_dir)
-            version_dir = repo_root / "picorgftp_sql"
+            version_dir = repo_root / "picsyncra"
             version_dir.mkdir()
             (version_dir / "VERSION").write_text("v1.0.0", encoding="utf-8")
 
@@ -68,13 +68,13 @@ class WindowsVersionInfoTests(unittest.TestCase):
             metadata_source="github",
             env={
                 "GITHUB_ACTIONS": "true",
-                "GITHUB_REPOSITORY": "NefilimPL/PicOrgFTP-SQL",
+                "GITHUB_REPOSITORY": "NefilimPL/PicSyncra",
                 "GITHUB_REPOSITORY_OWNER": "NefilimPL",
             },
         )
 
         self.assertEqual(metadata.source, "github")
-        self.assertEqual(metadata.product_name, "PicOrgFTP-SQL")
+        self.assertEqual(metadata.product_name, "PicSyncra")
         self.assertEqual(metadata.company_name, "NefilimPL")
         self.assertIn("NefilimPL", metadata.legal_copyright)
 
@@ -90,7 +90,7 @@ class WindowsVersionInfoTests(unittest.TestCase):
             )
 
         self.assertEqual(metadata.source, "windows")
-        self.assertEqual(metadata.product_name, "PicOrgFTP-SQL")
+        self.assertEqual(metadata.product_name, "PicSyncra")
         self.assertEqual(metadata.company_name, "Example Org")
 
     def test_windows_metadata_falls_back_to_username(self) -> None:

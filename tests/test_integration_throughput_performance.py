@@ -5,13 +5,13 @@ import threading
 import time
 from unittest.mock import Mock
 
-from picorgftp_sql.services.photo_sql_batch import build_photo_sql_batch
-from picorgftp_sql.services.pimcore_service import pimcore_client_scope
-from picorgftp_sql.services.pimcore_sql_service import SqlValueResult
-from picorgftp_sql.services.sql_execution_context import SqlExecutionContext
-from picorgftp_sql.services.template_execution import execute_independent_operations
-from picorgftp_sql.services.translation_cache import TranslationCache
-from picorgftp_sql.services.translation_service import TranslationResult
+from picsyncra.services.photo_sql_batch import build_photo_sql_batch
+from picsyncra.services.pimcore_service import pimcore_client_scope
+from picsyncra.services.pimcore_sql_service import SqlValueResult
+from picsyncra.services.sql_execution_context import SqlExecutionContext
+from picsyncra.services.template_execution import execute_independent_operations
+from picsyncra.services.translation_cache import TranslationCache
+from picsyncra.services.translation_service import TranslationResult
 
 
 def test_integration_throughput_counters_are_bounded_and_reused() -> None:

@@ -10,11 +10,11 @@ import zipfile
 from unittest.mock import patch
 
 
-os.environ.setdefault("PICORGFTP_SQL_HEADLESS", "1")
-os.environ.setdefault("PICORG_WEB_AUTH", "0")
+os.environ.setdefault("PICSYNCRA_HEADLESS", "1")
+os.environ.setdefault("PICSYNCRA_WEB_AUTH", "0")
 
 ROOT = Path(__file__).resolve().parents[1]
-EXTENSION_DIR = ROOT / "picorgftp_sql" / "browser_extension"
+EXTENSION_DIR = ROOT / "picsyncra" / "browser_extension"
 
 
 def test_browser_extension_manifest_is_valid_mv3() -> None:
@@ -115,7 +115,7 @@ def test_browser_extension_knows_supported_image_extensions() -> None:
 def test_browser_extension_download_endpoint_returns_zip() -> None:
     from fastapi.testclient import TestClient
 
-    from picorgftp_sql.web import app as web_app
+    from picsyncra.web import app as web_app
 
     with tempfile.TemporaryDirectory() as temp_dir:
         with patch.object(web_app.settings, "AC", temp_dir):
@@ -129,11 +129,11 @@ def test_browser_extension_download_endpoint_returns_zip() -> None:
     zip_path.write_bytes(response.content)
     with zipfile.ZipFile(zip_path) as archive:
         names = set(archive.namelist())
-        assert "picorgftp-sql-browser-extension/manifest.json" in names
-        assert "picorgftp-sql-browser-extension/popup.js" in names
-        assert "picorgftp-sql-browser-extension/background.js" in names
-        defaults = archive.read("picorgftp-sql-browser-extension/defaults.js").decode("utf-8")
-    assert "window.PICORG_EXTENSION_DEFAULTS" in defaults
+        assert "picsyncra-browser-extension/manifest.json" in names
+        assert "picsyncra-browser-extension/popup.js" in names
+        assert "picsyncra-browser-extension/background.js" in names
+        defaults = archive.read("picsyncra-browser-extension/defaults.js").decode("utf-8")
+    assert "window.PICSYNCRA_EXTENSION_DEFAULTS" in defaults
     assert "apiToken" in defaults
 
 
@@ -141,5 +141,5 @@ def test_web_exe_build_includes_browser_extension_assets() -> None:
     build_script = (ROOT / "Generator exe" / "build_web_exe.ps1").read_text(encoding="utf-8")
     workflow = (ROOT / ".github" / "workflows" / "build-exe.yml").read_text(encoding="utf-8")
 
-    assert "picorgftp_sql\\browser_extension;picorgftp_sql\\browser_extension" in build_script
-    assert "picorgftp_sql/browser_extension;picorgftp_sql/browser_extension" in workflow
+    assert "picsyncra\\browser_extension;picsyncra\\browser_extension" in build_script
+    assert "picsyncra/browser_extension;picsyncra/browser_extension" in workflow

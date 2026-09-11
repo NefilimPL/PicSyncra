@@ -9,8 +9,8 @@ import time
 
 import pytest
 
-from picorgftp_sql.sqlite_store import SqliteStore
-from picorgftp_sql.web.process_progress import ProcessProgressGate
+from picsyncra.sqlite_store import SqliteStore
+from picsyncra.web.process_progress import ProcessProgressGate
 
 
 _OPERATIONS = 1000

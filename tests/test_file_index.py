@@ -8,8 +8,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from picorgftp_sql.file_index import INDEX_VERSION, LocalFileIndex
-from picorgftp_sql.sqlite_store import SqliteStore
+from picsyncra.file_index import INDEX_VERSION, LocalFileIndex
+from picsyncra.sqlite_store import SqliteStore
 
 
 def _index_with_cache(base: Path, generated_at_epoch: float) -> LocalFileIndex:

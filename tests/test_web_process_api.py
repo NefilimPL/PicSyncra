@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, Mock
 
 
 def test_process_router_delegates_job_queries_and_cancellation() -> None:
-    from picorgftp_sql.web.process_api import ProcessApiDependencies, build_process_router
+    from picsyncra.web.process_api import ProcessApiDependencies, build_process_router
 
     app = FastAPI()
     app.include_router(
@@ -33,7 +33,7 @@ def test_process_router_delegates_job_queries_and_cancellation() -> None:
 
 def test_process_router_reserves_capacity_before_staging_a_background_upload() -> None:
     """Catches extracted upload routes that stage files before reserving queue capacity."""
-    from picorgftp_sql.web.process_api import ProcessApiDependencies, build_process_router
+    from picsyncra.web.process_api import ProcessApiDependencies, build_process_router
 
     reservation = Mock()
     queue = Mock()

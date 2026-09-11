@@ -107,7 +107,9 @@ jobs:
           - target: local
             name: desktop EXE
           - target: web
-            name: web EXE and ZIP
+            name: web EXE without OCR
+          - target: web-ocr
+            name: web EXE with offline OCR
 
     steps:
       - name: Checkout
@@ -215,7 +217,7 @@ jobs:
             }
             $version = (& $candidate -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>$null | Select-Object -First 1)
             if ($versionsToTry.Contains($version)) {
-              "PICORGFTP_SQL_BASE_PYTHON=$candidate" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+              "PICSYNCRA_BASE_PYTHON=$candidate" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
               & $candidate --version
               exit 0
             }
@@ -228,16 +230,16 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $venvDir = Join-Path $env:RUNNER_TEMP "picorgftp-sql-build-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}"
+          $venvDir = Join-Path $env:RUNNER_TEMP "picsyncra-build-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}"
           if (Test-Path $venvDir) {
             Remove-Item -LiteralPath $venvDir -Recurse -Force
           }
-          & $env:PICORGFTP_SQL_BASE_PYTHON -m venv $venvDir
+          & $env:PICSYNCRA_BASE_PYTHON -m venv $venvDir
           $venvPython = Join-Path $venvDir "Scripts\python.exe"
           if (-not (Test-Path $venvPython)) {
             throw "Virtualenv Python was not created: $venvPython"
           }
-          "PICORGFTP_SQL_PYTHON=$venvPython" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "PICSYNCRA_PYTHON=$venvPython" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           & $venvPython --version
 
       - name: Set release/build version
@@ -254,80 +256,104 @@ jobs:
             $version = "dev-${{ github.run_number }}"
           }
           $assetVersion = $version -replace '[^A-Za-z0-9_.-]', '-'
-          Set-Content -Path "picorgftp_sql/VERSION" -Value $version -Encoding utf8
-          "PICORGFTP_SQL_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "PICORGFTP_SQL_ASSET_VERSION=$assetVersion" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Set-Content -Path "picsyncra/VERSION" -Value $version -Encoding utf8
+          "PICSYNCRA_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "PICSYNCRA_ASSET_VERSION=$assetVersion" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Install dependencies (pinned packager)
         shell: pwsh
         run: |
-          & $env:PICORGFTP_SQL_PYTHON -m pip install --upgrade pip
-          & $env:PICORGFTP_SQL_PYTHON -m pip install -r requirements-build.txt
-          if ("${{ matrix.target }}" -eq "web") {
-            & $env:PICORGFTP_SQL_PYTHON -m pip install -r requirements-web.txt
+          & $env:PICSYNCRA_PYTHON -m pip install --upgrade pip
+          & $env:PICSYNCRA_PYTHON -m pip install -r requirements-build.txt
+          if ("${{ matrix.target }}" -ne "local") {
+            & $env:PICSYNCRA_PYTHON -m pip install -r requirements-web.txt
+          }
+          if ("${{ matrix.target }}" -eq "web-ocr") {
+            & $env:PICSYNCRA_PYTHON -m pip uninstall --yes opencv-python opencv-python-headless opencv-contrib-python
+            & $env:PICSYNCRA_PYTHON -m pip install -r requirements-vision.txt
           }
 
       - name: Prepare Windows icons
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path "build/icons" -Force | Out-Null
-          & $env:PICORGFTP_SQL_PYTHON -c "from PIL import Image; Image.open(r'pic/PIC_LOCAL.png').save(r'build/icons/PIC_LOCAL.ico', sizes=[(256,256),(128,128),(64,64),(48,48),(32,32),(16,16)]); Image.open(r'pic/PIC_WEB.png').save(r'build/icons/PIC_WEB.ico', sizes=[(256,256),(128,128),(64,64),(48,48),(32,32),(16,16)])"
+          & $env:PICSYNCRA_PYTHON -c "from PIL import Image; Image.open(r'pic/PIC9_LOCAL.png').save(r'build/icons/PIC9_LOCAL.ico', sizes=[(256,256),(128,128),(64,64),(48,48),(32,32),(16,16)]); Image.open(r'pic/PIC9_WEB.png').save(r'build/icons/PIC9_WEB.ico', sizes=[(256,256),(128,128),(64,64),(48,48),(32,32),(16,16)]); Image.open(r'pic/PIC9_WEB-OCR.png').save(r'build/icons/PIC9_WEB-OCR.ico', sizes=[(256,256),(128,128),(64,64),(48,48),(32,32),(16,16)])"
 
       - name: Prepare Windows version metadata
         shell: pwsh
         run: |
-          & $env:PICORGFTP_SQL_PYTHON tools/generate_windows_version_info.py `
-            --output "build/version-info/PicOrgFTP-SQL.version.txt" `
-            --file-description "PicOrgFTP-SQL desktop application" `
-            --internal-name "PicOrgFTP-SQL" `
-            --original-filename "PicOrgFTP-SQL.exe"
-          & $env:PICORGFTP_SQL_PYTHON tools/generate_windows_version_info.py `
-            --output "build/version-info/PicOrgFTP-SQL-WEB.version.txt" `
-            --file-description "PicOrgFTP-SQL web manager" `
-            --internal-name "PicOrgFTP-SQL-WEB" `
-            --original-filename "PicOrgFTP-SQL-WEB.exe"
+          & $env:PICSYNCRA_PYTHON tools/generate_windows_version_info.py `
+            --output "build/version-info/PicSyncra.version.txt" `
+            --file-description "PicSyncra desktop application" `
+            --internal-name "PicSyncra" `
+            --original-filename "PicSyncra.exe"
+          & $env:PICSYNCRA_PYTHON tools/generate_windows_version_info.py `
+            --output "build/version-info/PicSyncra-WEB.version.txt" `
+            --file-description "PicSyncra web manager" `
+            --internal-name "PicSyncra-WEB" `
+            --original-filename "PicSyncra-WEB.exe"
 
       - name: Build local EXE with PyInstaller
         if: matrix.target == 'local'
         shell: pwsh
         env:
-          PICORGFTP_SQL_HEADLESS: "1"
+          PICSYNCRA_HEADLESS: "1"
           PYINSTALLER_BUILD: "1"
         run: |
-          & $env:PICORGFTP_SQL_PYTHON -m PyInstaller --noconfirm --clean --log-level=WARN `
-            --name PicOrgFTP-SQL `
+          & $env:PICSYNCRA_PYTHON -m PyInstaller --noconfirm --clean --log-level=WARN `
+            --name PicSyncra `
             --noconsole `
             --onefile `
             --distpath "dist/output" `
             --workpath "build/output-local" `
-            --icon "build/icons/PIC_LOCAL.ico" `
-            --version-file "build/version-info/PicOrgFTP-SQL.version.txt" `
+            --icon "build/icons/PIC9_LOCAL.ico" `
+            --version-file "build/version-info/PicSyncra.version.txt" `
             --collect-submodules mysql.connector `
             --collect-data mysql.connector `
             --collect-data certifi `
-            --add-data "picorgftp_sql/Localization;picorgftp_sql/Localization" `
-            --add-data "picorgftp_sql/VERSION;picorgftp_sql" `
-            --add-data "pic/PIC_LOCAL.png;pic" `
-            PicOrgFTP-SQL.pyw
-          Copy-Item -Path "picorgftp_sql/Localization" -Destination "dist/output/Localization" -Recurse -Force
-          Copy-Item -Path "picorgftp_sql/VERSION" -Destination "dist/output/VERSION" -Force
+            --add-data "picsyncra/Localization;picsyncra/Localization" `
+            --add-data "picsyncra/VERSION;picsyncra" `
+            --add-data "pic/PIC9_LOCAL.png;pic" `
+            PicSyncra.pyw
+          Copy-Item -Path "picsyncra/Localization" -Destination "dist/output/Localization" -Recurse -Force
+          Copy-Item -Path "picsyncra/VERSION" -Destination "dist/output/VERSION" -Force
 
       - name: Build web manager EXE with PyInstaller
-        if: matrix.target == 'web'
+        if: matrix.target != 'local'
         shell: pwsh
         env:
-          PICORGFTP_SQL_HEADLESS: "1"
+          PICSYNCRA_HEADLESS: "1"
           PYINSTALLER_BUILD: "1"
         run: |
-          & $env:PICORGFTP_SQL_PYTHON -m PyInstaller --noconfirm --clean --log-level=WARN `
-            --name PicOrgFTP-SQL-WEB `
+          $ocrArguments = @()
+          if ("${{ matrix.target }}" -eq "web-ocr") {
+            $modelCache = Join-Path $env:RUNNER_TEMP "picsyncra-ocr-model-cache-${{ github.run_id }}-${{ github.run_attempt }}"
+            New-Item -ItemType Directory -Path $modelCache -Force | Out-Null
+            $env:PADDLE_PDX_CACHE_HOME = $modelCache
+            & $env:PICSYNCRA_PYTHON -c "from paddleocr import PaddleOCR; from picsyncra.services.ocr_profiles import available_ocr_profiles; [PaddleOCR(text_detection_model_name=profile.detector_model, text_recognition_model_name=profile.recognizer_model, enable_mkldnn=False, use_doc_orientation_classify=False, use_doc_unwarping=False, use_textline_orientation=False) for profile in available_ocr_profiles()]"
+            if ($LASTEXITCODE -ne 0) { throw "Nie udalo sie przygotowac lokalnych modeli OCR." }
+            & $env:PICSYNCRA_PYTHON -c "from picsyncra.services.image_dimensions import _model_cache_has_profile; from picsyncra.services.ocr_profiles import available_ocr_profiles; import os; missing = [profile.id for profile in available_ocr_profiles() if not _model_cache_has_profile(os.environ['PADDLE_PDX_CACHE_HOME'], profile)]; (_ for _ in ()).throw(RuntimeError('Brakuje modeli OCR: ' + ', '.join(missing))) if missing else None"
+            if ($LASTEXITCODE -ne 0) { throw "Nie wszystkie lokalne profile OCR zostaly przygotowane." }
+            foreach ($package in @("paddleocr", "paddlex", "paddle", "cv2", "bidi", "imagesize", "pyclipper", "pypdfium2", "shapely")) {
+              $ocrArguments += "--collect-all"
+              $ocrArguments += $package
+            }
+            $ocrArguments += "--add-data"
+            $ocrArguments += "$modelCache;ocr_models"
+          } else {
+            $ocrArguments += "--runtime-hook"
+            $ocrArguments += "Generator exe/disable_ocr_runtime.py"
+          }
+          $webIcon = if ("${{ matrix.target }}" -eq "web-ocr") { "build/icons/PIC9_WEB-OCR.ico" } else { "build/icons/PIC9_WEB.ico" }
+          & $env:PICSYNCRA_PYTHON -m PyInstaller --noconfirm --clean --log-level=WARN `
+            --name PicSyncra-WEB `
             --noconsole `
             --onefile `
             --distpath "dist/output" `
             --workpath "build/output-web" `
-            --icon "build/icons/PIC_WEB.ico" `
-            --version-file "build/version-info/PicOrgFTP-SQL-WEB.version.txt" `
-            --collect-submodules picorgftp_sql `
+            --icon $webIcon `
+            --version-file "build/version-info/PicSyncra-WEB.version.txt" `
+            --collect-submodules picsyncra `
             --collect-submodules mysql.connector `
             --collect-submodules uvicorn `
             --collect-submodules fastapi `
@@ -337,26 +363,28 @@ jobs:
             --collect-submodules PIL `
             --collect-data mysql.connector `
             --collect-data certifi `
-            --add-data "picorgftp_sql/web/static;picorgftp_sql/web/static" `
-            --add-data "picorgftp_sql/browser_extension;picorgftp_sql/browser_extension" `
-            --add-data "picorgftp_sql/Localization;picorgftp_sql/Localization" `
-            --add-data "picorgftp_sql/VERSION;picorgftp_sql" `
-            --add-data "pic/PIC_WEB.png;pic" `
-            PicOrgFTP-SQL-WEB.pyw
+            @ocrArguments `
+            --add-data "picsyncra/web/static;picsyncra/web/static" `
+            --add-data "picsyncra/browser_extension;picsyncra/browser_extension" `
+            --add-data "picsyncra/Localization;picsyncra/Localization" `
+            --add-data "picsyncra/VERSION;picsyncra" `
+            --add-data "pic/PIC9_WEB.png;pic" `
+            --add-data "pic/PIC9_WEB-OCR.png;pic" `
+            PicSyncra-WEB.pyw
 
       - name: Package web runtime
-        if: matrix.target == 'web'
+        if: matrix.target != 'local'
         shell: pwsh
         run: |
-          $webRoot = "dist/web/PicOrgFTP-SQL-web"
+          $webRoot = "dist/web/PicSyncra-web-${{ matrix.target }}"
           Remove-Item -Path "dist/web" -Recurse -Force -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Path $webRoot -Force | Out-Null
-          Copy-Item -Path "dist/output/PicOrgFTP-SQL-WEB.exe" -Destination "$webRoot/PicOrgFTP-SQL-WEB.exe" -Force
-          Copy-Item -Path "picorgftp_sql" -Destination "$webRoot/picorgftp_sql" -Recurse -Force
+          Copy-Item -Path "dist/output/PicSyncra-WEB.exe" -Destination "$webRoot/PicSyncra-WEB.exe" -Force
+          Copy-Item -Path "picsyncra" -Destination "$webRoot/picsyncra" -Recurse -Force
           Copy-Item -Path "pic" -Destination "$webRoot/pic" -Recurse -Force
           Copy-Item -Path "tools" -Destination "$webRoot/tools" -Recurse -Force
-          Copy-Item -Path "requirements-web.txt", "START_WEB.bat", "STOP_WEB.bat", "README.md", "LICENSE", "PicOrgFTP-SQL-WEB.pyw" -Destination $webRoot -Force
-          $zipPath = "dist/web/PicOrgFTP-SQL-web-$env:PICORGFTP_SQL_ASSET_VERSION.zip"
+          Copy-Item -Path "requirements-web.txt", "START_WEB.bat", "STOP_WEB.bat", "README.md", "LICENSE", "PicSyncra-WEB.pyw" -Destination $webRoot -Force
+          $zipPath = "dist/web/PicSyncra-web-${{ matrix.target }}-$env:PICSYNCRA_ASSET_VERSION.zip"
           Compress-Archive -Path "$webRoot/*" -DestinationPath $zipPath -Force
 
       - name: Prepare local release asset
@@ -364,15 +392,15 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path "dist/release" -Force | Out-Null
-          Copy-Item -Path "dist/output/PicOrgFTP-SQL.exe" -Destination "dist/release/PicOrgFTP-SQL-$env:PICORGFTP_SQL_ASSET_VERSION.exe" -Force
+          Copy-Item -Path "dist/output/PicSyncra.exe" -Destination "dist/release/PicSyncra-$env:PICSYNCRA_ASSET_VERSION.exe" -Force
 
       - name: Prepare web release assets
-        if: github.event_name == 'release' && matrix.target == 'web'
+        if: github.event_name == 'release' && matrix.target != 'local'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path "dist/release" -Force | Out-Null
-          Copy-Item -Path "dist/output/PicOrgFTP-SQL-WEB.exe" -Destination "dist/release/PicOrgFTP-SQL-WEB-$env:PICORGFTP_SQL_ASSET_VERSION.exe" -Force
-          Copy-Item -Path "dist/web/PicOrgFTP-SQL-web-$env:PICORGFTP_SQL_ASSET_VERSION.zip" -Destination "dist/release/PicOrgFTP-SQL-web-$env:PICORGFTP_SQL_ASSET_VERSION.zip" -Force
+          Copy-Item -Path "dist/output/PicSyncra-WEB.exe" -Destination "dist/release/PicSyncra-WEB-${{ matrix.target }}-$env:PICSYNCRA_ASSET_VERSION.exe" -Force
+          Copy-Item -Path "dist/web/PicSyncra-web-${{ matrix.target }}-$env:PICSYNCRA_ASSET_VERSION.zip" -Destination "dist/release/PicSyncra-web-${{ matrix.target }}-$env:PICSYNCRA_ASSET_VERSION.zip" -Force
 
       - name: Prepare artifact upload probe
         shell: pwsh
@@ -385,7 +413,7 @@ jobs:
         uses: actions/upload-artifact@v7
         continue-on-error: true
         with:
-          name: PicOrgFTP-SQL-artifact-probe-${{ matrix.target }}-${{ github.run_id }}
+          name: PicSyncra-artifact-probe-${{ matrix.target }}-${{ github.run_id }}
           path: build/artifact-upload-probe.txt
           if-no-files-found: error
           retention-days: 1
@@ -396,27 +424,27 @@ jobs:
         uses: actions/upload-artifact@v7
         continue-on-error: true
         with:
-          name: PicOrgFTP-SQL-windows
-          path: dist/output/PicOrgFTP-SQL.exe
+          name: PicSyncra-windows
+          path: dist/output/PicSyncra.exe
           retention-days: 7
 
       - name: Upload web EXE artifact
         id: upload-web-exe
-        if: matrix.target == 'web' && steps.artifact-probe.outcome == 'success'
+        if: matrix.target != 'local' && steps.artifact-probe.outcome == 'success'
         uses: actions/upload-artifact@v7
         continue-on-error: true
         with:
-          name: PicOrgFTP-SQL-web-exe
-          path: dist/output/PicOrgFTP-SQL-WEB.exe
+          name: PicSyncra-web-exe-${{ matrix.target }}
+          path: dist/output/PicSyncra-WEB.exe
           retention-days: 7
 
       - name: Upload web artifact
         id: upload-web
-        if: matrix.target == 'web' && steps.artifact-probe.outcome == 'success'
+        if: matrix.target != 'local' && steps.artifact-probe.outcome == 'success'
         uses: actions/upload-artifact@v7
         continue-on-error: true
         with:
-          name: PicOrgFTP-SQL-web
+          name: PicSyncra-web-${{ matrix.target }}
           path: dist/web/*.zip
           retention-days: 7
 
@@ -430,10 +458,10 @@ jobs:
         if: matrix.target == 'local' && steps.artifact-probe.outcome == 'success' && steps.upload-windows.outcome != 'success'
         shell: pwsh
         run: |
-          "Artifact upload was skipped or failed for PicOrgFTP-SQL-windows. The EXE build completed; check upload-artifact logs for quota or permission details." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          "Artifact upload was skipped or failed for PicSyncra-windows. The EXE build completed; check upload-artifact logs for quota or permission details." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
 
       - name: Report failed web artifact upload
-        if: matrix.target == 'web' && steps.artifact-probe.outcome == 'success' && (steps.upload-web-exe.outcome != 'success' || steps.upload-web.outcome != 'success')
+        if: matrix.target != 'local' && steps.artifact-probe.outcome == 'success' && (steps.upload-web-exe.outcome != 'success' || steps.upload-web.outcome != 'success')
         shell: pwsh
         run: |
           "Artifact upload was skipped or partially failed for web outputs. The EXE build completed; check upload-artifact logs for quota or permission details." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
@@ -451,7 +479,7 @@ jobs:
             const { owner, repo } = context.repo;
             const release_id = context.payload.release.id;
             const assetPaths = [
-              `dist/release/PicOrgFTP-SQL-${process.env.PICORGFTP_SQL_ASSET_VERSION}.exe`,
+              `dist/release/PicSyncra-${process.env.PICSYNCRA_ASSET_VERSION}.exe`,
             ];
             const existingAssets = await github.paginate(
               github.rest.repos.listReleaseAssets,
@@ -482,7 +510,7 @@ jobs:
 
       - name: Publish web assets to release
         id: publish-web-release-assets
-        if: github.event_name == 'release' && matrix.target == 'web'
+        if: github.event_name == 'release' && matrix.target != 'local'
         continue-on-error: true
         uses: actions/github-script@v9
         with:
@@ -493,8 +521,8 @@ jobs:
             const { owner, repo } = context.repo;
             const release_id = context.payload.release.id;
             const assetPaths = [
-              `dist/release/PicOrgFTP-SQL-WEB-${process.env.PICORGFTP_SQL_ASSET_VERSION}.exe`,
-              `dist/release/PicOrgFTP-SQL-web-${process.env.PICORGFTP_SQL_ASSET_VERSION}.zip`,
+              `dist/release/PicSyncra-WEB-${{ matrix.target }}-${process.env.PICSYNCRA_ASSET_VERSION}.exe`,
+              `dist/release/PicSyncra-web-${{ matrix.target }}-${process.env.PICSYNCRA_ASSET_VERSION}.zip`,
             ];
             const existingAssets = await github.paginate(
               github.rest.repos.listReleaseAssets,
@@ -530,7 +558,7 @@ jobs:
           "Release asset upload was skipped or failed for the local EXE. The EXE build completed; check GitHub API upload logs for quota or permission details." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
 
       - name: Report skipped web release asset upload
-        if: github.event_name == 'release' && matrix.target == 'web' && steps.publish-web-release-assets.outcome != 'success'
+        if: github.event_name == 'release' && matrix.target != 'local' && steps.publish-web-release-assets.outcome != 'success'
         shell: pwsh
         run: |
           "Release asset upload was skipped or failed for web outputs. The EXE build completed; check GitHub API upload logs for quota or permission details." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append

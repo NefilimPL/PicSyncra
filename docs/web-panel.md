@@ -40,7 +40,7 @@ Po potwierdzeniu zamknięcia w lokalnym menedżerze program kończy serwer panel
 Ręczne uruchomienie backendu:
 
 ```powershell
-python -m uvicorn picorgftp_sql.web.app:app --host 0.0.0.0 --port 8000
+python -m uvicorn picsyncra.web.app:app --host 0.0.0.0 --port 8000
 ```
 
 Z innego komputera w tej samej sieci otwórz:
@@ -112,9 +112,38 @@ Wartość **brak danych** oznacza, że dany licznik nie jest dostępny; dotyczy 
 Testy monitora wymagają autoryzacji administracyjnej:
 
 - **Bezpieczna symulacja** nie obciąża zasobów i nie tworzy incydentu. Zapisuje wyłącznie informacyjne zdarzenie testowe z bezpiecznym, bieżącym obrazem metryk i zwraca pomyślny wynik trybu `safe` tylko po trwałym zapisie tego zdarzenia. Brak zapisu zwraca `persistence_failed`.
-- **Test rzeczywisty** uruchamia osobno kontrolowane obciążenie CPU, RAM albo dysku. W danej chwili może działać tylko jeden test. Trwa najwyżej około 20 sekund i używa procesu roboczego z twardymi limitami 25% CPU, 256 MiB RAM i 128 MiB danych dyskowych. Na czas testu monitor wyznacza osobny, osiągalny próg z bieżącej wartości i bezpiecznego limitu testu; nie zmienia zapisanego progu produkcyjnego, więc jego normalna wartość nie blokuje CPU ani RAM. Wytworzone obciążenie obserwuje normalny, pięciosekundowy próbnik i ocenia ten sam detektor progów co podczas zwykłej pracy. Sam endpoint testowy nie tworzy incydentu. Błąd procesu roboczego jest zapisywany jako zdarzenie `backend.resource_test_failed` i przekazywany do mechanizmu powiadomień, ale odpowiedź API nie zawiera ścieżki, sekretu ani tracebacku. Po każdym wyniku monitor próbuje zatrzymać proces i usunąć katalog `picorg_resource_test_*`; gdy sprzątanie się powiedzie, rejestracja testu jest zwalniana. Wynik `cleanup_failed` oznacza, że monitor zachowuje rezerwację procesu lub katalogu i blokuje następny test rzeczywisty, dopóki późniejsze zatrzymanie lub ponowiona próba sprzątania nie zakończy się powodzeniem. Sprzątanie nie jest więc gwarantowane przy każdym wyniku.
+- **Test rzeczywisty** uruchamia osobno kontrolowane obciążenie CPU, RAM albo dysku. W danej chwili może działać tylko jeden test. Trwa najwyżej około 20 sekund i używa procesu roboczego z twardymi limitami 25% CPU, 256 MiB RAM i 128 MiB danych dyskowych. Na czas testu monitor wyznacza osobny, osiągalny próg z bieżącej wartości i bezpiecznego limitu testu; nie zmienia zapisanego progu produkcyjnego, więc jego normalna wartość nie blokuje CPU ani RAM. Wytworzone obciążenie obserwuje normalny, pięciosekundowy próbnik i ocenia ten sam detektor progów co podczas zwykłej pracy. Sam endpoint testowy nie tworzy incydentu. Błąd procesu roboczego jest zapisywany jako zdarzenie `backend.resource_test_failed` i przekazywany do mechanizmu powiadomień, ale odpowiedź API nie zawiera ścieżki, sekretu ani tracebacku. Po każdym wyniku monitor próbuje zatrzymać proces i usunąć katalog `picsyncra_resource_test_*`; gdy sprzątanie się powiedzie, rejestracja testu jest zwalniana. Wynik `cleanup_failed` oznacza, że monitor zachowuje rezerwację procesu lub katalogu i blokuje następny test rzeczywisty, dopóki późniejsze zatrzymanie lub ponowiona próba sprzątania nie zakończy się powodzeniem. Sprzątanie nie jest więc gwarantowane przy każdym wyniku.
 
 Wynik testu rzeczywistego rozróżnia wykryte przekroczenie, brak wykrycia, błąd trwałego zapisu zdarzenia (`persistence_failed`), błąd uruchomienia lub wykonania, przekroczenie czasu, anulowanie i błąd sprzątania. Wynik **wykryto** oraz alert pojawiają się tylko wtedy, gdy detektor zwykłego próbnika sam zarejestruje rzeczywiste przekroczenie progu backendu w dwie kolejne próbki i trwale zapisze normalne zdarzenie `backend.resource_high`.
+
+## Diagnostyka OCR
+
+W `Ustawienia > OCR` tester łączy wynik szybkiego modelu z wynikiem dokładnego
+modelu dla tego samego wycinka. Dwie kolumny są widoczne podczas skanowania i
+po jego zakończeniu. Po najechaniu wiersza widoczne są surowe odczyty, pola,
+pewności, przyczyna decyzji i czasy etapów.
+
+Próg dokładnego skanowania ma zakres 0-100 i działa jako `pewność <= próg`.
+Domyślne `99` pomija tylko odczyty 100%; `100` skanuje wszystkie wycinki.
+Porównanie OCR zachowuje części dziesiętne i uznaje `23,4` oraz `23.4` za tę
+samą wartość. Wycinek dokładnego modelu powstaje z pola szybkiego modelu,
+z symetrycznym marginesem 25% dłuższego boku (minimum 8 px, maksimum 64 px).
+
+### Kolejka dopracowywania OCR
+
+Kolejka jest widoczna bezpośrednio pod zwykłą kolejką po lewej stronie głównego
+widoku. Pokazuje najwyżej pięć pozycji: sam wycinek i wynik OCR; licznik
+`+N kolejnych` informuje o dalszych zadaniach. Ukończony wynik oraz jego
+pomocniczy wycinek są usuwane po 10 sekundach, więc nie zalegają w panelu ani
+w cache. Wycinek zawiera dodatkowe 8 px kontekstu z każdej strony, gdy pozwala
+na to granica obrazu, a miniatura zachowuje proporcje bez przycinania.
+
+Administrator widzi tę kolejkę zawsze. W `Ustawienia > OCR` może włączyć
+widoczność także zwykłym użytkownikom. Samo przeglądanie danych, ustawień,
+Pimcore, logów i statusów nie zatrzymuje pracy kolejki. Bezczynność resetują
+wyłącznie upload lub zastąpienie zdjęcia, przeniesienie albo zamiana slotów,
+usunięcie slotu, `Synchronizuj`/`Aktualizuj` i rozpoczęcie wczytywania produktu
+lub jego zdjęć. Usunięcie slotu anuluje oczekujące wycinki tego samego obrazu.
 
 ## Bezpieczeństwo LAN
 

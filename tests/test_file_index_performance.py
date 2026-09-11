@@ -2,11 +2,11 @@ from pathlib import Path
 import sqlite3
 import time
 
-from picorgftp_sql import file_index
-from picorgftp_sql.file_index import LocalFileIndex
-from picorgftp_sql.file_index_segments import DirectoryFingerprint, scan_changed_segments
-from picorgftp_sql.services.ftp_listing_cache import RemoteFileRecord, RemoteListingCache
-from picorgftp_sql.sqlite_store import SqliteStore
+from picsyncra import file_index
+from picsyncra.file_index import LocalFileIndex
+from picsyncra.file_index_segments import DirectoryFingerprint, scan_changed_segments
+from picsyncra.services.ftp_listing_cache import RemoteFileRecord, RemoteListingCache
+from picsyncra.sqlite_store import SqliteStore
 
 
 def test_scan_changed_segments_reuses_unchanged_product_directory(tmp_path: Path) -> None:

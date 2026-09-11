@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from picorgftp_sql.services.pimcore_sql_service import (
+from picsyncra.services.pimcore_sql_service import (
     SqlValueError,
     bind_sql_value_query,
     execute_sql_value_query,

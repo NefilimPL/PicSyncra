@@ -9,8 +9,8 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from picorgftp_sql.services import ftp_service
-from picorgftp_sql.services.ftp_listing_cache import (
+from picsyncra.services import ftp_service
+from picsyncra.services.ftp_listing_cache import (
     RemoteFileRecord,
     RemoteListingCache,
 )

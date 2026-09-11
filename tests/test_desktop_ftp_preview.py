@@ -5,7 +5,7 @@ import threading
 
 import pytest
 
-from picorgftp_sql.desktop_ftp_preview import DesktopFtpPreviewController
+from picsyncra.desktop_ftp_preview import DesktopFtpPreviewController
 
 
 @dataclass(frozen=True)

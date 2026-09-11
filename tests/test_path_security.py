@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from picorgftp_sql.path_security import (
+from picsyncra.path_security import (
     PathSecurityError,
     build_child_path,
     resolve_path_within_roots,

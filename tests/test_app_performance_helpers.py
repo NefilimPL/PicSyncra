@@ -4,15 +4,16 @@ from __future__ import annotations
 
 from contextlib import ExitStack, contextmanager
 import queue
+import tempfile
 import threading
 import unittest
 from unittest.mock import patch
 
 try:
-    from picorgftp_sql import app as app_module
-    from picorgftp_sql.app import App, SLOT_GRID_COLUMNS, THUMBNAIL_MEMORY_ROWS
-    from picorgftp_sql.common import d, n
-    from picorgftp_sql.desktop_data_loader import DesktopDataSnapshot
+    from picsyncra import app as app_module
+    from picsyncra.app import App, SLOT_GRID_COLUMNS, THUMBNAIL_MEMORY_ROWS
+    from picsyncra.common import d, n
+    from picsyncra.desktop_data_loader import DesktopDataSnapshot
 except ModuleNotFoundError as exc:  # pragma: no cover - depends on local test env
     App = None
     APP_IMPORT_ERROR = exc
@@ -296,6 +297,8 @@ class _HeadlessStartupApp(App):
 @contextmanager
 def _headless_app_environment():
     with ExitStack() as stack:
+        image_root = stack.enter_context(tempfile.TemporaryDirectory())
+        stack.enter_context(patch.object(app_module, "l", image_root))
         stack.enter_context(patch.object(app_module.BU.Tk, "__init__", return_value=None))
         stack.enter_context(patch.object(app_module.C, "Style", return_value=_StyleStub()))
         stack.enter_context(patch.object(app_module.F, "StringVar", _VariableStub))

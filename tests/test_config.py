@@ -9,22 +9,22 @@ import unittest
 from copy import deepcopy
 from unittest.mock import patch
 
-from picorgftp_sql import common, config
-from picorgftp_sql.config import (
+from picsyncra import common, config
+from picsyncra.config import (
     _normalize_color_field_labels,
     _normalize_processing_settings,
     _normalize_resource_monitor_settings,
     _normalize_security_settings,
 )
-from picorgftp_sql.email_settings import (
+from picsyncra.email_settings import (
     EMAIL_CLIENT_SECRET,
     EMAIL_SETTINGS_KEY,
     EMAIL_SMTP_PASSWORD,
     default_email_settings,
 )
-from picorgftp_sql.encryption import encrypt
-from picorgftp_sql.product_fields import PRODUCT_FIELDS_KEY
-from picorgftp_sql.sqlite_store import SqliteStore
+from picsyncra.encryption import encrypt
+from picsyncra.product_fields import PRODUCT_FIELDS_KEY
+from picsyncra.sqlite_store import SqliteStore
 
 
 def _workspace_temp(name: str) -> Path:

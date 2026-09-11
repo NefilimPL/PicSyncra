@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from copy import deepcopy
 
-from picorgftp_sql import common
-from picorgftp_sql.sql_profiles import (
+from picsyncra import common
+from picsyncra.sql_profiles import (
     DEFAULT_SQL_PROFILE_ID,
     SQL_PROFILES_KEY,
     normalize_sql_profiles,

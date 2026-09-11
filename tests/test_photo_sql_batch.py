@@ -1,5 +1,5 @@
-from picorgftp_sql.services.photo_sql_batch import build_photo_sql_batch
-from picorgftp_sql.web import app as web_app
+from picsyncra.services.photo_sql_batch import build_photo_sql_batch
+from picsyncra.web import app as web_app
 from types import SimpleNamespace
 from unittest.mock import patch
 

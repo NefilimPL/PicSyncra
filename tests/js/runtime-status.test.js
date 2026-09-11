@@ -1,8 +1,8 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-global.window = { PicOrg: {} };
-require("../../picorgftp_sql/web/static/runtime-status.js");
+global.window = { PicSyncra: {} };
+require("../../picsyncra/web/static/runtime-status.js");
 
 function deferred() {
   let resolve;
@@ -17,7 +17,7 @@ function deferred() {
 test("poller does not overlap and uses hidden interval", async () => {
   const calls = [];
   const pending = deferred();
-  const poller = new window.PicOrg.RuntimeStatusPoller({
+  const poller = new window.PicSyncra.RuntimeStatusPoller({
     fetchStatus: () => {
       calls.push("fetch");
       return pending.promise;
@@ -36,7 +36,7 @@ test("poller does not overlap and uses hidden interval", async () => {
 
 test("poller exponentially backs off failures up to sixty seconds and resets on success", async () => {
   let shouldFail = true;
-  const poller = new window.PicOrg.RuntimeStatusPoller({
+  const poller = new window.PicSyncra.RuntimeStatusPoller({
     fetchStatus: async () => {
       if (shouldFail) throw new Error("offline");
       return { versions: {} };
@@ -85,7 +85,7 @@ test("poller reports only runtime versions that change after the baseline", asyn
     },
   ];
   const changes = [];
-  const poller = new window.PicOrg.RuntimeStatusPoller({
+  const poller = new window.PicSyncra.RuntimeStatusPoller({
     fetchStatus: async () => payloads.shift(),
     onVersionChanged: (name, current, previous) => {
       changes.push([name, current, previous]);
@@ -110,7 +110,7 @@ test("failed version refresh is retried for the same version", async () => {
     { versions: { file_index: "index-2" } },
   ];
   let refreshAttempts = 0;
-  const poller = new window.PicOrg.RuntimeStatusPoller({
+  const poller = new window.PicSyncra.RuntimeStatusPoller({
     fetchStatus: async () => payloads.shift(),
     onVersionChanged: () => {
       refreshAttempts += 1;
@@ -153,7 +153,7 @@ test("becoming visible cancels the hidden timer and polls immediately", async ()
     },
   };
   let calls = 0;
-  const poller = new window.PicOrg.RuntimeStatusPoller({
+  const poller = new window.PicSyncra.RuntimeStatusPoller({
     fetchStatus: async () => {
       calls += 1;
       return { versions: {} };
@@ -183,7 +183,7 @@ test("becoming hidden replaces the active timer without fetching", async () => {
   let timerId = 0;
   const scheduled = [];
   const cleared = [];
-  const poller = new window.PicOrg.RuntimeStatusPoller({
+  const poller = new window.PicSyncra.RuntimeStatusPoller({
     fetchStatus: async () => ({ versions: {} }),
     isHidden: () => hidden,
     timerApi: {
@@ -218,7 +218,7 @@ test("becoming visible during a hidden request queues an immediate follow-up", a
   const firstRequest = deferred();
   const scheduled = [];
   let calls = 0;
-  const poller = new window.PicOrg.RuntimeStatusPoller({
+  const poller = new window.PicSyncra.RuntimeStatusPoller({
     fetchStatus: () => {
       calls += 1;
       return calls === 1

@@ -5,7 +5,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from picorgftp_sql import version
+from picsyncra import version
 
 
 class VersionTests(unittest.TestCase):

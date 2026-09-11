@@ -4,7 +4,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from picorgftp_sql.image_pipeline import (
+from picsyncra.image_pipeline import (
     ImagePipelineOptions,
     choose_jpeg_quality,
     process_image,

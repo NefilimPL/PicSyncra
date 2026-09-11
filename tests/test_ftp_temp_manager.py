@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from picorgftp_sql.services.ftp_temp_manager import FtpTempManager
+from picsyncra.services.ftp_temp_manager import FtpTempManager
 
 
 def test_release_refuses_path_outside_temp_root(tmp_path: Path) -> None:
@@ -18,10 +18,10 @@ def test_release_refuses_path_outside_temp_root(tmp_path: Path) -> None:
 def test_cleanup_stale_removes_only_inactive_managed_directories(tmp_path: Path) -> None:
     managed_root = tmp_path / "managed"
     manager = FtpTempManager(str(managed_root), stale_after_seconds=24 * 60 * 60)
-    inactive = managed_root / "picorgftp_sql_ftp_orphan"
+    inactive = managed_root / "picsyncra_ftp_orphan"
     inactive.mkdir()
     active = Path(manager.create_request_dir("active"))
-    similar_prefix = managed_root / "picorgftp_sql_ftpish_orphan"
+    similar_prefix = managed_root / "picsyncra_ftpish_orphan"
     similar_prefix.mkdir()
     old_time = 1_000_000.0
     for path in (inactive, active, similar_prefix):

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import unittest
 
-from picorgftp_sql.product_state import ProductState, merge_lookup_state
-from picorgftp_sql.services.file_service import build_slot_target_filename
+from picsyncra.product_state import ProductState, merge_lookup_state
+from picsyncra.services.file_service import build_slot_target_filename
 
 
 class FileWorkflowTests(unittest.TestCase):

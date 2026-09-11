@@ -11,10 +11,10 @@ from pathlib import Path
 
 import pytest
 
-from picorgftp_sql import sqlite_store
-from picorgftp_sql.excel_utils import ENTRY_RECORDS_KEY
-from picorgftp_sql.product_queries import ProductSearchCriteria
-from picorgftp_sql.sqlite_store import SCHEMA_VERSION, SqliteStore
+from picsyncra import sqlite_store
+from picsyncra.excel_utils import ENTRY_RECORDS_KEY
+from picsyncra.product_queries import ProductSearchCriteria
+from picsyncra.sqlite_store import SCHEMA_VERSION, SqliteStore
 
 
 def test_schema_creates_expected_tables(tmp_path: Path) -> None:
@@ -80,7 +80,7 @@ def test_entra_expiry_status_round_trip_returns_only_safe_metadata(
             "expires_at": "2026-08-01T10:00:00.000Z",
             "credential_name": "Primary",
             "credential_key_id": "internal-key",
-            "application_name": "PicOrg Mailer",
+            "application_name": "PicSyncra Mailer",
             "source": "graph",
             "last_checked_at": "2026-07-17T10:00:00.000Z",
             "last_success_at": "2026-07-17T10:00:00.000Z",
@@ -99,7 +99,7 @@ def test_entra_expiry_status_round_trip_returns_only_safe_metadata(
         "status": "ok",
         "expires_at": "2026-08-01T10:00:00.000Z",
         "credential_name": "Primary",
-        "application_name": "PicOrg Mailer",
+        "application_name": "PicSyncra Mailer",
         "source": "graph",
         "last_checked_at": "2026-07-17T10:00:00.000Z",
         "last_success_at": "2026-07-17T10:00:00.000Z",
@@ -1708,6 +1708,31 @@ def test_product_query_indexes_work_with_raw_sqlite_maintenance_connections(
         conn.execute("ANALYZE")
     with sqlite3.connect(store.path) as conn:
         conn.execute("VACUUM")
+
+
+def test_clear_ocr_crop_queue_removes_unfinished_jobs_but_keeps_completed_history(
+    tmp_path: Path,
+) -> None:
+    """A restart must discard work waiting in the OCR crop queue."""
+
+    store = SqliteStore(str(tmp_path / "data.sqlite"))
+    completed_id = store.enqueue_ocr_crop_job(
+        {"image_hash": "completed", "bbox": [1, 2, 3, 4], "thumbnail_path": "done.png"}
+    )
+    assert store.claim_ocr_crop_job()["id"] == completed_id
+    store.complete_ocr_crop_job(completed_id, [])
+    pending_id = store.enqueue_ocr_crop_job(
+        {"image_hash": "pending", "bbox": [5, 6, 7, 8], "thumbnail_path": "pending.png"}
+    )
+    processing_id = store.enqueue_ocr_crop_job(
+        {"image_hash": "processing", "bbox": [5, 6, 7, 8], "thumbnail_path": "processing.png"}
+    )
+    assert store.claim_ocr_crop_job()["id"] == pending_id
+
+    cleared = store.clear_ocr_crop_queue()
+
+    assert sorted(cleared) == ["pending.png", "processing.png"]
+    assert [job["id"] for job in store.list_ocr_crop_jobs()] == [completed_id]
 
 
 def test_product_query_key_backfill_skips_current_schema_database(

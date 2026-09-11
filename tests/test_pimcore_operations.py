@@ -1,7 +1,7 @@
 from concurrent.futures import Future
 
-from picorgftp_sql.pimcore_operations import PimcoreOperationRegistry
-from picorgftp_sql.services.pimcore_service import PimcoreApiError, run_test_create
+from picsyncra.pimcore_operations import PimcoreOperationRegistry
+from picsyncra.services.pimcore_service import PimcoreApiError, run_test_create
 
 
 class ImmediateExecutor:

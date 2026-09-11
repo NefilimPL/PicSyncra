@@ -9,7 +9,7 @@ import time
 
 import pytest
 
-from picorgftp_sql.resource_monitor import ResourceMonitor
+from picsyncra.resource_monitor import ResourceMonitor
 
 
 MIB = 1024 * 1024
@@ -89,6 +89,28 @@ def _monitor(
         wall_clock=lambda: 1_700_000_000.0,
         readers=readers,
     )
+
+
+def test_monitor_registers_external_ocr_worker_pid_for_backend_sampling() -> None:
+    class _PidReader(_ReaderSequence):
+        def __init__(self) -> None:
+            super().__init__(cpu=[1])
+            self.worker_pids: list[int | None] = []
+
+        def read_backend(self, worker_pid: int | None = None) -> dict[str, object]:
+            self.worker_pids.append(worker_pid)
+            return super().read_backend(worker_pid)
+
+    events: list[tuple[str, str, dict[str, object]]] = []
+    reader = _PidReader()
+    monitor = _monitor(reader, events)
+
+    monitor.register_ocr_worker_pid(4321)
+    snapshot = monitor.sample_once()
+
+    assert reader.worker_pids == [4321]
+    assert snapshot["backend"]["ocr_worker_registered"] is True
+    assert snapshot["backend"]["ocr_worker_pid"] == 4321
 
 
 def test_monitor_emits_one_alert_after_two_backend_cpu_breaches() -> None:
@@ -475,7 +497,7 @@ def test_real_cpu_test_uses_temporary_threshold_when_production_threshold_exceed
 def test_real_tests_accept_default_production_thresholds(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, kind: str
 ) -> None:
-    from picorgftp_sql import resource_monitor
+    from picsyncra import resource_monitor
 
     class FakeEvent:
         def is_set(self) -> bool:
@@ -532,7 +554,7 @@ def test_real_tests_accept_default_production_thresholds(
 
 
 def test_real_test_threshold_marks_trigger_without_changing_production_setting() -> None:
-    from picorgftp_sql.resource_monitor import _ResourceAlertDetector
+    from picsyncra.resource_monitor import _ResourceAlertDetector
 
     detector = _ResourceAlertDetector(confirming_samples=2)
     backend = {"memory_percent": 2.0}
@@ -566,7 +588,7 @@ def test_real_test_threshold_marks_trigger_without_changing_production_setting()
 def test_disk_worker_skips_sleep_when_clock_passes_write_deadline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from picorgftp_sql import resource_monitor
+    from picsyncra import resource_monitor
 
     class StopEvent:
         def is_set(self) -> bool:
@@ -608,7 +630,7 @@ def test_disk_worker_skips_sleep_when_clock_passes_write_deadline(
 def test_failed_real_worker_reports_redacted_diagnostics_and_keeps_public_result_safe(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    from picorgftp_sql import resource_monitor
+    from picsyncra import resource_monitor
 
     class FakeEvent:
         def is_set(self) -> bool:
@@ -702,7 +724,7 @@ def test_failed_real_worker_reports_redacted_diagnostics_and_keeps_public_result
 def test_worker_timeout_removes_registration_and_private_directory(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    from picorgftp_sql import resource_monitor
+    from picsyncra import resource_monitor
 
     events: list[tuple[str, str, dict[str, object]]] = []
     monitor = _monitor(
@@ -711,7 +733,7 @@ def test_worker_timeout_removes_registration_and_private_directory(
         settings={**SETTINGS, "cpu_percent_threshold": 20},
     )
     monitor.sample_once()
-    private_dir = tmp_path / "picorg_resource_test_timeout"
+    private_dir = tmp_path / "picsyncra_resource_test_timeout"
     process_instances: list[FakeProcess] = []
 
     class FakeEvent:
@@ -783,7 +805,7 @@ def test_public_snapshot_never_exposes_worker_handles_or_temporary_paths() -> No
     assert set(snapshot) == {"host", "backend", "detector", "observed_at"}
     serialized = json.dumps(snapshot)
     assert "Process" not in serialized
-    assert "picorg_resource_test_" not in serialized
+    assert "picsyncra_resource_test_" not in serialized
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows native reader contract")
@@ -850,11 +872,11 @@ def test_stop_closes_native_reader_resources() -> None:
 def test_stop_during_worker_launch_cannot_leave_unregistered_process(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    from picorgftp_sql import resource_monitor
+    from picsyncra import resource_monitor
 
     started = threading.Event()
     allow_start = threading.Event()
-    private_dir = tmp_path / "picorg_resource_test_race"
+    private_dir = tmp_path / "picsyncra_resource_test_race"
     process_instances: list[FakeProcess] = []
 
     class FakeEvent:
@@ -932,7 +954,7 @@ def test_stop_during_worker_launch_cannot_leave_unregistered_process(
 def test_stop_interruption_reports_cancelled_even_with_zero_exit(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, kind: str
 ) -> None:
-    from picorgftp_sql import resource_monitor
+    from picsyncra import resource_monitor
 
     started = threading.Event()
     cancelled = threading.Event()
@@ -986,7 +1008,7 @@ def test_stop_interruption_reports_cancelled_even_with_zero_exit(
     monkeypatch.setattr(
         resource_monitor.tempfile,
         "mkdtemp",
-        lambda **_kwargs: str(tmp_path / f"picorg_resource_test_cancel_{kind}"),
+        lambda **_kwargs: str(tmp_path / f"picsyncra_resource_test_cancel_{kind}"),
     )
     monkeypatch.setattr(resource_monitor.multiprocessing, "Event", FakeEvent)
     monkeypatch.setattr(resource_monitor.multiprocessing, "Process", FakeProcess)
@@ -1009,7 +1031,7 @@ def test_stop_interruption_reports_cancelled_even_with_zero_exit(
 def test_worker_exit_without_detector_ack_is_not_detected_and_uses_grace(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    from picorgftp_sql import resource_monitor
+    from picsyncra import resource_monitor
 
     joins: list[float | None] = []
 
@@ -1048,7 +1070,7 @@ def test_worker_exit_without_detector_ack_is_not_detected_and_uses_grace(
     monkeypatch.setattr(
         resource_monitor.tempfile,
         "mkdtemp",
-        lambda **_kwargs: str(tmp_path / "picorg_resource_test_complete"),
+        lambda **_kwargs: str(tmp_path / "picsyncra_resource_test_complete"),
     )
     monkeypatch.setattr(resource_monitor.multiprocessing, "Event", FakeEvent)
     monkeypatch.setattr(resource_monitor.multiprocessing, "Process", FakeProcess)
@@ -1069,7 +1091,7 @@ def test_worker_exit_without_detector_ack_is_not_detected_and_uses_grace(
 def test_real_test_succeeds_only_after_normal_detector_ack(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    from picorgftp_sql import resource_monitor
+    from picsyncra import resource_monitor
 
     class FakeEvent:
         def __init__(self) -> None:
@@ -1111,7 +1133,7 @@ def test_real_test_succeeds_only_after_normal_detector_ack(
     monkeypatch.setattr(
         resource_monitor.tempfile,
         "mkdtemp",
-        lambda **_kwargs: str(tmp_path / "picorg_resource_test_detected"),
+        lambda **_kwargs: str(tmp_path / "picsyncra_resource_test_detected"),
     )
     monkeypatch.setattr(resource_monitor.multiprocessing, "Event", FakeEvent)
     monkeypatch.setattr(resource_monitor.multiprocessing, "Process", FakeProcess)
@@ -1132,7 +1154,7 @@ def test_real_test_succeeds_only_after_normal_detector_ack(
 def test_real_test_is_not_detected_when_trigger_event_is_not_persisted(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, failure_mode: str
 ) -> None:
-    from picorgftp_sql import resource_monitor
+    from picsyncra import resource_monitor
 
     class FakeEvent:
         def __init__(self) -> None:
@@ -1184,7 +1206,7 @@ def test_real_test_is_not_detected_when_trigger_event_is_not_persisted(
     monkeypatch.setattr(
         resource_monitor.tempfile,
         "mkdtemp",
-        lambda **_kwargs: str(tmp_path / "picorg_resource_test_persistence_failure"),
+        lambda **_kwargs: str(tmp_path / "picsyncra_resource_test_persistence_failure"),
     )
     monkeypatch.setattr(resource_monitor.multiprocessing, "Event", FakeEvent)
     monkeypatch.setattr(resource_monitor.multiprocessing, "Process", FakeProcess)
@@ -1204,9 +1226,9 @@ def test_real_test_is_not_detected_when_trigger_event_is_not_persisted(
 def test_real_test_constructor_failure_removes_private_directory(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    from picorgftp_sql import resource_monitor
+    from picsyncra import resource_monitor
 
-    private_dir = tmp_path / "picorg_resource_test_constructor_failure"
+    private_dir = tmp_path / "picsyncra_resource_test_constructor_failure"
     monitor = _monitor(
         _ReaderSequence(cpu=[0]),
         [],
@@ -1240,7 +1262,7 @@ def test_real_test_constructor_failure_removes_private_directory(
 def test_cpu_worker_uses_parallel_gil_releasing_hash_rounds(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from picorgftp_sql import resource_monitor
+    from picsyncra import resource_monitor
 
     calls = 0
 
@@ -1268,9 +1290,9 @@ def test_cpu_worker_uses_parallel_gil_releasing_hash_rounds(
 def test_cleanup_uses_kill_fallback_before_deregistering(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    from picorgftp_sql import resource_monitor
+    from picsyncra import resource_monitor
 
-    private_dir = tmp_path / "picorg_resource_test_kill"
+    private_dir = tmp_path / "picsyncra_resource_test_kill"
     process_instances: list[FakeProcess] = []
 
     class FakeEvent:
@@ -1332,7 +1354,7 @@ def test_cleanup_uses_kill_fallback_before_deregistering(
 
 
 def test_pdh_invalid_status_is_unavailable_and_query_is_closed() -> None:
-    from picorgftp_sql import resource_monitor
+    from picsyncra import resource_monitor
 
     reader = resource_monitor._WindowsResourceReaders()
     close_calls = 0
@@ -1367,7 +1389,7 @@ def test_pdh_invalid_status_is_unavailable_and_query_is_closed() -> None:
 
 
 def test_pdh_setup_failure_closes_and_resets_query() -> None:
-    from picorgftp_sql import resource_monitor
+    from picsyncra import resource_monitor
 
     reader = resource_monitor._WindowsResourceReaders()
     close_calls = 0
@@ -1399,7 +1421,7 @@ def test_pdh_setup_failure_closes_and_resets_query() -> None:
 
 
 def test_stop_and_concurrent_restart_are_serialized_until_reader_close() -> None:
-    from picorgftp_sql import resource_monitor
+    from picsyncra import resource_monitor
 
     real_thread = threading.Thread
     join_entered = threading.Event()
@@ -1511,9 +1533,9 @@ def test_concurrent_samples_serialize_reader_access() -> None:
 def test_supervision_exception_still_cleans_and_deregisters_worker(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    from picorgftp_sql import resource_monitor
+    from picsyncra import resource_monitor
 
-    private_dir = tmp_path / "picorg_resource_test_supervision"
+    private_dir = tmp_path / "picsyncra_resource_test_supervision"
     instances: list[FakeProcess] = []
 
     class FakeEvent:
@@ -1569,9 +1591,9 @@ def test_supervision_exception_still_cleans_and_deregisters_worker(
 def test_cleanup_failure_retains_worker_reservation_for_retry(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    from picorgftp_sql import resource_monitor
+    from picsyncra import resource_monitor
 
-    private_dir = tmp_path / "picorg_resource_test_cleanup_retry"
+    private_dir = tmp_path / "picsyncra_resource_test_cleanup_retry"
     real_rmtree = resource_monitor.shutil.rmtree
     instances: list[FakeProcess] = []
 
@@ -1633,7 +1655,7 @@ def test_cleanup_failure_retains_worker_reservation_for_retry(
 def test_native_backend_reader_marks_any_requested_process_failure_unavailable(
     monkeypatch: pytest.MonkeyPatch, worker_pid: int | None
 ) -> None:
-    from picorgftp_sql import resource_monitor
+    from picsyncra import resource_monitor
 
     reader = resource_monitor._WindowsResourceReaders()
     current = os.getpid()
@@ -1652,7 +1674,7 @@ def test_native_backend_reader_marks_any_requested_process_failure_unavailable(
 def test_memory_and_disk_real_tests_accept_reachable_thresholds(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, kind: str
 ) -> None:
-    from picorgftp_sql import resource_monitor
+    from picsyncra import resource_monitor
 
     class FakeEvent:
         def set(self) -> None:
@@ -1682,7 +1704,7 @@ def test_memory_and_disk_real_tests_accept_reachable_thresholds(
     monkeypatch.setattr(
         resource_monitor.tempfile,
         "mkdtemp",
-        lambda **_kwargs: str(tmp_path / f"picorg_resource_test_{kind}"),
+        lambda **_kwargs: str(tmp_path / f"picsyncra_resource_test_{kind}"),
     )
     monkeypatch.setattr(resource_monitor.multiprocessing, "Event", FakeEvent)
     monkeypatch.setattr(resource_monitor.multiprocessing, "Process", FakeProcess)
@@ -1738,7 +1760,7 @@ def test_start_reports_stopping_until_slow_sampler_exits_and_closes_reader() -> 
 def test_disk_worker_never_exceeds_total_byte_budget_over_long_deadline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from picorgftp_sql import resource_monitor
+    from picsyncra import resource_monitor
 
     now = 0.0
     written = 0
@@ -1807,7 +1829,7 @@ def test_disk_worker_never_exceeds_total_byte_budget_over_long_deadline(
 def test_disk_worker_waits_for_baseline_then_covers_two_high_samples(
     monkeypatch: pytest.MonkeyPatch, baseline_at: float
 ) -> None:
-    from picorgftp_sql import resource_monitor
+    from picsyncra import resource_monitor
 
     now = 0.0
     writes: list[tuple[float, int]] = []
@@ -1888,7 +1910,7 @@ def test_disk_worker_waits_for_baseline_then_covers_two_high_samples(
 def test_disk_worker_baseline_timeout_writes_nothing_and_returns_bounded(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from picorgftp_sql import resource_monitor
+    from picsyncra import resource_monitor
 
     now = 0.0
     writes = 0
@@ -1959,7 +1981,7 @@ def test_disk_worker_baseline_timeout_writes_nothing_and_returns_bounded(
 def test_disk_worker_without_detector_ack_stops_at_cap_and_is_not_detected(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from picorgftp_sql import resource_monitor
+    from picsyncra import resource_monitor
 
     now = 0.0
     written = 0
@@ -2025,7 +2047,7 @@ def test_disk_worker_without_detector_ack_stops_at_cap_and_is_not_detected(
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows native baseline contract")
 def test_native_reader_signals_only_after_successful_worker_io_baseline() -> None:
-    from picorgftp_sql import resource_monitor
+    from picsyncra import resource_monitor
 
     worker_pid = 87654
     parent_pid = os.getpid()
@@ -2071,7 +2093,7 @@ def test_native_reader_signals_only_after_successful_worker_io_baseline() -> Non
 def test_missing_pdh_binding_keeps_core_metrics_available(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from picorgftp_sql import resource_monitor
+    from picsyncra import resource_monitor
 
     def fail_pdh(_self) -> None:
         raise OSError("PDH unavailable")
@@ -2091,7 +2113,7 @@ def test_missing_pdh_binding_keeps_core_metrics_available(
 def test_missing_core_binding_keeps_monitor_constructible_with_unavailable_metrics(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from picorgftp_sql import resource_monitor
+    from picsyncra import resource_monitor
 
     def fail_core(_self) -> None:
         raise OSError("core counters unavailable")

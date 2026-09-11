@@ -11,8 +11,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from picorgftp_sql import email_delivery
-from picorgftp_sql.email_delivery import (
+from picsyncra import email_delivery
+from picsyncra.email_delivery import (
     GraphMailTransport,
     MailAttachment,
     MailMessage,
@@ -28,7 +28,7 @@ def sample_message() -> MailMessage:
         text_body="Plain incident body",
         html_body="<p>HTML incident body</p>",
         sender_address="sender+alerts@example.com",
-        sender_name="PicOrgFTP SQL",
+        sender_name="PicSyncraFTP SQL",
         recipients=("first@example.com", "second@example.com"),
     )
 
@@ -141,7 +141,7 @@ def test_graph_transport_requests_token_and_posts_expected_payload(monkeypatch) 
                 {"emailAddress": {"address": "second@example.com"}},
             ],
             "internetMessageHeaders": [
-                {"name": "x-picorg-message-id", "value": "incident-1"}
+                {"name": "x-picsyncra-message-id", "value": "incident-1"}
             ],
         },
         "saveToSentItems": True,
@@ -179,7 +179,7 @@ def test_graph_transport_encodes_text_attachment(monkeypatch) -> None:
         sample_message(),
         attachments=(
             MailAttachment(
-                filename="picorgftp-sql-exception.txt",
+                filename="picsyncra-exception.txt",
                 content_type="text/plain",
                 content="RuntimeError: safe diagnostic",
             ),
@@ -192,7 +192,7 @@ def test_graph_transport_encodes_text_attachment(monkeypatch) -> None:
     payload = json.loads(requests[0].data.decode("utf-8"))
     attachment = payload["message"]["attachments"][0]
     assert attachment["@odata.type"] == "#microsoft.graph.fileAttachment"
-    assert attachment["name"] == "picorgftp-sql-exception.txt"
+    assert attachment["name"] == "picsyncra-exception.txt"
     assert attachment["contentType"] == "text/plain"
     assert (
         base64.b64decode(attachment["contentBytes"]).decode("utf-8")
@@ -322,7 +322,7 @@ def test_smtp_transport_uses_starttls_login_and_message_id(monkeypatch) -> None:
     assert smtp.starttls_context is not None
     assert smtp.starttls_context.verify_mode == ssl.CERT_REQUIRED
     assert smtp.starttls_context.check_hostname is True
-    assert "Message-ID: <incident-1@picorgftp-sql>" in smtp.message
+    assert "Message-ID: <incident-1@picsyncra>" in smtp.message
     assert "Subject: Incident test" in smtp.message
     assert "first@example.com, second@example.com" in smtp.message
     assert "Plain incident body" in smtp.message
@@ -345,7 +345,7 @@ def test_smtp_transport_serializes_text_attachment(monkeypatch) -> None:
         sample_message(),
         attachments=(
             MailAttachment(
-                filename="picorgftp-sql-exception.txt",
+                filename="picsyncra-exception.txt",
                 content_type="text/plain",
                 content="RuntimeError: safe diagnostic",
             ),
@@ -357,8 +357,34 @@ def test_smtp_transport_serializes_text_attachment(monkeypatch) -> None:
     ).send(message)
 
     assert "Content-Disposition: attachment;" in smtp.message
-    assert 'filename="picorgftp-sql-exception.txt"' in smtp.message
+    assert 'filename="picsyncra-exception.txt"' in smtp.message
     assert "RuntimeError: safe diagnostic" in smtp.message
+
+
+def test_smtp_transport_serializes_json_attachment_with_its_mime_type(monkeypatch) -> None:
+    smtp = FakeSmtp()
+    monkeypatch.setattr(
+        email_delivery.smtplib,
+        "SMTP",
+        lambda host, port, timeout: smtp,
+    )
+    message = replace(
+        sample_message(),
+        attachments=(
+            MailAttachment(
+                filename="picsyncra-incident-details.json",
+                content_type="application/json",
+                content='{"trigger": {"metric": "cpu_percent"}}',
+            ),
+        ),
+    )
+
+    SmtpMailTransport(
+        {"host": "smtp.example", "port": 25, "security": "none"}
+    ).send(message)
+
+    assert 'filename="picsyncra-incident-details.json"' in smtp.message
+    assert "Content-Type: application/json" in smtp.message
 
 
 def test_smtp_transport_uses_implicit_tls_without_empty_username_login(monkeypatch) -> None:

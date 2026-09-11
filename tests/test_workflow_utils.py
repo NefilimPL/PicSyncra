@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import unittest
 
-from picorgftp_sql.workflow_utils import (
+from picsyncra.workflow_utils import (
     build_output_filename,
     build_product_path,
     build_remote_slot_filename,

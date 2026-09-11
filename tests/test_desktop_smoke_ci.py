@@ -11,16 +11,29 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-os.environ.setdefault("PICORGFTP_SQL_HEADLESS", "1")
+os.environ.setdefault("PICSYNCRA_HEADLESS", "1")
 os.environ.setdefault("CI", "1")
 
 
 class DesktopSmokeCiTests(unittest.TestCase):
+    def test_picsyncra_entrypoints_and_package_exist(self) -> None:
+        required_paths = [
+            ROOT / "picsyncra" / "__init__.py",
+            ROOT / "PicSyncra.pyw",
+            ROOT / "PicSyncra-WEB.pyw",
+            ROOT / "PicSyncra-QtSlots.pyw",
+        ]
+
+        self.assertEqual(
+            [str(path.relative_to(ROOT)) for path in required_paths if not path.is_file()],
+            [],
+        )
+
     def test_desktop_entrypoints_compile(self) -> None:
         entrypoints = [
-            ROOT / "PicOrgFTP-SQL.pyw",
-            ROOT / "PicOrgFTP-SQL-WEB.pyw",
-            ROOT / "PicOrgFTP-SQL-QtSlots.pyw",
+            ROOT / "PicSyncra.pyw",
+            ROOT / "PicSyncra-WEB.pyw",
+            ROOT / "PicSyncra-QtSlots.pyw",
         ]
 
         for entrypoint in entrypoints:
@@ -29,14 +42,14 @@ class DesktopSmokeCiTests(unittest.TestCase):
 
     def test_critical_modules_import_in_headless_mode(self) -> None:
         modules = [
-            "picorgftp_sql.bootstrap",
-            "picorgftp_sql.config",
-            "picorgftp_sql.settings",
-            "picorgftp_sql.workflow_utils",
-            "picorgftp_sql.web_workflow",
-            "picorgftp_sql.web_data",
-            "picorgftp_sql.web.app",
-            "picorgftp_sql.app",
+            "picsyncra.bootstrap",
+            "picsyncra.config",
+            "picsyncra.settings",
+            "picsyncra.workflow_utils",
+            "picsyncra.web_workflow",
+            "picsyncra.web_data",
+            "picsyncra.web.app",
+            "picsyncra.app",
         ]
 
         errors: dict[str, str] = {}
@@ -49,7 +62,7 @@ class DesktopSmokeCiTests(unittest.TestCase):
         self.assertEqual(errors, {})
 
     def test_localization_files_are_valid_json(self) -> None:
-        localization_dir = ROOT / "picorgftp_sql" / "Localization"
+        localization_dir = ROOT / "picsyncra" / "Localization"
         expected_files = {"pl.json", "eng.json", "ua.json"}
         required_product_field_keys = {
             "product_fields_section",
@@ -74,13 +87,14 @@ class DesktopSmokeCiTests(unittest.TestCase):
 
     def test_required_image_assets_exist_for_desktop_and_web(self) -> None:
         required_assets = [
-            ROOT / "pic" / "PIC_LOCAL.png",
-            ROOT / "pic" / "PIC_WEB.png",
-            ROOT / "picorgftp_sql" / "VERSION",
-            ROOT / "picorgftp_sql" / "web" / "static" / "index.html",
-            ROOT / "picorgftp_sql" / "web" / "static" / "login.html",
-            ROOT / "picorgftp_sql" / "web" / "static" / "app.css",
-            ROOT / "picorgftp_sql" / "web" / "static" / "app.js",
+            ROOT / "pic" / "PIC9_LOCAL.png",
+            ROOT / "pic" / "PIC9_WEB.png",
+            ROOT / "pic" / "PIC9_WEB-OCR.png",
+            ROOT / "picsyncra" / "VERSION",
+            ROOT / "picsyncra" / "web" / "static" / "index.html",
+            ROOT / "picsyncra" / "web" / "static" / "login.html",
+            ROOT / "picsyncra" / "web" / "static" / "app.css",
+            ROOT / "picsyncra" / "web" / "static" / "app.js",
         ]
 
         missing_or_empty = [

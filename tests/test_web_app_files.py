@@ -20,12 +20,12 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 import pytest
 
-from picorgftp_sql import web_data
-from picorgftp_sql import common
-from picorgftp_sql.similar_product_files import SimilarFileCandidate
-from picorgftp_sql.web import active_clients
-from picorgftp_sql.web import app as web_app
-from picorgftp_sql.web.process_queue import (
+from picsyncra import web_data
+from picsyncra import common
+from picsyncra.similar_product_files import SimilarFileCandidate
+from picsyncra.web import active_clients
+from picsyncra.web import app as web_app
+from picsyncra.web.process_queue import (
     OwnerQueueLimit,
     ProcessQueueFull,
     ProcessQueueService,
@@ -361,7 +361,7 @@ def test_file_token_rejects_signed_symlink_escaping_photos_root(tmp_path, monkey
 def test_similar_files_endpoint_requires_login_and_hides_source_path(monkeypatch) -> None:
     """Catches a suggestions response that leaks a local filename path or skips auth."""
 
-    monkeypatch.setenv("PICORG_WEB_AUTH", "1")
+    monkeypatch.setenv("PICSYNCRA_WEB_AUTH", "1")
     with TestClient(web_app.app) as client:
         assert client.post("/api/similar-files", json=_similar_product_payload()).status_code == 401
 
@@ -380,6 +380,7 @@ def test_similar_files_endpoint_requires_login_and_hides_source_path(monkeypatch
         patch.object(web_app, "_require_user", return_value="operator"),
         patch.object(web_app, "find_web_similar_file_candidates", return_value=[candidate]),
         patch.object(web_app, "_enrich_photo_payload", wraps=web_app._enrich_photo_payload),
+        patch.object(web_app.settings, "l", "C:/photos"),
     ):
         response = TestClient(web_app.app).post(
             "/api/similar-files", json=_similar_product_payload()
@@ -598,7 +599,7 @@ class WebAppFileTests(unittest.TestCase):
     def test_latest_request_asset_precedes_app(self) -> None:
         workspace = Path(__file__).resolve().parents[1]
         index_source = (
-            workspace / "picorgftp_sql" / "web" / "static" / "index.html"
+            workspace / "picsyncra" / "web" / "static" / "index.html"
         ).read_text(encoding="utf-8")
 
         latest_request_asset = '<script src="/static/latest-request.js'
@@ -608,22 +609,37 @@ class WebAppFileTests(unittest.TestCase):
             index_source.index(latest_request_asset), index_source.index(app_asset)
         )
 
+    def test_ocr_diagnostics_asset_precedes_app(self) -> None:
+        workspace = Path(__file__).resolve().parents[1]
+        index_source = (
+            workspace / "picsyncra" / "web" / "static" / "index.html"
+        ).read_text(encoding="utf-8")
+        diagnostics_source = (
+            workspace / "picsyncra" / "web" / "static" / "ocr-diagnostics.js"
+        ).read_text(encoding="utf-8")
+
+        diagnostics_asset = '<script src="/static/ocr-diagnostics.js'
+        app_asset = '<script src="/static/app.js'
+        self.assertIn(diagnostics_asset, index_source)
+        self.assertLess(index_source.index(diagnostics_asset), index_source.index(app_asset))
+        self.assertIn("root.OcrDiagnostics", diagnostics_source)
+
     def test_runtime_status_asset_precedes_app_and_replaces_named_runtime_pollers(
         self,
     ) -> None:
         workspace = Path(__file__).resolve().parents[1]
         index_source = (
-            workspace / "picorgftp_sql" / "web" / "static" / "index.html"
+            workspace / "picsyncra" / "web" / "static" / "index.html"
         ).read_text(encoding="utf-8")
         app_source = (
-            workspace / "picorgftp_sql" / "web" / "static" / "app.js"
+            workspace / "picsyncra" / "web" / "static" / "app.js"
         ).read_text(encoding="utf-8")
 
         runtime_asset = '<script src="/static/runtime-status.js'
         app_asset = '<script src="/static/app.js'
         self.assertIn(runtime_asset, index_source)
         self.assertLess(index_source.index(runtime_asset), index_source.index(app_asset))
-        self.assertEqual(app_source.count("new PicOrg.RuntimeStatusPoller("), 1)
+        self.assertEqual(app_source.count("new PicSyncra.RuntimeStatusPoller("), 1)
         self.assertNotIn('createPoller("fileIndex"', app_source)
         self.assertNotIn('createPoller("processQueue"', app_source)
         self.assertNotIn('createPoller("activeUsers"', app_source)
@@ -1011,13 +1027,12 @@ class WebAppFileTests(unittest.TestCase):
             processed.mkdir()
             target = processed / "old.jpg"
             target.write_bytes(b"old")
-            token = web_app._file_token(str(target))
-            target.unlink()
-
             with (
                 patch.object(web_app.settings, "l", str(processed)),
                 patch.object(web_app.settings, "AC", str(temp_dir)),
             ):
+                token = web_app._file_token(str(target))
+                target.unlink()
                 self.assertEqual(
                     Path(web_app._path_from_file_token(token, require_exists=False)),
                     target,
@@ -1036,12 +1051,11 @@ class WebAppFileTests(unittest.TestCase):
             upload_cache.mkdir(parents=True)
             target = upload_cache / "01_cached.jpg"
             target.write_bytes(b"cached")
-            token = web_app._file_token(str(target))
-
             with (
                 patch.object(web_app.settings, "l", str(processed)),
                 patch.object(web_app.settings, "AC", str(temp_dir)),
             ):
+                token = web_app._file_token(str(target))
                 self.assertEqual(Path(web_app._path_from_file_token(token)), target)
         finally:
             shutil.rmtree(temp_dir)
@@ -2325,10 +2339,10 @@ class WebAppFileTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=workspace_tmp) as temp_dir:
             photo_path = Path(temp_dir) / "5901234567890_03.jpg"
             photo_path.write_bytes(b"first")
-
-            first = web_app._enrich_photo_payload([{"prefix": "03", "path": str(photo_path)}])[0]
-            photo_path.write_bytes(b"changed-content")
-            second = web_app._enrich_photo_payload([{"prefix": "03", "path": str(photo_path)}])[0]
+            with patch.object(web_app.settings, "l", temp_dir):
+                first = web_app._enrich_photo_payload([{"prefix": "03", "path": str(photo_path)}])[0]
+                photo_path.write_bytes(b"changed-content")
+                second = web_app._enrich_photo_payload([{"prefix": "03", "path": str(photo_path)}])[0]
 
         self.assertIn("&v=", first["url"])
         self.assertIn("&v=", first["thumb_url"])
@@ -2632,7 +2646,7 @@ class WebAppFileTests(unittest.TestCase):
     def test_log_payloads_are_newest_first_and_hide_successful_access_logs(self) -> None:
         workspace_tmp = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory(dir=workspace_tmp) as temp_dir:
-            log_path = Path(temp_dir) / "picorg_web_out.log"
+            log_path = Path(temp_dir) / "picsyncra_web_out.log"
             log_path.write_text(
                 "\n".join(
                     [

@@ -1,4 +1,4 @@
-from picorgftp_sql.history_changes import field_changes, file_changes, history_change_set
+from picsyncra.history_changes import field_changes, file_changes, history_change_set
 
 
 def test_field_changes_describe_created_fields_in_stable_order() -> None:

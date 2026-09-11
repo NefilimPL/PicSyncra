@@ -4,7 +4,7 @@ from urllib.error import HTTPError
 
 import pytest
 
-import picorgftp_sql.entra_secret_expiry as expiry
+import picsyncra.entra_secret_expiry as expiry
 
 
 NOW = datetime(2026, 7, 20, tzinfo=timezone.utc)

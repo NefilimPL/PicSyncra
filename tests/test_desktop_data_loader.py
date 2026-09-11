@@ -5,8 +5,8 @@ import threading
 
 import pytest
 
-from picorgftp_sql import desktop_data_loader, excel_utils
-from picorgftp_sql.desktop_data_loader import (
+from picsyncra import desktop_data_loader, excel_utils
+from picsyncra.desktop_data_loader import (
     DesktopDataLoader,
     DesktopDataSnapshot,
     load_desktop_data,

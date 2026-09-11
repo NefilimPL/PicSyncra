@@ -9,7 +9,7 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
-from picorgftp_sql.web import app as web_app
+from picsyncra.web import app as web_app
 
 
 @pytest.fixture
@@ -73,7 +73,7 @@ def test_runtime_status_contains_summaries_not_detail_lists(
 
 
 def test_runtime_status_service_has_an_injected_summary_only_contract() -> None:
-    from picorgftp_sql.web.runtime_status import RuntimeStatusService
+    from picsyncra.web.runtime_status import RuntimeStatusService
 
     service = RuntimeStatusService(
         health_provider=lambda: {

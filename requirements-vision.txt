@@ -1,0 +1,5 @@
+paddleocr>=3.0,<4
+paddlepaddle>=3.0,<4
+paddlex[ocr-core]>=3.0,<4
+opencv-contrib-python==4.10.0.84
+numpy>=1.26

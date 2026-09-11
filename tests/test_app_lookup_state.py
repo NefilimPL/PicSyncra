@@ -8,11 +8,11 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from picorgftp_sql.common import Aa, AR, I, f
-from picorgftp_sql.product_state import ProductState
+from picsyncra.common import Aa, AR, I, f
+from picsyncra.product_state import ProductState
 
 try:
-    from picorgftp_sql.app import App
+    from picsyncra.app import App
 except ModuleNotFoundError as exc:  # pragma: no cover - depends on local test env
     App = None
     APP_IMPORT_ERROR = exc
@@ -252,8 +252,8 @@ class ExistingLookupStateTests(unittest.TestCase):
             harness = _RemoveFileHarness(local_path=str(local_file))
 
             with (
-                patch("picorgftp_sql.app.l", str(processed_dir)),
-                patch("picorgftp_sql.app.O.askyesno", return_value=True),
+                patch("picsyncra.app.l", str(processed_dir)),
+                patch("picsyncra.app.O.askyesno", return_value=True),
             ):
                 App._remove_file(harness, 0)
 
@@ -304,7 +304,7 @@ class ProductFieldSettingsTests(unittest.TestCase):
         harness = self._harness(type="KOMODA")
 
         with patch(
-            "picorgftp_sql.app.D",
+            "picsyncra.app.D",
             {
                 "product_fields": {
                     "name": {
@@ -333,7 +333,7 @@ class ProductFieldSettingsTests(unittest.TestCase):
         )
 
         with patch(
-            "picorgftp_sql.app.D",
+            "picsyncra.app.D",
             {"product_fields": {"type": {"enabled": False}}},
         ):
             App._clear_disabled_product_field_values(harness)

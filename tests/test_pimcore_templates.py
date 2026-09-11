@@ -3,7 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 import threading
 import time
 
-from picorgftp_sql.pimcore_templates import (
+from picsyncra.pimcore_templates import (
     SourceDefinition,
     TemplateError,
     build_source_catalog,
@@ -322,7 +322,7 @@ def test_test_values_are_fresh_field_specific_and_type_compatible():
 
 def test_test_values_keep_ean_fresh_when_clock_does_not_advance(monkeypatch):
     monkeypatch.setattr(
-        "picorgftp_sql.pimcore_templates.time.time_ns",
+        "picsyncra.pimcore_templates.time.time_ns",
         lambda: 1234567890,
     )
     mappings = [{"source": "EAN", "type": "input", "parser": "text"}]
@@ -336,7 +336,7 @@ def test_test_values_keep_ean_fresh_when_clock_does_not_advance(monkeypatch):
 
 
 def test_template_operation_classification_uses_placeholder_dependencies():
-    from picorgftp_sql.services.template_execution import classify_template_operation
+    from picsyncra.services.template_execution import classify_template_operation
 
     assert classify_template_operation(
         {"sql_query": "SELECT {PRODUCT:ean}"}
@@ -347,7 +347,7 @@ def test_template_operation_classification_uses_placeholder_dependencies():
 
 
 def test_independent_operations_are_bounded_and_keep_input_order():
-    from picorgftp_sql.services.template_execution import execute_independent_operations
+    from picsyncra.services.template_execution import execute_independent_operations
 
     active = 0
     peak = 0

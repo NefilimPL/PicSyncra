@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from picorgftp_sql.web_workflow import (
+from picsyncra.web_workflow import (
     Image,
     WebProductForm,
     WebUploadedSlot,
@@ -20,7 +20,7 @@ from picorgftp_sql.web_workflow import (
     normalized_product_payload,
     validate_product_form,
 )
-from picorgftp_sql.workflow_utils import build_product_directory, build_slot_filename
+from picsyncra.workflow_utils import build_product_directory, build_slot_filename
 
 
 class WebWorkflowTests(unittest.TestCase):
@@ -483,7 +483,7 @@ class WebWorkflowTests(unittest.TestCase):
             self._make_image(source)
 
             with patch(
-                "picorgftp_sql.image_pipeline.fit_image_to_content",
+                "picsyncra.image_pipeline.fit_image_to_content",
                 side_effect=lambda image: image,
             ) as fit:
                 process_web_uploads(
@@ -518,7 +518,7 @@ class WebWorkflowTests(unittest.TestCase):
             self._make_image(source)
 
             with patch(
-                "picorgftp_sql.image_pipeline.fit_image_to_content",
+                "picsyncra.image_pipeline.fit_image_to_content",
                 side_effect=lambda image: image,
             ) as fit:
                 process_web_uploads(
@@ -581,7 +581,7 @@ class WebWorkflowTests(unittest.TestCase):
             output_root = Path(temp_dir) / "processed"
             self._make_image(source)
 
-            with patch("picorgftp_sql.web_workflow.Image.open") as image_open:
+            with patch("picsyncra.web_workflow.Image.open") as image_open:
                 result = process_web_uploads(
                     base_output_dir=str(output_root),
                     form=WebProductForm(

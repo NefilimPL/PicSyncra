@@ -61,13 +61,21 @@ function Install-BuildDependencies {
         [string]$Python,
         [Parameter(Mandatory = $true)]
         [string]$RepoRoot,
-        [switch]$IncludeWebDependencies
+        [switch]$IncludeWebDependencies,
+        [switch]$IncludeVisionDependencies
     )
 
     Invoke-Native $Python "-m" "pip" "install" "--disable-pip-version-check" "pyinstaller>=6.6,<7"
     Invoke-Native $Python "-m" "pip" "install" "--disable-pip-version-check" "-r" (Join-Path $RepoRoot "requirements-build.txt")
     if ($IncludeWebDependencies) {
         Invoke-Native $Python "-m" "pip" "install" "--disable-pip-version-check" "-r" (Join-Path $RepoRoot "requirements-web.txt")
+    }
+    if ($IncludeVisionDependencies) {
+        # The OpenCV wheels all own the cv2 package. Remove only variants
+        # that conflict with the selected contrib wheel, preserving a known
+        # good cached contrib installation for offline rebuilds.
+        Invoke-Native $Python "-m" "pip" "uninstall" "--yes" "opencv-python" "opencv-python-headless"
+        Invoke-Native $Python "-m" "pip" "install" "--disable-pip-version-check" "-r" (Join-Path $RepoRoot "requirements-vision.txt")
     }
 }
 
@@ -77,7 +85,7 @@ function Get-WebStaticDataArguments {
         [string]$RepoRoot
     )
 
-    $staticDirectory = Join-Path $RepoRoot "picorgftp_sql\web\static"
+    $staticDirectory = Join-Path $RepoRoot "picsyncra\web\static"
     $staticAssets = @(
         "app.css",
         "app.js",
@@ -86,6 +94,8 @@ function Get-WebStaticDataArguments {
         "latest-request.js",
         "login.html",
         "login.js",
+        "module-build-status.js",
+        "ocr-diagnostics.js",
         "process-jobs.js",
         "runtime-status.js"
     )
@@ -96,16 +106,37 @@ function Get-WebStaticDataArguments {
             throw "Brakuje wymaganego zasobu web: $sourcePath"
         }
         $arguments += "--add-data"
-        $arguments += "$sourcePath;picorgftp_sql\web\static"
+        $arguments += "$sourcePath;picsyncra\web\static"
     }
     return $arguments
+}
+
+function New-ModuleBuildManifestArguments {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Python,
+        [Parameter(Mandatory = $true)]
+        [string]$RepoRoot,
+        [Parameter(Mandatory = $true)]
+        [string]$WorkPath,
+        [Parameter(Mandatory = $true)]
+        [string]$BuildVariant
+    )
+
+    $manifestPath = Join-Path $WorkPath "module_build_manifest.json"
+    Invoke-Native $Python "tools\generate_module_build_manifest.py" `
+        "--repo-root" $RepoRoot `
+        "--build-variant" $BuildVariant `
+        "--output" $manifestPath
+    return @("--add-data", "$manifestPath;picsyncra")
 }
 
 function Test-BuildEnvironment {
     param(
         [Parameter(Mandatory = $true)]
         [string]$Python,
-        [switch]$IncludeWebDependencies
+        [switch]$IncludeWebDependencies,
+        [switch]$IncludeVisionDependencies
     )
 
     $imports = @(
@@ -123,6 +154,17 @@ function Test-BuildEnvironment {
             "import multipart",
             "import starlette",
             "import uvicorn"
+        )
+    }
+    if ($IncludeVisionDependencies) {
+        $imports += @(
+            "import cv2; assert cv2.IMREAD_COLOR",
+            "import bidi",
+            "import imagesize",
+            "import pyclipper",
+            "import pypdfium2",
+            "import shapely",
+            "from importlib.util import find_spec; assert find_spec('paddle') and find_spec('paddlex') and find_spec('paddleocr')"
         )
     }
 
@@ -145,7 +187,8 @@ function Initialize-BuildEnvironment {
         [string]$VenvDir,
         [Parameter(Mandatory = $true)]
         [string]$Python,
-        [switch]$IncludeWebDependencies
+        [switch]$IncludeWebDependencies,
+        [switch]$IncludeVisionDependencies
     )
 
     for ($attempt = 1; $attempt -le 2; $attempt++) {
@@ -160,9 +203,13 @@ function Initialize-BuildEnvironment {
         Install-BuildDependencies `
             -Python $Python `
             -RepoRoot $RepoRoot `
-            -IncludeWebDependencies:$IncludeWebDependencies
+            -IncludeWebDependencies:$IncludeWebDependencies `
+            -IncludeVisionDependencies:$IncludeVisionDependencies
 
-        if (Test-BuildEnvironment -Python $Python -IncludeWebDependencies:$IncludeWebDependencies) {
+        if (Test-BuildEnvironment `
+            -Python $Python `
+            -IncludeWebDependencies:$IncludeWebDependencies `
+            -IncludeVisionDependencies:$IncludeVisionDependencies) {
             return
         }
 

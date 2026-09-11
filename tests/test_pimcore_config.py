@@ -1,8 +1,9 @@
-from picorgftp_sql.pimcore_config import (
+from picsyncra.pimcore_config import (
     PIMCORE_API_KEY,
     PIMCORE_SETTINGS_KEY,
     field_mapping_issues,
     infer_field_mapping,
+    normalize_field_mapping,
     normalize_pimcore_settings,
     parse_mapping_value,
 )
@@ -58,6 +59,7 @@ def test_normalize_pimcore_settings_cleans_mappings_and_bounds_timeout():
             "sql_profile_id": "",
             "translate": False,
             "target_language": None,
+            "ocr_validation": False,
             "layout_group": "",
             "layout_order": 0,
         }
@@ -78,6 +80,34 @@ def test_normalize_pimcore_settings_builds_export_columns_from_mappings():
         {"type": "field", "pimcore_field": "ean", "header": "ean"},
         {"type": "field", "pimcore_field": "stock", "header": "stock"},
     ]
+
+
+def test_normalize_mapping_discards_legacy_dimension_property():
+    mapping = normalize_field_mapping(
+        {
+            "source": "WIDTH",
+            "pimcore_field": "width",
+            "image_dimension": {"slot": "15", "dimension": "width"},
+        }
+    )
+
+    assert mapping["ocr_validation"] is False
+    assert "image_dimension" not in mapping
+
+
+def test_mapping_validation_rejects_unconfigured_image_source():
+    issues = field_mapping_issues(
+        [
+            {
+                "source": "WIDTH",
+                "pimcore_field": "width",
+                "type": "input",
+                "value_template": "{IMAGE_DIMENSION:15:WIDTH|keep}",
+            }
+        ]
+    )
+
+    assert any("Nieznane zrodlo IMAGE_DIMENSION:15:WIDTH" in issue for issue in issues)
 
 
 def test_normalize_pimcore_settings_treats_empty_export_columns_as_default_layout():
@@ -233,6 +263,7 @@ def test_infer_field_mapping_uses_class_type_and_locks_ean():
         "sql_profile_id": "",
         "translate": False,
         "target_language": None,
+        "ocr_validation": False,
         "layout_group": "",
         "layout_order": 0,
     }
