@@ -12,6 +12,18 @@ from picsyncra.sqlite_maintenance import (
 from picsyncra.sqlite_store import SqliteStore
 
 
+def test_integrity_check_closes_database_before_returning(tmp_path: Path) -> None:
+    """Maintenance reads must not leave a Windows-locked SQLite file behind."""
+
+    db_path = tmp_path / "data.sqlite"
+    SqliteStore(str(db_path)).initialize()
+
+    assert sqlite_maintenance.integrity_check(str(db_path)) == "ok"
+
+    db_path.unlink()
+    assert not db_path.exists()
+
+
 def test_repair_creates_backup_and_migrates_legacy_history(tmp_path: Path) -> None:
     db_path = tmp_path / "data.sqlite"
     backup_dir = tmp_path / "BACKUP"
