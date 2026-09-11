@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import base64
+from contextlib import contextmanager
+import gc
 import os
+import shutil
 import tempfile
 import time
 import unittest
@@ -26,6 +29,34 @@ else:
 from picsyncra import web_data
 from picsyncra import observability
 from picsyncra.web import app as web_app
+
+
+def _reset_web_test_storage() -> None:
+    web_app._invalidate_health_integration_cache()
+    web_app.data_store.reset_active_store_cache()
+    gc.collect()
+
+
+@contextmanager
+def _temporary_web_data_directory():
+    directory = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+    try:
+        yield directory.name
+    finally:
+        _reset_web_test_storage()
+        deadline = time.monotonic() + 5.0
+        while True:
+            gc.collect()
+            try:
+                shutil.rmtree(directory.name)
+                break
+            except FileNotFoundError:
+                break
+            except PermissionError:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.05)
+        directory.cleanup()
 
 
 @unittest.skipIf(
@@ -73,7 +104,7 @@ class WebSmokeCiTests(unittest.TestCase):
         bootstrap_settings_patch.start()
         self.addCleanup(bootstrap_settings_patch.stop)
         web_app.data_store.reset_active_store_cache()
-        self.addCleanup(web_app.data_store.reset_active_store_cache)
+        self.addCleanup(_reset_web_test_storage)
         web_app._RATE_LIMITS.clear()
 
     def tearDown(self) -> None:
@@ -98,7 +129,7 @@ class WebSmokeCiTests(unittest.TestCase):
         client = TestClient(web_app.app)
 
         with (
-            tempfile.TemporaryDirectory() as temp_dir,
+            _temporary_web_data_directory() as temp_dir,
             patch.object(
                 web_app.storage_settings,
                 "resolve_sqlite_path",
@@ -978,7 +1009,7 @@ class WebSmokeCiTests(unittest.TestCase):
         previous = os.environ.get("PICSYNCRA_WEB_AUTH")
         os.environ["PICSYNCRA_WEB_AUTH"] = "1"
         try:
-            with tempfile.TemporaryDirectory() as temp_dir:
+            with _temporary_web_data_directory() as temp_dir:
                 with patch.object(web_app.settings, "AC", temp_dir):
                     client = TestClient(web_app.app)
 
@@ -1064,7 +1095,7 @@ class WebSmokeCiTests(unittest.TestCase):
         previous = os.environ.get("PICSYNCRA_WEB_AUTH")
         os.environ["PICSYNCRA_WEB_AUTH"] = "1"
         try:
-            with tempfile.TemporaryDirectory() as temp_dir:
+            with _temporary_web_data_directory() as temp_dir:
                 with (
                     patch.object(web_app.settings, "AC", temp_dir),
                     patch.object(web_app, "RATE_LIMIT_LOGIN_ATTEMPTS", 2),
@@ -1099,7 +1130,7 @@ class WebSmokeCiTests(unittest.TestCase):
         previous = os.environ.get("PICSYNCRA_WEB_AUTH")
         os.environ["PICSYNCRA_WEB_AUTH"] = "1"
         try:
-            with tempfile.TemporaryDirectory() as temp_dir:
+            with _temporary_web_data_directory() as temp_dir:
                 with (
                     patch.object(web_app.settings, "AC", temp_dir),
                     patch.object(web_app.settings, "LOG_DIR", temp_dir),
@@ -1128,7 +1159,7 @@ class WebSmokeCiTests(unittest.TestCase):
         previous = os.environ.get("PICSYNCRA_WEB_AUTH")
         os.environ["PICSYNCRA_WEB_AUTH"] = "1"
         try:
-            with tempfile.TemporaryDirectory() as temp_dir:
+            with _temporary_web_data_directory() as temp_dir:
                 with patch.object(web_app.settings, "AC", temp_dir):
                     client = TestClient(web_app.app)
                     login = client.post(
@@ -1157,7 +1188,7 @@ class WebSmokeCiTests(unittest.TestCase):
         previous = os.environ.get("PICSYNCRA_WEB_AUTH")
         os.environ["PICSYNCRA_WEB_AUTH"] = "1"
         try:
-            with tempfile.TemporaryDirectory() as temp_dir:
+            with _temporary_web_data_directory() as temp_dir:
                 with patch.object(web_app.settings, "AC", temp_dir):
                     client = TestClient(web_app.app)
                     login = client.post(
@@ -1203,7 +1234,7 @@ class WebSmokeCiTests(unittest.TestCase):
         previous = os.environ.get("PICSYNCRA_WEB_AUTH")
         os.environ["PICSYNCRA_WEB_AUTH"] = "1"
         try:
-            with tempfile.TemporaryDirectory() as temp_dir:
+            with _temporary_web_data_directory() as temp_dir:
                 with patch.object(web_app.settings, "AC", temp_dir):
                     client = TestClient(web_app.app)
                     with patch.object(web_app.common, "APP_SECRET", "old-session-secret"):

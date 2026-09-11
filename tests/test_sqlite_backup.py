@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
@@ -12,11 +13,12 @@ from picsyncra import data_store, sqlite_backup, storage_settings
 
 
 def _create_db(path: Path) -> None:
-    with sqlite3.connect(path) as conn:
-        conn.execute("CREATE TABLE schema_version (version INTEGER NOT NULL, applied_at TEXT NOT NULL)")
-        conn.execute("INSERT INTO schema_version VALUES (3, '2026-06-25T13:02:34.300Z')")
-        conn.execute("CREATE TABLE app_config_values (path TEXT PRIMARY KEY, value_json TEXT NOT NULL, updated_at TEXT NOT NULL)")
-        conn.execute("INSERT INTO app_config_values VALUES ('database.query', '\"secret query\"', '2026-06-25T13:02:34.300Z')")
+    with closing(sqlite3.connect(path)) as conn:
+        with conn:
+            conn.execute("CREATE TABLE schema_version (version INTEGER NOT NULL, applied_at TEXT NOT NULL)")
+            conn.execute("INSERT INTO schema_version VALUES (3, '2026-06-25T13:02:34.300Z')")
+            conn.execute("CREATE TABLE app_config_values (path TEXT PRIMARY KEY, value_json TEXT NOT NULL, updated_at TEXT NOT NULL)")
+            conn.execute("INSERT INTO app_config_values VALUES ('database.query', '\"secret query\"', '2026-06-25T13:02:34.300Z')")
 
 
 def test_backup_creates_sqlite_copy_and_metadata(tmp_path: Path) -> None:
@@ -268,6 +270,22 @@ def test_diff_databases_masks_secret_values(tmp_path: Path) -> None:
     assert "secret" not in json.dumps(diff)
     assert "ftp.password" in json.dumps(diff)
     assert "present" in json.dumps(diff)
+
+
+def test_diff_databases_closes_both_database_files_before_returning(tmp_path: Path) -> None:
+    """Database comparison must not leave Windows file handles open."""
+
+    active = tmp_path / "active.sqlite"
+    backup = tmp_path / "backup.sqlite"
+    _create_db(active)
+    _create_db(backup)
+
+    sqlite_backup.diff_databases(str(active), str(backup), [str(tmp_path)])
+
+    active.unlink()
+    backup.unlink()
+    assert not active.exists()
+    assert not backup.exists()
 
 
 def test_diff_databases_rejects_backup_outside_trusted_directories(tmp_path: Path) -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -37,7 +38,7 @@ TIMESTAMP_COLUMNS = (
 
 def integrity_check(database_path: str) -> str:
     with database_activity(database_path):
-        with sqlite3.connect(database_path) as conn:
+        with closing(sqlite3.connect(database_path)) as conn:
             row = conn.execute("PRAGMA integrity_check").fetchone()
     return str(row[0] if row else "")
 
@@ -45,7 +46,7 @@ def integrity_check(database_path: str) -> str:
 def current_schema_version(database_path: str) -> int:
     try:
         with database_activity(database_path):
-            with sqlite3.connect(database_path) as conn:
+            with closing(sqlite3.connect(database_path)) as conn:
                 row = conn.execute(
                     "SELECT COALESCE(MAX(version), 0) FROM schema_version"
                 ).fetchone()
@@ -141,12 +142,13 @@ def _repair_sqlite_database(database_path: str, backup_dir: str) -> dict[str, An
     store = SqliteStore(str(db_path))
     store.initialize()
     segments = rebuild_file_index_segments(store)
-    with sqlite3.connect(str(db_path)) as conn:
-        timestamps_normalized = normalize_timestamp_columns(conn)
-        removed_tables = drop_empty_legacy_tables(conn)
-    with sqlite3.connect(str(db_path)) as conn:
+    with closing(sqlite3.connect(str(db_path))) as conn:
+        with conn:
+            timestamps_normalized = normalize_timestamp_columns(conn)
+            removed_tables = drop_empty_legacy_tables(conn)
+    with closing(sqlite3.connect(str(db_path))) as conn:
         conn.execute("ANALYZE")
-    with sqlite3.connect(str(db_path)) as conn:
+    with closing(sqlite3.connect(str(db_path))) as conn:
         conn.execute("VACUUM")
     from .data_store import invalidate_sqlite_store
 

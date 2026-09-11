@@ -7,6 +7,7 @@ import gc
 import os
 import sqlite3
 import tempfile
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -344,7 +345,10 @@ def diff_databases(
     ]
     safe_backup_path = resolve_backup_path(backup_path, allowed_backup_dirs)
     with database_activity(active_path):
-        with sqlite3.connect(active_path) as active, sqlite3.connect(str(safe_backup_path)) as backup:
+        with (
+            closing(sqlite3.connect(active_path)) as active,
+            closing(sqlite3.connect(str(safe_backup_path))) as backup,
+        ):
             active_counts = {table: _table_count(active, table) for table in tables}
             backup_counts = {table: _table_count(backup, table) for table in tables}
             active_config = _config_rows(active)
