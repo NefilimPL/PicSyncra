@@ -859,19 +859,24 @@ class WebSmokeCiTests(unittest.TestCase):
         self.assertIn("dozwolonym katalogu", response.json()["detail"])
 
     def test_backup_scheduler_runs_due_slots(self) -> None:
+        backup_settings = {
+            "enabled": True,
+            "days": ["mon"],
+            "hours": [8],
+            "max_copies": 2,
+            "last_run_slots": [],
+        }
         with (
             patch.object(
                 web_app.storage_settings,
                 "load_backup_settings",
-                return_value={
-                    "enabled": True,
-                    "days": ["mon"],
-                    "hours": [8],
-                    "max_copies": 2,
-                    "last_run_slots": [],
-                },
+                return_value=backup_settings,
             ),
-            patch.object(web_app.sqlite_backup, "due_schedule_slots", return_value=["2026-06-22T08"]),
+            patch.object(
+                web_app.sqlite_backup,
+                "due_schedule_slots",
+                return_value=["2026-06-22T08"],
+            ) as due_schedule_slots,
             patch.object(web_app.sqlite_backup, "create_backup", return_value={"ok": True}),
             patch.object(web_app.storage_settings, "resolve_sqlite_path", return_value="C:/Data/app.sqlite"),
             patch.object(web_app.storage_settings, "resolve_backup_dir", return_value="C:/Data/BACKUP"),
@@ -887,10 +892,19 @@ class WebSmokeCiTests(unittest.TestCase):
                 },
             ),
             patch.object(web_app.storage_settings, "save_backup_settings") as save_backup_settings,
+            patch.dict(
+                web_app.config.CONFIG,
+                {"web_display": {"time_zone": "Europe/Warsaw"}},
+                clear=False,
+            ),
         ):
             result = web_app._run_due_sqlite_backups_once()
 
         self.assertEqual(result["created"], 1)
+        due_schedule_slots.assert_called_once_with(
+            backup_settings,
+            time_zone_name="Europe/Warsaw",
+        )
         save_backup_settings.assert_called_once()
 
     def test_live_event_pruning_runs_no_more_than_hourly(self) -> None:

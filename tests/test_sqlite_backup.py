@@ -170,6 +170,35 @@ def test_due_schedule_slots_respects_explicit_day_hour_slots() -> None:
     assert sqlite_backup.due_schedule_slots(settings_payload, tuesday) == []
 
 
+@pytest.mark.parametrize(
+    ("now", "configured_slot", "expected_run_slot"),
+    [
+        # Europe/Warsaw is UTC+2 in September (CEST).
+        (datetime(2026, 9, 10, 15, 0, tzinfo=timezone.utc), "thu:17", "2026-09-10T15"),
+        # Europe/Warsaw is UTC+1 in January (CET).
+        (datetime(2026, 1, 14, 16, 0, tzinfo=timezone.utc), "wed:17", "2026-01-14T16"),
+    ],
+)
+def test_due_schedule_slots_matches_the_configured_time_zone(
+    now: datetime,
+    configured_slot: str,
+    expected_run_slot: str,
+) -> None:
+    """Catches backup slots being compared with UTC instead of the configured zone."""
+
+    due = sqlite_backup.due_schedule_slots(
+        {
+            "enabled": True,
+            "slots": [configured_slot],
+            "last_run_slots": [],
+        },
+        now,
+        time_zone_name="Europe/Warsaw",
+    )
+
+    assert due == [expected_run_slot]
+
+
 def test_mark_schedule_slots_run_keeps_recent_slots() -> None:
     updated = sqlite_backup.mark_schedule_slots_run(
         {"last_run_slots": ["2026-06-21T08"]},
