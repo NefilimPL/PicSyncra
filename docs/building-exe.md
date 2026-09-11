@@ -32,12 +32,13 @@ Workflow `.github/workflows/ci.yml` działa na `push` i `pull_request` dla gał�
 Workflow `.github/workflows/build-exe.yml` buduje:
 
 - desktopowe `PicSyncra-<tag>.exe`,
+- samodzielne `PicSyncra-Migrator-<tag>.exe`,
 - webowe `PicSyncra-WEB-<tag>.exe`,
 - paczkę `PicSyncra-web-<tag>.zip`.
 
 Build uruchamia się ręcznie albo po publikacji GitHub Release. Przy release workflow próbuje podpiąć wygenerowane pliki do wydania przez GitHub API.
 
-Przed buildem workflow sprawdza dostępność self-hosted runnerów z etykietami `self-hosted`, `Windows` i `X64`, statusem `online` oraz `busy: false`. Desktop EXE i web EXE/ZIP są budowane jako równoległe joby matrix. Jeżeli nie ma wolnego runnera albo API GitHuba nie pozwala odczytać listy runnerów, joby przechodzą na `windows-latest`.
+Przed buildem workflow sprawdza dostępność self-hosted runnerów z etykietami `self-hosted`, `Windows` i `X64` oraz statusem `online`. Desktop EXE, samodzielny migrator i web EXE/ZIP są budowane jako równoległe joby matrix. Jeżeli nie ma dostępnego runnera albo API GitHuba nie pozwala odczytać listy runnerów, joby przechodzą na `windows-latest`.
 
 ## Token do self-hosted runnerów
 
@@ -92,7 +93,7 @@ Zwykłe artefakty EXE mają retencję siedmiu dni. Release assets są wysyłane 
 5. Otwórz **Actions -> Build Windows EXE**.
 6. Kliknij **Run workflow**.
 7. W podsumowaniu sprawdź sekcję **Runner selection**.
-8. Po zakończeniu pobierz artefakty `PicSyncra-windows`, `PicSyncra-web-exe` albo `PicSyncra-web`, jeżeli upload artefaktów był dostępny.
+8. Po zakończeniu pobierz artefakty `PicSyncra-windows`, `PicSyncra-migrator`, `PicSyncra-web-exe` albo `PicSyncra-web`, jeżeli upload artefaktów był dostępny.
 9. Aby opublikować pliki przy wydaniu, utwórz i opublikuj release z tagiem, np. `v1.2.3`.
 
 Zależności builda są w `requirements-build.txt`. Zależności panelu webowego są w `requirements-web.txt`.

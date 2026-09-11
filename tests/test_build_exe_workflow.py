@@ -198,14 +198,19 @@ def test_local_build_is_plain_without_an_ocr_build_variant() -> None:
     assert "IncludeVision" not in batch_source
 
 
-def test_workflow_defines_exactly_three_supported_builds() -> None:
+def test_workflow_defines_migrator_build_and_artifact() -> None:
     source = workflow_source()
 
     assert source.count("target: local") == 1
     assert source.count("target: web\n") == 1
     assert source.count("target: web-ocr") == 1
+    assert source.count("target: migrator") == 1
     assert "web EXE without OCR" in source
     assert "web EXE with offline OCR" in source
+    assert "standalone legacy migrator EXE" in source
+    assert "Build migrator EXE with PyInstaller" in source
+    assert "PicSyncra-Migrator.exe" in source
+    assert "name: PicSyncra-migrator" in source
 
 
 def test_plain_web_build_disables_ocr_at_runtime() -> None:
