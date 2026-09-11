@@ -51,6 +51,7 @@ from ..common import (
     SQL_COLUMN_MAP_KEY,
     TRANSLATION_API_KEY,
     TRANSLATION_SETTINGS_KEY,
+    WEB_DISPLAY_SETTINGS_KEY,
     ft,
     p,
     u,
@@ -520,6 +521,13 @@ def _processing_settings() -> Dict[str, Any]:
     return config._normalize_processing_settings(
         config.CONFIG.get(PROCESSING_SETTINGS_KEY, {})
     )
+
+
+def _configured_time_zone_name() -> str:
+    display = config.normalize_web_display_settings(
+        config.CONFIG.get(WEB_DISPLAY_SETTINGS_KEY, {})
+    )
+    return str(display.get("time_zone") or "UTC")
 
 
 def _active_product_field_settings() -> Dict[str, Dict[str, object]]:
@@ -4672,7 +4680,10 @@ def _public_similar_candidate(candidate: Any) -> Dict[str, Any]:
 
 def _run_due_sqlite_backups_once() -> Dict[str, Any]:
     settings_payload = storage_settings.load_backup_settings()
-    slots = sqlite_backup.due_schedule_slots(settings_payload)
+    slots = sqlite_backup.due_schedule_slots(
+        settings_payload,
+        time_zone_name=_configured_time_zone_name(),
+    )
     if not slots:
         return {"created": 0, "slots": []}
     backup_dir = storage_settings.resolve_backup_dir()
@@ -5631,7 +5642,7 @@ def create_app() -> FastAPI:
             "processing": _processing_settings(),
             "security": _security_settings(),
             "web_display": config.normalize_web_display_settings(
-                config.CONFIG.get("web_display", {})
+                config.CONFIG.get(WEB_DISPLAY_SETTINGS_KEY, {})
             ),
             "runtime_warning": runtime_info.get("warning"),
             "slots": slots,

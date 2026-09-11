@@ -10,6 +10,7 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
+from zoneinfo import ZoneInfo
 
 from .sqlite_coordination import database_activity
 
@@ -22,6 +23,20 @@ def _utc_datetime(value: datetime | None = None) -> datetime:
     if current.tzinfo is None:
         current = current.replace(tzinfo=timezone.utc)
     return current.astimezone(timezone.utc)
+
+
+def _schedule_datetime(
+    value: datetime | None = None,
+    *,
+    time_zone_name: object = "UTC",
+) -> datetime:
+    """Return the instant represented by ``value`` in the configured schedule zone."""
+
+    try:
+        target_zone = ZoneInfo(str(time_zone_name or "UTC"))
+    except Exception:
+        target_zone = timezone.utc
+    return _utc_datetime(value).astimezone(target_zone)
 
 
 def now_iso(now: datetime | None = None) -> str:
@@ -212,8 +227,10 @@ def schedule_slot(now: datetime) -> str:
 def due_schedule_slots(
     settings_payload: dict[str, Any],
     now: datetime | None = None,
+    *,
+    time_zone_name: object = "UTC",
 ) -> list[str]:
-    value = _utc_datetime(now)
+    value = _schedule_datetime(now, time_zone_name=time_zone_name)
     if not settings_payload.get("enabled"):
         return []
     day = WEEKDAY_KEYS[value.weekday()]
