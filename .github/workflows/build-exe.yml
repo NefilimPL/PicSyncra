@@ -106,6 +106,8 @@ jobs:
         include:
           - target: local
             name: desktop EXE
+          - target: migrator
+            name: standalone legacy migrator EXE
           - target: web
             name: web EXE without OCR
           - target: web-ocr
@@ -264,7 +266,7 @@ jobs:
         run: |
           & $env:PICSYNCRA_PYTHON -m pip install --upgrade pip
           & $env:PICSYNCRA_PYTHON -m pip install -r requirements-build.txt
-          if ("${{ matrix.target }}" -ne "local") {
+          if ("${{ matrix.target }}" -eq "web" -or "${{ matrix.target }}" -eq "web-ocr") {
             & $env:PICSYNCRA_PYTHON -m pip install -r requirements-web.txt
           }
           if ("${{ matrix.target }}" -eq "web-ocr") {
@@ -291,6 +293,11 @@ jobs:
             --file-description "PicSyncra web manager" `
             --internal-name "PicSyncra-WEB" `
             --original-filename "PicSyncra-WEB.exe"
+          & $env:PICSYNCRA_PYTHON tools/generate_windows_version_info.py `
+            --output "build/version-info/PicSyncra-Migrator.version.txt" `
+            --file-description "PicSyncra legacy SQLite migrator" `
+            --internal-name "PicSyncra-Migrator" `
+            --original-filename "PicSyncra-Migrator.exe"
 
       - name: Build local EXE with PyInstaller
         if: matrix.target == 'local'
@@ -317,8 +324,28 @@ jobs:
           Copy-Item -Path "picsyncra/Localization" -Destination "dist/output/Localization" -Recurse -Force
           Copy-Item -Path "picsyncra/VERSION" -Destination "dist/output/VERSION" -Force
 
+      - name: Build migrator EXE with PyInstaller
+        if: matrix.target == 'migrator'
+        shell: pwsh
+        env:
+          PICSYNCRA_HEADLESS: "1"
+          PYINSTALLER_BUILD: "1"
+        run: |
+          & $env:PICSYNCRA_PYTHON -m PyInstaller --noconfirm --clean --log-level=WARN `
+            --name PicSyncra-Migrator `
+            --noconsole `
+            --onefile `
+            --distpath "dist/output" `
+            --workpath "build/output-migrator" `
+            --icon "build/icons/PIC9_LOCAL.ico" `
+            --version-file "build/version-info/PicSyncra-Migrator.version.txt" `
+            --hidden-import picsyncra.offline_migrator_processes `
+            --add-data "picsyncra/VERSION;picsyncra" `
+            --add-data "pic/PIC9_LOCAL.png;pic" `
+            PicSyncra-Migrator.pyw
+
       - name: Build web manager EXE with PyInstaller
-        if: matrix.target != 'local'
+        if: matrix.target == 'web' || matrix.target == 'web-ocr'
         shell: pwsh
         env:
           PICSYNCRA_HEADLESS: "1"
@@ -372,7 +399,7 @@ jobs:
             PicSyncra-WEB.pyw
 
       - name: Package web runtime
-        if: matrix.target != 'local'
+        if: matrix.target == 'web' || matrix.target == 'web-ocr'
         shell: pwsh
         run: |
           $webRoot = "dist/web/PicSyncra-web-${{ matrix.target }}"
@@ -394,12 +421,19 @@ jobs:
           Copy-Item -Path "dist/output/PicSyncra.exe" -Destination "dist/release/PicSyncra-$env:PICSYNCRA_ASSET_VERSION.exe" -Force
 
       - name: Prepare web release assets
-        if: github.event_name == 'release' && matrix.target != 'local'
+        if: github.event_name == 'release' && (matrix.target == 'web' || matrix.target == 'web-ocr')
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path "dist/release" -Force | Out-Null
           Copy-Item -Path "dist/output/PicSyncra-WEB.exe" -Destination "dist/release/PicSyncra-WEB-${{ matrix.target }}-$env:PICSYNCRA_ASSET_VERSION.exe" -Force
           Copy-Item -Path "dist/web/PicSyncra-web-${{ matrix.target }}-$env:PICSYNCRA_ASSET_VERSION.zip" -Destination "dist/release/PicSyncra-web-${{ matrix.target }}-$env:PICSYNCRA_ASSET_VERSION.zip" -Force
+
+      - name: Prepare migrator release asset
+        if: github.event_name == 'release' && matrix.target == 'migrator'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path "dist/release" -Force | Out-Null
+          Copy-Item -Path "dist/output/PicSyncra-Migrator.exe" -Destination "dist/release/PicSyncra-Migrator-$env:PICSYNCRA_ASSET_VERSION.exe" -Force
 
       - name: Prepare artifact upload probe
         shell: pwsh
@@ -427,9 +461,19 @@ jobs:
           path: dist/output/PicSyncra.exe
           retention-days: 7
 
+      - name: Upload migrator EXE artifact
+        id: upload-migrator
+        if: matrix.target == 'migrator' && steps.artifact-probe.outcome == 'success'
+        uses: actions/upload-artifact@v7
+        continue-on-error: true
+        with:
+          name: PicSyncra-migrator
+          path: dist/output/PicSyncra-Migrator.exe
+          retention-days: 7
+
       - name: Upload web EXE artifact
         id: upload-web-exe
-        if: matrix.target != 'local' && steps.artifact-probe.outcome == 'success'
+        if: (matrix.target == 'web' || matrix.target == 'web-ocr') && steps.artifact-probe.outcome == 'success'
         uses: actions/upload-artifact@v7
         continue-on-error: true
         with:
@@ -439,7 +483,7 @@ jobs:
 
       - name: Upload web artifact
         id: upload-web
-        if: matrix.target != 'local' && steps.artifact-probe.outcome == 'success'
+        if: (matrix.target == 'web' || matrix.target == 'web-ocr') && steps.artifact-probe.outcome == 'success'
         uses: actions/upload-artifact@v7
         continue-on-error: true
         with:
@@ -459,8 +503,14 @@ jobs:
         run: |
           "Artifact upload was skipped or failed for PicSyncra-windows. The EXE build completed; check upload-artifact logs for quota or permission details." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
 
+      - name: Report failed migrator artifact upload
+        if: matrix.target == 'migrator' && steps.artifact-probe.outcome == 'success' && steps.upload-migrator.outcome != 'success'
+        shell: pwsh
+        run: |
+          "Artifact upload was skipped or failed for PicSyncra-migrator. The EXE build completed; check upload-artifact logs for quota or permission details." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+
       - name: Report failed web artifact upload
-        if: matrix.target != 'local' && steps.artifact-probe.outcome == 'success' && (steps.upload-web-exe.outcome != 'success' || steps.upload-web.outcome != 'success')
+        if: (matrix.target == 'web' || matrix.target == 'web-ocr') && steps.artifact-probe.outcome == 'success' && (steps.upload-web-exe.outcome != 'success' || steps.upload-web.outcome != 'success')
         shell: pwsh
         run: |
           "Artifact upload was skipped or partially failed for web outputs. The EXE build completed; check upload-artifact logs for quota or permission details." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
@@ -509,7 +559,7 @@ jobs:
 
       - name: Publish web assets to release
         id: publish-web-release-assets
-        if: github.event_name == 'release' && matrix.target != 'local'
+        if: github.event_name == 'release' && (matrix.target == 'web' || matrix.target == 'web-ocr')
         continue-on-error: true
         uses: actions/github-script@v9
         with:
@@ -550,6 +600,44 @@ jobs:
               });
             }
 
+      - name: Publish migrator asset to release
+        id: publish-migrator-release-asset
+        if: github.event_name == 'release' && matrix.target == 'migrator'
+        continue-on-error: true
+        uses: actions/github-script@v9
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const { owner, repo } = context.repo;
+            const release_id = context.payload.release.id;
+            const assetPath = `dist/release/PicSyncra-Migrator-${process.env.PICSYNCRA_ASSET_VERSION}.exe`;
+            if (!fs.existsSync(assetPath)) {
+              throw new Error(`Release asset file does not exist: ${assetPath}`);
+            }
+            const name = path.basename(assetPath);
+            const existingAssets = await github.paginate(
+              github.rest.repos.listReleaseAssets,
+              { owner, repo, release_id, per_page: 100 },
+            );
+            const existing = existingAssets.find((asset) => asset.name === name);
+            if (existing) {
+              await github.rest.repos.deleteReleaseAsset({ owner, repo, asset_id: existing.id });
+            }
+            const data = fs.readFileSync(assetPath);
+            await github.rest.repos.uploadReleaseAsset({
+              owner,
+              repo,
+              release_id,
+              name,
+              data,
+              headers: {
+                'content-type': 'application/octet-stream',
+                'content-length': data.length,
+              },
+            });
+
       - name: Report skipped local release asset upload
         if: github.event_name == 'release' && matrix.target == 'local' && steps.publish-local-release-asset.outcome != 'success'
         shell: pwsh
@@ -557,7 +645,13 @@ jobs:
           "Release asset upload was skipped or failed for the local EXE. The EXE build completed; check GitHub API upload logs for quota or permission details." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
 
       - name: Report skipped web release asset upload
-        if: github.event_name == 'release' && matrix.target != 'local' && steps.publish-web-release-assets.outcome != 'success'
+        if: github.event_name == 'release' && (matrix.target == 'web' || matrix.target == 'web-ocr') && steps.publish-web-release-assets.outcome != 'success'
         shell: pwsh
         run: |
           "Release asset upload was skipped or failed for web outputs. The EXE build completed; check GitHub API upload logs for quota or permission details." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+
+      - name: Report skipped migrator release asset upload
+        if: github.event_name == 'release' && matrix.target == 'migrator' && steps.publish-migrator-release-asset.outcome != 'success'
+        shell: pwsh
+        run: |
+          "Release asset upload was skipped or failed for PicSyncra-Migrator. The EXE build completed; check GitHub API upload logs for quota or permission details." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
