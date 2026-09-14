@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from importlib import metadata
 import json
 from pathlib import Path
+import re
 import subprocess
+import sys
 from typing import Mapping
 
 
@@ -29,6 +32,38 @@ MODULES = (
     ModuleDefinition("generator_web", "Generator web", ("Generator exe/build_web_exe.ps1",)),
 )
 MODULES_BY_ID = {module.id: module for module in MODULES}
+
+REQUIREMENT_FILES = (
+    "requirements-build.txt",
+    "requirements-web.txt",
+    "requirements-qt.txt",
+    "requirements-vision.txt",
+)
+
+PACKAGE_GITHUB_URLS = {
+    "certifi": "https://github.com/certifi/python-certifi",
+    "fastapi": "https://github.com/fastapi/fastapi",
+    "mysql-connector-python": "https://github.com/mysql/mysql-connector-python",
+    "msal": "https://github.com/AzureAD/microsoft-authentication-library-for-python",
+    "numpy": "https://github.com/numpy/numpy",
+    "opencv-contrib-python": "https://github.com/opencv/opencv-python",
+    "openpyxl": "https://github.com/theorchard/openpyxl",
+    "paddleocr": "https://github.com/PaddlePaddle/PaddleOCR",
+    "paddlepaddle": "https://github.com/PaddlePaddle/Paddle",
+    "paddlex": "https://github.com/PaddlePaddle/PaddleX",
+    "pillow": "https://github.com/python-pillow/Pillow",
+    "pyinstaller": "https://github.com/pyinstaller/pyinstaller",
+    "pyside6": "https://github.com/pyside/pyside-setup",
+    "pyodbc": "https://github.com/mkleehammer/pyodbc",
+    "pystray": "https://github.com/moses-palmer/pystray",
+    "python-multipart": "https://github.com/Kludex/python-multipart",
+    "requests": "https://github.com/psf/requests",
+    "tkinterdnd2": "https://github.com/pmgagne/tkinterdnd2",
+    "tzdata": "https://github.com/python/tzdata",
+    "uvicorn": "https://github.com/encode/uvicorn",
+}
+
+_REQUIREMENT_NAME = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^]]+\])?")
 
 
 def _git(repo_root: Path, *args: str) -> str:
@@ -62,6 +97,44 @@ def _manifest_module(repo_root: Path, module: ModuleDefinition) -> dict[str, str
     }
 
 
+def _dependency_name(requirement: str) -> str:
+    match = _REQUIREMENT_NAME.match(requirement)
+    return match.group(1) if match else ""
+
+
+def _installed_package_version(package: str) -> str:
+    try:
+        return metadata.version(package)
+    except metadata.PackageNotFoundError:
+        return ""
+
+
+def _manifest_dependencies(repo_root: Path) -> list[dict[str, str]]:
+    dependencies = []
+    seen = set()
+    for filename in REQUIREMENT_FILES:
+        try:
+            lines = (repo_root / filename).read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            requirement = line.split("#", maxsplit=1)[0].strip()
+            package = _dependency_name(requirement)
+            normalized_package = package.lower().replace("_", "-").replace(".", "-")
+            if not package or normalized_package in seen:
+                continue
+            seen.add(normalized_package)
+            dependencies.append(
+                {
+                    "name": package,
+                    "requirement": requirement,
+                    "installed_version": _installed_package_version(package),
+                    "github_url": PACKAGE_GITHUB_URLS.get(normalized_package, ""),
+                }
+            )
+    return dependencies
+
+
 def build_manifest(
     repo_root: Path, *, build_variant: str, now: datetime
 ) -> dict[str, object]:
@@ -70,6 +143,11 @@ def build_manifest(
         "build_variant": build_variant,
         "generated_at": now.astimezone(UTC).isoformat(),
         "repository_commit": _git(repo_root, "rev-parse", "HEAD"),
+        "python": {
+            "version": sys.version.split()[0],
+            "implementation": sys.implementation.name,
+        },
+        "dependencies": _manifest_dependencies(repo_root),
         "modules": [_manifest_module(repo_root, module) for module in MODULES],
     }
 
@@ -112,11 +190,19 @@ def _manifest_is_valid(manifest: Mapping[str, object] | None) -> bool:
     )
 
 
-def _build_details(manifest: Mapping[str, object]) -> dict[str, str]:
+def _build_details(manifest: Mapping[str, object]) -> dict[str, object]:
+    python = manifest.get("python")
+    dependencies = manifest.get("dependencies")
     return {
         "build_variant": str(manifest.get("build_variant") or ""),
         "generated_at": str(manifest.get("generated_at") or ""),
         "repository_commit": str(manifest.get("repository_commit") or ""),
+        "python": dict(python) if isinstance(python, Mapping) else {},
+        "dependencies": [
+            dict(item) for item in dependencies if isinstance(item, Mapping)
+        ]
+        if isinstance(dependencies, list)
+        else [],
     }
 
 

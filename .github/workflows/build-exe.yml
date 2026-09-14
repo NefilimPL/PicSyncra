@@ -320,6 +320,14 @@ jobs:
             --internal-name "PicSyncra-Migrator" `
             --original-filename "PicSyncra-Migrator.exe"
 
+      - name: Generate module build manifest
+        shell: pwsh
+        run: |
+          & $env:PICSYNCRA_PYTHON tools/generate_module_build_manifest.py `
+            --repo-root "." `
+            --build-variant "${{ matrix.target }}" `
+            --output "build/module_build_manifest.json"
+
       - name: Build local EXE with PyInstaller
         if: matrix.target == 'local'
         shell: pwsh
@@ -340,6 +348,7 @@ jobs:
             --collect-data certifi `
             --add-data "picsyncra/Localization;picsyncra/Localization" `
             --add-data "picsyncra/VERSION;picsyncra" `
+            --add-data "build/module_build_manifest.json;picsyncra" `
             --add-data "pic/PIC9_LOCAL.png;pic" `
             PicSyncra.pyw
           Copy-Item -Path "picsyncra/Localization" -Destination "dist/output/Localization" -Recurse -Force
@@ -362,6 +371,7 @@ jobs:
             --version-file "build/version-info/PicSyncra-Migrator.version.txt" `
             --hidden-import picsyncra.offline_migrator_processes `
             --add-data "picsyncra/VERSION;picsyncra" `
+            --add-data "build/module_build_manifest.json;picsyncra" `
             --add-data "pic/PIC9_LOCAL.png;pic" `
             PicSyncra-Migrator.pyw
 
@@ -415,6 +425,7 @@ jobs:
             --add-data "picsyncra/browser_extension;picsyncra/browser_extension" `
             --add-data "picsyncra/Localization;picsyncra/Localization" `
             --add-data "picsyncra/VERSION;picsyncra" `
+            --add-data "build/module_build_manifest.json;picsyncra" `
             --add-data "pic/PIC9_WEB.png;pic" `
             --add-data "pic/PIC9_WEB-OCR.png;pic" `
             PicSyncra-WEB.pyw

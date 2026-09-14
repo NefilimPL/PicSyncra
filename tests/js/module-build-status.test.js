@@ -39,6 +39,29 @@ test("keeps embedded build metadata when no local repository is available", () =
   assert.equal(snapshot.build.repository_commit, "abc123");
 });
 
+test("keeps the build Python and additional package versions", () => {
+  const status = loadModuleBuildStatus();
+  const snapshot = status.normalizeSnapshot({
+    build: {
+      python: { version: "3.13.2", implementation: "cpython" },
+      dependencies: [{
+        name: "fastapi",
+        requirement: "fastapi>=0.115",
+        installed_version: "0.115.6",
+        github_url: "https://github.com/fastapi/fastapi",
+      }],
+    },
+  });
+
+  assert.deepEqual(snapshot.build.python, { version: "3.13.2", implementation: "cpython" });
+  assert.deepEqual(snapshot.build.dependencies, [{
+    name: "fastapi",
+    requirement: "fastapi>=0.115",
+    installed_version: "0.115.6",
+    github_url: "https://github.com/fastapi/fastapi",
+  }]);
+});
+
 test("creates a GitHub commit URL only for a complete commit hash", () => {
   const status = loadModuleBuildStatus();
   const commit = "a".repeat(40);

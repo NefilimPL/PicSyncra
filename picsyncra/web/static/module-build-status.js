@@ -20,10 +20,24 @@
 
   function normalizeBuild(value) {
     if (!value || typeof value !== "object") return null;
+    const python = value.python && typeof value.python === "object" ? value.python : {};
     return {
       build_variant: text(value.build_variant),
       generated_at: text(value.generated_at),
       repository_commit: text(value.repository_commit),
+      python: {
+        version: text(python.version),
+        implementation: text(python.implementation),
+      },
+      dependencies: Array.isArray(value.dependencies) ? value.dependencies.map((dependency) => {
+        const source = dependency && typeof dependency === "object" ? dependency : {};
+        return {
+          name: text(source.name),
+          requirement: text(source.requirement),
+          installed_version: text(source.installed_version),
+          github_url: text(source.github_url),
+        };
+      }) : [],
     };
   }
 

@@ -14745,6 +14745,56 @@ function appendModuleBuildStatusRow(tableBody, module, statusLabel, utilities) {
   tableBody.appendChild(row);
 }
 
+function appendModuleBuildDependencies(panel, dependencies) {
+  if (!dependencies.length) return;
+  const details = document.createElement("details");
+  const summary = document.createElement("summary");
+  const tableWrapper = document.createElement("div");
+  const table = document.createElement("table");
+  const head = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  const body = document.createElement("tbody");
+
+  details.className = "module-build-dependencies";
+  summary.textContent = `Dodatkowe pakiety (${dependencies.length})`;
+  tableWrapper.className = "module-build-status-table-wrapper";
+  table.className = "module-build-status-table module-build-dependencies-table";
+  for (const label of ["Pakiet", "Deklaracja", "Wersja buildu", "GitHub"]) {
+    const cell = document.createElement("th");
+    cell.scope = "col";
+    cell.textContent = label;
+    headRow.appendChild(cell);
+  }
+  head.appendChild(headRow);
+
+  for (const dependency of dependencies) {
+    const row = document.createElement("tr");
+    const name = document.createElement("td");
+    const requirement = document.createElement("td");
+    const installedVersion = document.createElement("td");
+    const github = document.createElement("td");
+    name.textContent = moduleBuildStatusValue(dependency.name);
+    requirement.textContent = moduleBuildStatusValue(dependency.requirement);
+    installedVersion.textContent = dependency.installed_version || "Nie zainstalowano w tym buildzie";
+    if (/^https:\/\/github\.com\//i.test(dependency.github_url)) {
+      const link = document.createElement("a");
+      link.href = dependency.github_url;
+      link.target = "_blank";
+      link.rel = "noreferrer";
+      link.textContent = "GitHub";
+      github.appendChild(link);
+    } else {
+      github.textContent = "Brak linku";
+    }
+    row.append(name, requirement, installedVersion, github);
+    body.appendChild(row);
+  }
+  table.append(head, body);
+  tableWrapper.appendChild(table);
+  details.append(summary, tableWrapper);
+  panel.appendChild(details);
+}
+
 async function loadModuleBuildStatus() {
   const utilities = moduleBuildStatusUtilities();
   if (!utilities) {
@@ -14819,6 +14869,12 @@ function renderSettingsModuleStatus() {
         ["Wariant", build.build_variant],
         ["Build", build.generated_at],
         ["Commit repozytorium", build.repository_commit],
+        [
+          "Python buildu",
+          build.python.version
+            ? `${build.python.version}${build.python.implementation ? ` (${build.python.implementation})` : ""}`
+            : "",
+        ],
       ]) {
         const item = document.createElement("div");
         const itemLabel = document.createElement("span");
@@ -14842,6 +14898,10 @@ function renderSettingsModuleStatus() {
       note.className = "settings-note";
       note.textContent = "Nie znaleziono lokalnego repozytorium Git, dlatego widoczne sa tylko dane wbudowane w program.";
       panel.appendChild(note);
+    }
+
+    if (build) {
+      appendModuleBuildDependencies(panel, build.dependencies);
     }
 
     const tableWrapper = document.createElement("div");

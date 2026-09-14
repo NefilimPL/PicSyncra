@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -37,6 +38,41 @@ def test_build_manifest_includes_registered_ocr_and_generator_modules(monkeypatc
         set(item) == {"id", "label", "commit", "committed_at"}
         for item in manifest["modules"]
     )
+
+
+def test_build_manifest_records_declared_dependencies_and_build_python(monkeypatch):
+    module_build_status = importlib.import_module(
+        "picsyncra.services.module_build_status"
+    )
+    monkeypatch.setattr(module_build_status, "_git", lambda *_args: "")
+    monkeypatch.setattr(
+        module_build_status,
+        "_installed_package_version",
+        lambda package: {"fastapi": "0.115.6", "pillow": "11.0.0"}.get(package, ""),
+        raising=False,
+    )
+
+    manifest = module_build_status.build_manifest(
+        Path(__file__).resolve().parents[1],
+        build_variant="web",
+        now=datetime(2026, 9, 14, tzinfo=UTC),
+    )
+    dependencies = {item["name"]: item for item in manifest["dependencies"]}
+
+    assert manifest["python"] == {
+        "version": sys.version.split()[0],
+        "implementation": sys.implementation.name,
+    }
+    assert dependencies["fastapi"] == {
+        "name": "fastapi",
+        "requirement": "fastapi>=0.115",
+        "installed_version": "0.115.6",
+        "github_url": "https://github.com/fastapi/fastapi",
+    }
+    assert dependencies["tkinterdnd2"]["github_url"] == (
+        "https://github.com/pmgagne/tkinterdnd2"
+    )
+    assert sum(item["name"] == "pillow" for item in manifest["dependencies"]) == 1
 
 
 def test_snapshot_marks_changed_module_for_rebuild(monkeypatch, tmp_path):

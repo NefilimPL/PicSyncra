@@ -149,6 +149,19 @@ def test_all_exe_builds_request_a_generated_module_manifest() -> None:
         assert "@ModuleBuildManifestArguments" in source
 
 
+def test_actions_build_embeds_module_manifest_for_every_build_variant() -> None:
+    source = workflow_source()
+
+    assert "Generate module build manifest" in source
+    assert "tools/generate_module_build_manifest.py" in source
+    assert '--build-variant "${{ matrix.target }}"' in source
+    assert '--output "build/module_build_manifest.json"' in source
+    assert '--add-data "build/module_build_manifest.json;picsyncra"' in source
+    assert source.index("Generate module build manifest") < source.index(
+        "Build local EXE with PyInstaller"
+    )
+
+
 def test_web_build_supports_opt_in_vision_engine_and_embedded_models() -> None:
     common_source = BUILD_COMMON.read_text(encoding="utf-8")
     build_source = WEB_BUILD.read_text(encoding="utf-8")
