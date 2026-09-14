@@ -269,6 +269,8 @@ def test_large_ocr_release_asset_uses_extended_timeout_upload() -> None:
     assert "$release.upload_url" in ocr_upload_step
     assert "github.event.release.upload_url" not in ocr_upload_step
     assert "Invalid release upload URL" in ocr_upload_step
+    assert '$targetUrl = "${uploadUrl}?name=$encodedAssetName"' in ocr_upload_step
+    assert "TryCreate($targetUrl, [UriKind]::Absolute" in ocr_upload_step
     assert "continue-on-error: true" not in ocr_upload_step
     assert "-TimeoutSec 1800" in ocr_upload_step
     assert "PicSyncra-WEB-OCR" in ocr_upload_step

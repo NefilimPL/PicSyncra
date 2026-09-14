@@ -643,6 +643,16 @@ jobs:
           ) {
             throw "Invalid release upload URL returned by GitHub API."
           }
+          $encodedAssetName = [System.Uri]::EscapeDataString($assetName)
+          $targetUrl = "${uploadUrl}?name=$encodedAssetName"
+          $targetUri = $null
+          if (
+            -not [Uri]::TryCreate($targetUrl, [UriKind]::Absolute, [ref]$targetUri) -or
+            $targetUri.Scheme -ne "https" -or
+            [string]::IsNullOrWhiteSpace($targetUri.Host)
+          ) {
+            throw "Invalid release asset upload URL returned by GitHub API."
+          }
 
           for ($attempt = 1; $attempt -le 3; $attempt++) {
             $existingAssets = @(Invoke-RestMethod -Method Get -Uri $assetsUrl -Headers $headers)
@@ -656,8 +666,7 @@ jobs:
             }
 
             try {
-              $encodedAssetName = [System.Uri]::EscapeDataString($assetName)
-              Invoke-WebRequest -Method Post -Uri "$uploadUrl?name=$encodedAssetName" -Headers $headers -ContentType "application/octet-stream" -InFile $assetPath -TimeoutSec 1800 | Out-Null
+              Invoke-WebRequest -Method Post -Uri $targetUri.AbsoluteUri -Headers $headers -ContentType "application/octet-stream" -InFile $assetPath -TimeoutSec 1800 | Out-Null
               exit 0
             } catch {
               if ($attempt -eq 3) {
