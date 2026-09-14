@@ -611,10 +611,10 @@ jobs:
       - name: Publish OCR web asset to release
         id: publish-ocr-web-release-asset
         if: github.event_name == 'release' && matrix.target == 'web-ocr'
-        continue-on-error: true
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_API_URL: ${{ github.api_url }}
         run: |
           $ErrorActionPreference = "Stop"
           $assetPath = "dist/release/PicSyncra-WEB-OCR-$env:PICSYNCRA_ASSET_VERSION.exe"
@@ -629,8 +629,17 @@ jobs:
             "X-GitHub-Api-Version" = "2022-11-28"
             "User-Agent" = "PicSyncra-release-upload"
           }
-          $assetsUrl = "https://api.github.com/repos/${{ github.repository }}/releases/${{ github.event.release.id }}/assets?per_page=100"
-          $uploadUrl = ("${{ github.event.release.upload_url }}" -replace '\{\?name,label\}$', "")
+          $releaseUrl = "$env:GITHUB_API_URL/repos/${{ github.repository }}/releases/${{ github.event.release.id }}"
+          $release = Invoke-RestMethod -Method Get -Uri $releaseUrl -Headers $headers
+          $assetsUrl = "$($release.assets_url)?per_page=100"
+          $uploadUrl = ([string]$release.upload_url -replace '\{\?name,label\}$', "")
+          $uploadUri = $null
+          if (
+            -not [Uri]::TryCreate($uploadUrl, [UriKind]::Absolute, [ref]$uploadUri) -or
+            $uploadUri.Scheme -ne "https"
+          ) {
+            throw "Invalid release upload URL returned by GitHub API."
+          }
 
           for ($attempt = 1; $attempt -le 3; $attempt++) {
             $existingAssets = @(Invoke-RestMethod -Method Get -Uri $assetsUrl -Headers $headers)

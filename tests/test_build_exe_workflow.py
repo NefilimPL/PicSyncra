@@ -258,12 +258,20 @@ def test_web_release_assets_have_consistent_names_without_runtime_zip() -> None:
 
 def test_large_ocr_release_asset_uses_extended_timeout_upload() -> None:
     source = workflow_source()
+    step_start = source.index("      - name: Publish OCR web asset to release")
+    step_end = source.index("      - name: Publish migrator asset to release", step_start)
+    ocr_upload_step = source[step_start:step_end]
 
-    assert "Publish OCR web asset to release" in source
-    assert "if: github.event_name == 'release' && matrix.target == 'web-ocr'" in source
-    assert "GITHUB_TOKEN: ${{ github.token }}" in source
-    assert "-TimeoutSec 1800" in source
-    assert "PicSyncra-WEB-OCR" in source
+    assert "if: github.event_name == 'release' && matrix.target == 'web-ocr'" in ocr_upload_step
+    assert "GITHUB_TOKEN: ${{ github.token }}" in ocr_upload_step
+    assert "GITHUB_API_URL: ${{ github.api_url }}" in ocr_upload_step
+    assert "Invoke-RestMethod -Method Get -Uri $releaseUrl" in ocr_upload_step
+    assert "$release.upload_url" in ocr_upload_step
+    assert "github.event.release.upload_url" not in ocr_upload_step
+    assert "Invalid release upload URL" in ocr_upload_step
+    assert "continue-on-error: true" not in ocr_upload_step
+    assert "-TimeoutSec 1800" in ocr_upload_step
+    assert "PicSyncra-WEB-OCR" in ocr_upload_step
 
 
 def test_plain_web_build_disables_ocr_at_runtime() -> None:
