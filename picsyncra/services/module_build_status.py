@@ -10,6 +10,8 @@ import subprocess
 import sys
 from typing import Mapping
 
+from ..github_status import github_branch_module_snapshot
+
 
 @dataclass(frozen=True)
 class ModuleDefinition:
@@ -136,13 +138,14 @@ def _manifest_dependencies(repo_root: Path) -> list[dict[str, str]]:
 
 
 def build_manifest(
-    repo_root: Path, *, build_variant: str, now: datetime
+    repo_root: Path, *, build_variant: str, now: datetime, source_ref: str = ""
 ) -> dict[str, object]:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "build_variant": build_variant,
         "generated_at": now.astimezone(UTC).isoformat(),
         "repository_commit": _git(repo_root, "rev-parse", "HEAD"),
+        "source_ref": source_ref.strip() or _git(repo_root, "branch", "--show-current"),
         "python": {
             "version": sys.version.split()[0],
             "implementation": sys.implementation.name,
@@ -185,7 +188,7 @@ def _module_git_state(
 def _manifest_is_valid(manifest: Mapping[str, object] | None) -> bool:
     return bool(
         manifest
-        and manifest.get("schema_version") == 1
+        and manifest.get("schema_version") in {1, 2}
         and isinstance(manifest.get("modules"), list)
     )
 
@@ -197,6 +200,7 @@ def _build_details(manifest: Mapping[str, object]) -> dict[str, object]:
         "build_variant": str(manifest.get("build_variant") or ""),
         "generated_at": str(manifest.get("generated_at") or ""),
         "repository_commit": str(manifest.get("repository_commit") or ""),
+        "source_ref": str(manifest.get("source_ref") or ""),
         "python": dict(python) if isinstance(python, Mapping) else {},
         "dependencies": [
             dict(item) for item in dependencies if isinstance(item, Mapping)
@@ -209,8 +213,8 @@ def _build_details(manifest: Mapping[str, object]) -> dict[str, object]:
 def _public_module_row(
     item: Mapping[str, object],
     *,
-    local_commit: str,
-    local_committed_at: str,
+    github_commit: str,
+    github_committed_at: str,
     status: str,
 ) -> dict[str, str]:
     return {
@@ -218,8 +222,8 @@ def _public_module_row(
         "label": str(item.get("label") or ""),
         "build_commit": str(item.get("commit") or ""),
         "build_committed_at": str(item.get("committed_at") or ""),
-        "local_commit": local_commit,
-        "local_committed_at": local_committed_at,
+        "github_commit": github_commit,
+        "github_committed_at": github_committed_at,
         "status": status,
     }
 
@@ -228,6 +232,8 @@ def module_status_snapshot(
     manifest: Mapping[str, object] | None,
     runtime_root: Path,
     env: Mapping[str, str],
+    *,
+    force_refresh: bool = False,
 ) -> dict[str, object]:
     if not _manifest_is_valid(manifest):
         return {
@@ -239,24 +245,46 @@ def module_status_snapshot(
 
     assert manifest is not None
     module_items = [item for item in manifest["modules"] if isinstance(item, Mapping)]
-    repo_root = _find_repo_root(
-        runtime_root, env.get("PICSYNCRA_REPOSITORY_ROOT", "")
-    )
-    if repo_root is None:
+    source_ref = str(manifest.get("source_ref") or "").strip()
+    if not source_ref:
         return {
             "build": _build_details(manifest),
-            "repository_status": "unavailable",
+            "repository_status": "source_ref_missing",
             "modules": [
                 _public_module_row(
                     item,
-                    local_commit="",
-                    local_committed_at="",
-                    status="repository_unavailable",
+                    github_commit="",
+                    github_committed_at="",
+                    status="source_ref_missing",
                 )
                 for item in module_items
             ],
         }
 
+    github_snapshot = github_branch_module_snapshot(
+        source_ref,
+        str(manifest.get("repository_commit") or ""),
+        {module.id: module.paths for module in MODULES},
+        force_refresh=force_refresh,
+    )
+    if not github_snapshot.get("available"):
+        return {
+            "build": _build_details(manifest),
+            "repository_status": "github_unavailable",
+            "repository_message": str(github_snapshot.get("message") or ""),
+            "modules": [
+                _public_module_row(
+                    item,
+                    github_commit="",
+                    github_committed_at="",
+                    status="github_unavailable",
+                )
+                for item in module_items
+            ],
+        }
+
+    github_modules = github_snapshot.get("modules")
+    relation = str(github_snapshot.get("relation_to_build") or "unknown")
     rows = []
     for item in module_items:
         module = MODULES_BY_ID.get(str(item.get("id") or ""))
@@ -264,31 +292,37 @@ def module_status_snapshot(
             rows.append(
                 _public_module_row(
                     item,
-                    local_commit="",
-                    local_committed_at="",
-                    status="repository_unavailable",
+                    github_commit="",
+                    github_committed_at="",
+                    status="github_unavailable",
                 )
             )
             continue
-        local_commit, local_committed_at, dirty = _module_git_state(repo_root, module)
+        github_item = (
+            github_modules.get(module.id, {})
+            if isinstance(github_modules, Mapping)
+            else {}
+        )
+        github_commit = str(github_item.get("commit") or "") if isinstance(github_item, Mapping) else ""
+        github_committed_at = str(github_item.get("committed_at") or "") if isinstance(github_item, Mapping) else ""
         build_commit = str(item.get("commit") or "")
         status = (
-            "uncommitted_changes"
-            if dirty
-            else "matching"
-            if local_commit == build_commit
-            else "rebuild_required"
+            "matching"
+            if github_commit and build_commit and github_commit == build_commit
+            else "update_available"
+            if relation == "ahead"
+            else "build_outside_source"
         )
         rows.append(
             _public_module_row(
                 item,
-                local_commit=local_commit,
-                local_committed_at=local_committed_at,
+                github_commit=github_commit,
+                github_committed_at=github_committed_at,
                 status=status,
             )
         )
     return {
         "build": _build_details(manifest),
-        "repository_status": "available",
+        "repository_status": "github_available",
         "modules": rows,
     }

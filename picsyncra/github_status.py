@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import json
 import time
 from typing import Any
+from urllib.parse import quote, urlencode
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -19,6 +20,7 @@ GITHUB_API_ROOT = "https://api.github.com"
 GITHUB_STATUS_CACHE_SECONDS = 15 * 60
 
 _CACHE: dict[str, object] = {"payload": None, "expires_at": 0.0}
+_BRANCH_MODULE_CACHE: dict[tuple[str, str, tuple[tuple[str, tuple[str, ...]], ...]], dict[str, object]] = {}
 
 
 class GitHubStatusError(Exception):
@@ -74,6 +76,126 @@ def _github_fetch_json(path: str) -> object:
         return json.loads(raw.decode("utf-8"))
     except Exception as exc:
         raise GitHubStatusError(0, "GitHub returned invalid JSON.") from exc
+
+
+def _branch_module_cache_key(
+    source_ref: str,
+    build_commit: str,
+    module_paths: dict[str, tuple[str, ...]],
+) -> tuple[str, str, tuple[tuple[str, tuple[str, ...]], ...]]:
+    return source_ref, build_commit, tuple(sorted(module_paths.items()))
+
+
+def _module_commit(raw: object) -> dict[str, str]:
+    if not isinstance(raw, list) or not raw or not isinstance(raw[0], dict):
+        return {"commit": "", "committed_at": ""}
+    item = raw[0]
+    commit = item.get("commit") if isinstance(item.get("commit"), dict) else {}
+    committer = commit.get("committer") if isinstance(commit.get("committer"), dict) else {}
+    return {
+        "commit": str(item.get("sha") or ""),
+        "committed_at": str(committer.get("date") or ""),
+    }
+
+
+def github_branch_module_snapshot(
+    source_ref: str,
+    build_commit: str,
+    module_paths: dict[str, tuple[str, ...]],
+    *,
+    force_refresh: bool = False,
+) -> dict[str, object]:
+    """Return the newest GitHub commit for every module on ``source_ref``."""
+    reference = str(source_ref or "").strip()
+    if not reference:
+        return {
+            "available": False,
+            "message": "Build nie zawiera nazwy gałęzi źródłowej.",
+            "source_ref": "",
+            "branch_commit": "",
+            "relation_to_build": "unknown",
+            "modules": {},
+        }
+    cache_key = _branch_module_cache_key(reference, str(build_commit or ""), module_paths)
+    now = time.time()
+    cached = _BRANCH_MODULE_CACHE.get(cache_key)
+    if (
+        not force_refresh
+        and cached is not None
+        and float(cached.get("expires_at") or 0) > now
+        and isinstance(cached.get("payload"), dict)
+    ):
+        return dict(cached["payload"])
+
+    encoded_ref = quote(reference, safe="")
+    try:
+        branch_raw = _github_fetch_json(
+            f"/repos/{GITHUB_REPO_FULL_NAME}/branches/{encoded_ref}"
+        )
+        if not isinstance(branch_raw, dict):
+            raise GitHubStatusError(0, "GitHub zwrócił niepoprawne dane gałęzi.")
+        branch_data = branch_raw.get("commit")
+        branch_commit = (
+            str(branch_data.get("sha") or "")
+            if isinstance(branch_data, dict)
+            else ""
+        )
+        if not branch_commit:
+            raise GitHubStatusError(0, "GitHub nie zwrócił commita gałęzi.")
+        comparison_raw = _github_fetch_json(
+            f"/repos/{GITHUB_REPO_FULL_NAME}/compare/"
+            f"{quote(str(build_commit or ''), safe='')}...{encoded_ref}"
+        )
+        relation = (
+            str(comparison_raw.get("status") or "unknown")
+            if isinstance(comparison_raw, dict)
+            else "unknown"
+        )
+        modules: dict[str, dict[str, str]] = {}
+        for module_id, paths in module_paths.items():
+            candidates = []
+            for path in paths:
+                query = urlencode({"sha": reference, "path": path, "per_page": 1})
+                candidate = _module_commit(
+                    _github_fetch_json(
+                        f"/repos/{GITHUB_REPO_FULL_NAME}/commits?{query}"
+                    )
+                )
+                if candidate["commit"]:
+                    candidates.append(candidate)
+            modules[module_id] = max(
+                candidates,
+                key=lambda item: item["committed_at"],
+                default={"commit": "", "committed_at": ""},
+            )
+    except GitHubStatusError as exc:
+        message = (
+            "Repozytorium jest prywatne albo gałąź jest niedostępna."
+            if exc.status_code == 404
+            else "Nie udało się odczytać danych GitHub."
+        )
+        return {
+            "available": False,
+            "message": message,
+            "source_ref": reference,
+            "branch_commit": "",
+            "relation_to_build": "unknown",
+            "modules": {},
+        }
+
+    payload: dict[str, object] = {
+        "available": True,
+        "message": "",
+        "source_ref": reference,
+        "branch_commit": branch_commit,
+        "relation_to_build": relation,
+        "modules": modules,
+    }
+    _BRANCH_MODULE_CACHE[cache_key] = {
+        "payload": dict(payload),
+        "expires_at": now + GITHUB_STATUS_CACHE_SECONDS,
+    }
+    return payload
 
 
 def _semantic_tuple(value: str) -> tuple[int, int, int] | None:

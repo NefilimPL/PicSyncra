@@ -74,3 +74,46 @@ def test_not_found_reports_private_or_unavailable() -> None:
     assert payload["private"] is True
     assert payload["message"] == "Repozytorium jest prywatne albo niedostepne."
     assert payload["update_available"] is False
+
+
+def test_branch_module_snapshot_uses_github_commits_for_the_selected_branch() -> None:
+    responses = {
+        "/repos/NefilimPL/PicSyncra/branches/dev": {
+            "name": "dev",
+            "commit": {"sha": "d" * 40},
+        },
+        f"/repos/NefilimPL/PicSyncra/compare/{'b' * 40}...dev": {
+            "status": "ahead",
+        },
+        "/repos/NefilimPL/PicSyncra/commits?sha=dev&path=picsyncra%2Fservices%2Fimage_dimensions.py&per_page=1": [
+            {
+                "sha": "n" * 40,
+                "commit": {"committer": {"date": "2026-09-14T11:22:47Z"}},
+            }
+        ],
+    }
+
+    def fake_fetch(path: str) -> object:
+        return responses[path]
+
+    with patch.object(github_status, "_github_fetch_json", side_effect=fake_fetch):
+        snapshot = github_status.github_branch_module_snapshot(
+            "dev",
+            "b" * 40,
+            {"ocr": ("picsyncra/services/image_dimensions.py",)},
+            force_refresh=True,
+        )
+
+    assert snapshot == {
+        "available": True,
+        "message": "",
+        "source_ref": "dev",
+        "branch_commit": "d" * 40,
+        "relation_to_build": "ahead",
+        "modules": {
+            "ocr": {
+                "commit": "n" * 40,
+                "committed_at": "2026-09-14T11:22:47Z",
+            }
+        },
+    }

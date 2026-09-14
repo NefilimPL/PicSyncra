@@ -12,9 +12,9 @@
       label: text(source.label),
       build_commit: text(source.build_commit),
       build_committed_at: text(source.build_committed_at),
-      local_commit: text(source.local_commit),
-      local_committed_at: text(source.local_committed_at),
-      status: text(source.status || "repository_unavailable"),
+      github_commit: text(source.github_commit),
+      github_committed_at: text(source.github_committed_at),
+      status: text(source.status || "github_unavailable"),
     };
   }
 
@@ -25,6 +25,7 @@
       build_variant: text(value.build_variant),
       generated_at: text(value.generated_at),
       repository_commit: text(value.repository_commit),
+      source_ref: text(value.source_ref),
       python: {
         version: text(python.version),
         implementation: text(python.implementation),
@@ -54,9 +55,10 @@
   function statusLabel(status) {
     return {
       matching: "Zgodny",
-      rebuild_required: "Wymaga ponownego builda",
-      uncommitted_changes: "Niezacommitowane zmiany",
-      repository_unavailable: "Repozytorium niedostepne",
+      update_available: "Dostepna aktualizacja",
+      build_outside_source: "Build spoza tej galezi",
+      github_unavailable: "Nie udalo sie odczytac GitHub",
+      source_ref_missing: "Brak galezi zrodlowej w buildzie",
       build_metadata_missing: "Brak danych buildu",
     }[status] || "Nieznany status";
   }

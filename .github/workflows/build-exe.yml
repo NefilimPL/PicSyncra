@@ -324,10 +324,13 @@ jobs:
 
       - name: Generate module build manifest
         shell: pwsh
+        env:
+          PICSYNCRA_SOURCE_REF: ${{ github.event_name == 'release' && github.event.release.target_commitish || github.ref_name }}
         run: |
           & $env:PICSYNCRA_PYTHON tools/generate_module_build_manifest.py `
             --repo-root "." `
             --build-variant "${{ matrix.target }}" `
+            --source-ref "$env:PICSYNCRA_SOURCE_REF" `
             --output "build/module_build_manifest.json"
 
       - name: Build local EXE with PyInstaller

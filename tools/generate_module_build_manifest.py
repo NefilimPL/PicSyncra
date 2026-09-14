@@ -20,6 +20,7 @@ def main() -> None:
     )
     parser.add_argument("--repo-root", required=True, type=Path)
     parser.add_argument("--build-variant", required=True)
+    parser.add_argument("--source-ref", default="")
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
 
@@ -27,6 +28,7 @@ def main() -> None:
         args.repo_root.resolve(),
         build_variant=args.build_variant,
         now=datetime.now(UTC),
+        source_ref=args.source_ref,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(

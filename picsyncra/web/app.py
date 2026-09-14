@@ -6408,7 +6408,9 @@ def create_app() -> FastAPI:
         return {"time_zones": config.available_display_time_zones()}
 
     @app.get("/api/settings/module-status")
-    def settings_module_status(request: Request) -> Dict[str, Any]:
+    def settings_module_status(
+        request: Request, refresh: bool = False
+    ) -> Dict[str, Any]:
         _require_admin(request)
         runtime_root = (
             Path(sys.executable).resolve().parent
@@ -6416,7 +6418,10 @@ def create_app() -> FastAPI:
             else Path(__file__).resolve().parents[2]
         )
         return module_status_snapshot(
-            load_packaged_module_manifest(), runtime_root, os.environ
+            load_packaged_module_manifest(),
+            runtime_root,
+            os.environ,
+            force_refresh=refresh,
         )
 
     @app.get("/api/settings/ocr/status")

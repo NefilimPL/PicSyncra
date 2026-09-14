@@ -14721,27 +14721,27 @@ function appendModuleBuildStatusRow(tableBody, module, statusLabel, utilities) {
   const row = document.createElement("tr");
   const moduleCell = document.createElement("td");
   const buildCell = document.createElement("td");
-  const localCell = document.createElement("td");
+  const githubCell = document.createElement("td");
   const statusCell = document.createElement("td");
   const title = document.createElement("strong");
   const identifier = document.createElement("small");
   const buildDate = document.createElement("small");
-  const localDate = document.createElement("small");
+  const githubDate = document.createElement("small");
   const badge = document.createElement("span");
 
   title.textContent = moduleBuildStatusValue(module.label);
   identifier.textContent = moduleBuildStatusValue(module.id);
   buildDate.textContent = moduleBuildStatusValue(module.build_committed_at);
-  localDate.textContent = moduleBuildStatusValue(module.local_committed_at);
+  githubDate.textContent = moduleBuildStatusValue(module.github_committed_at);
   badge.className = `module-build-status-badge ${module.status || "unknown"}`;
   badge.textContent = statusLabel;
   badge.setAttribute("aria-label", `Status: ${statusLabel}`);
 
   moduleCell.append(title, identifier);
   buildCell.append(moduleBuildStatusCommitNode(module.build_commit, utilities), buildDate);
-  localCell.append(moduleBuildStatusCommitNode(module.local_commit, utilities), localDate);
+  githubCell.append(moduleBuildStatusCommitNode(module.github_commit, utilities), githubDate);
   statusCell.appendChild(badge);
-  row.append(moduleCell, buildCell, localCell, statusCell);
+  row.append(moduleCell, buildCell, githubCell, statusCell);
   tableBody.appendChild(row);
 }
 
@@ -14795,7 +14795,9 @@ function appendModuleBuildDependencies(panel, dependencies) {
   panel.appendChild(details);
 }
 
-async function loadModuleBuildStatus() {
+const moduleBuildStatusApiPath = "/api/settings/module-status";
+
+async function loadModuleBuildStatus(forceRefresh = false) {
   const utilities = moduleBuildStatusUtilities();
   if (!utilities) {
     throw new Error("Nie zaladowano modulu statusu buildu.");
@@ -14803,7 +14805,7 @@ async function loadModuleBuildStatus() {
   state.moduleBuildStatusLoading = true;
   state.moduleBuildStatusError = "";
   try {
-    const payload = await requestJson("/api/settings/module-status");
+    const payload = await requestJson(`${moduleBuildStatusApiPath}${forceRefresh ? "?refresh=true" : ""}`);
     state.moduleBuildStatus = utilities.normalizeSnapshot(payload);
     return state.moduleBuildStatus;
   } catch (error) {
@@ -14830,12 +14832,12 @@ function renderSettingsModuleStatus() {
   refresh.textContent = "Odswiez porownanie";
   refresh.disabled = state.moduleBuildStatusLoading;
   refresh.addEventListener("click", () => {
-    loadModuleBuildStatus()
+    loadModuleBuildStatus(true)
       .catch(() => {})
       .finally(() => renderSettings());
   });
   description.className = "settings-note";
-  description.textContent = "Porownanie jest lokalne i tylko do odczytu. Nie wysyla danych do GitHub ani nie uruchamia builda.";
+  description.textContent = "Porownanie odczytuje aktualny stan gałęzi źródłowej z GitHub. Nie wysyla danych ani nie uruchamia builda.";
   heading.append(title, refresh);
   panel.append(heading, description);
 
@@ -14869,6 +14871,7 @@ function renderSettingsModuleStatus() {
         ["Wariant", build.build_variant],
         ["Build", build.generated_at],
         ["Commit repozytorium", build.repository_commit],
+        ["Galeź źródłowa", build.source_ref],
         [
           "Python buildu",
           build.python.version
@@ -14893,10 +14896,12 @@ function renderSettingsModuleStatus() {
     }
     panel.appendChild(summary);
 
-    if (snapshot.repository_status !== "available") {
+    if (snapshot.repository_status !== "github_available") {
       const note = document.createElement("p");
       note.className = "settings-note";
-      note.textContent = "Nie znaleziono lokalnego repozytorium Git, dlatego widoczne sa tylko dane wbudowane w program.";
+      note.textContent = snapshot.repository_status === "source_ref_missing"
+        ? "Ten starszy build nie zawiera nazwy gałęzi źródłowej. Zbuduj go ponownie, aby porównać z GitHub."
+        : "Nie udało się odczytać aktualnego stanu GitHub. Sprawdź połączenie, dostęp do repozytorium i spróbuj ponownie.";
       panel.appendChild(note);
     }
 
@@ -14914,7 +14919,7 @@ function renderSettingsModuleStatus() {
     for (const label of [
       "Modul",
       "Ostatnia zmiana w buildzie",
-      "Ostatnia zmiana w biezacym repozytorium",
+      "Ostatnia zmiana na GitHub",
       "Status",
     ]) {
       const cell = document.createElement("th");
