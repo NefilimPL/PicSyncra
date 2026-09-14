@@ -34,11 +34,11 @@ Workflow `.github/workflows/build-exe.yml` buduje:
 - desktopowe `PicSyncra-<tag>.exe`,
 - samodzielne `PicSyncra-Migrator-<tag>.exe`,
 - webowe `PicSyncra-WEB-<tag>.exe`,
-- paczkę `PicSyncra-web-<tag>.zip`.
+- webowe z OCR `PicSyncra-WEB-OCR-<tag>.exe`.
 
 Build uruchamia się ręcznie albo po publikacji GitHub Release. Przy release workflow próbuje podpiąć wygenerowane pliki do wydania przez GitHub API.
 
-Przed buildem workflow sprawdza dostępność self-hosted runnerów z etykietami `self-hosted`, `Windows` i `X64` oraz statusem `online`. Desktop EXE, samodzielny migrator i web EXE/ZIP są budowane jako równoległe joby matrix. Jeżeli nie ma dostępnego runnera albo API GitHuba nie pozwala odczytać listy runnerów, joby przechodzą na `windows-latest`.
+Przed buildem workflow sprawdza dostępność self-hosted runnerów z etykietami `self-hosted`, `Windows` i `X64` oraz statusem `online`. Desktop EXE, samodzielny migrator i dwa warianty web EXE są budowane jako równoległe joby matrix. Jeżeli nie ma dostępnego runnera albo API GitHuba nie pozwala odczytać listy runnerów, joby przechodzą na `windows-latest`.
 
 ## Token do self-hosted runnerów
 
@@ -82,7 +82,7 @@ Workflow tworzy izolowany virtualenv w katalogu tymczasowym runnera dla każdego
 
 Workflow wykonuje próbny upload małego artefaktu z retencją jednego dnia dla każdego targetu matrix. Jeżeli GitHub odrzuci upload, zwykle przez limit miejsca albo uprawnienia, build EXE nadal się kończy, a właściwe artefakty są pomijane albo oznaczone jako częściowo nieudane.
 
-Zwykłe artefakty EXE mają retencję siedmiu dni. Release assets są wysyłane przez GitHub API, więc GitHub CLI (`gh`) nie musi być zainstalowany na self-hosted runnerach. Wersja widoczna w GUI i webie jest pobierana z taga release.
+Zwykłe artefakty EXE mają retencję siedmiu dni. Release assets są wysyłane przez GitHub API, więc GitHub CLI (`gh`) nie musi być zainstalowany na self-hosted runnerach. Duży wariant OCR jest wysyłany osobnym krokiem z 30-minutowym timeoutem i trzema próbami. Wersja widoczna w GUI i webie jest pobierana z taga release.
 
 ## Ręczny build w GitHub Actions
 
@@ -93,7 +93,7 @@ Zwykłe artefakty EXE mają retencję siedmiu dni. Release assets są wysyłane 
 5. Otwórz **Actions -> Build Windows EXE**.
 6. Kliknij **Run workflow**.
 7. W podsumowaniu sprawdź sekcję **Runner selection**.
-8. Po zakończeniu pobierz artefakty `PicSyncra-windows`, `PicSyncra-migrator`, `PicSyncra-web-exe` albo `PicSyncra-web`, jeżeli upload artefaktów był dostępny.
+8. Po zakończeniu pobierz artefakty `PicSyncra-windows`, `PicSyncra-migrator` albo `PicSyncra-web-exe`, jeżeli upload artefaktów był dostępny.
 9. Aby opublikować pliki przy wydaniu, utwórz i opublikuj release z tagiem, np. `v1.2.3`.
 
 Zależności builda są w `requirements-build.txt`. Zależności panelu webowego są w `requirements-web.txt`.

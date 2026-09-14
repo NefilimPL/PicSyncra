@@ -101,6 +101,15 @@ def test_build_dependencies_install_into_isolated_virtualenv() -> None:
     assert 'pip install "pyinstaller>=6.6,<7"' not in source
 
 
+def test_build_dependency_install_retries_transient_package_index_errors() -> None:
+    source = workflow_source()
+
+    assert "Install dependencies (pinned packager)" in source
+    assert "$dependencyInstallAttempts = 3" in source
+    assert "--retries 5 --timeout 120" in source
+    assert "Dependency installation failed after $dependencyInstallAttempts attempts." in source
+
+
 def test_web_build_installs_msal_before_static_pyinstaller_analysis() -> None:
     source = workflow_source()
     web_requirements = WEB_REQUIREMENTS.read_text(encoding="utf-8")
@@ -109,9 +118,9 @@ def test_web_build_installs_msal_before_static_pyinstaller_analysis() -> None:
 
     assert "msal>=1.37,<2" in web_requirements.splitlines()
     assert "msal>=1.37,<2" in build_requirements.splitlines()
-    assert "-m pip install -r requirements-build.txt" in source
-    assert "-m pip install -r requirements-web.txt" in source
-    assert source.index("-m pip install -r requirements-web.txt") < source.index(
+    assert 'Install-RequirementsWithRetry "requirements-build.txt"' in source
+    assert 'Install-RequirementsWithRetry "requirements-web.txt"' in source
+    assert source.index('Install-RequirementsWithRetry "requirements-web.txt"') < source.index(
         "Build web manager EXE with PyInstaller"
     )
     assert "--collect-submodules picsyncra" in source
@@ -211,6 +220,27 @@ def test_workflow_defines_migrator_build_and_artifact() -> None:
     assert "Build migrator EXE with PyInstaller" in source
     assert "PicSyncra-Migrator.exe" in source
     assert "name: PicSyncra-migrator" in source
+
+
+def test_web_release_assets_have_consistent_names_without_runtime_zip() -> None:
+    source = workflow_source()
+
+    assert "PicSyncra-WEB-$env:PICSYNCRA_ASSET_VERSION.exe" in source
+    assert "PicSyncra-WEB-OCR-$env:PICSYNCRA_ASSET_VERSION.exe" in source
+    assert "PicSyncra-web-${{ matrix.target }}" not in source
+    assert "dist/web/*.zip" not in source
+    assert "Compress-Archive" not in source
+    assert "Upload web artifact" not in source
+
+
+def test_large_ocr_release_asset_uses_extended_timeout_upload() -> None:
+    source = workflow_source()
+
+    assert "Publish OCR web asset to release" in source
+    assert "if: github.event_name == 'release' && matrix.target == 'web-ocr'" in source
+    assert "GITHUB_TOKEN: ${{ github.token }}" in source
+    assert "-TimeoutSec 1800" in source
+    assert "PicSyncra-WEB-OCR" in source
 
 
 def test_plain_web_build_disables_ocr_at_runtime() -> None:

@@ -264,14 +264,35 @@ jobs:
       - name: Install dependencies (pinned packager)
         shell: pwsh
         run: |
-          & $env:PICSYNCRA_PYTHON -m pip install --upgrade pip
-          & $env:PICSYNCRA_PYTHON -m pip install -r requirements-build.txt
+          $ErrorActionPreference = "Stop"
+          $dependencyInstallAttempts = 3
+
+          function Install-RequirementsWithRetry {
+            param([string]$RequirementsPath)
+
+            for ($attempt = 1; $attempt -le $dependencyInstallAttempts; $attempt++) {
+              & $env:PICSYNCRA_PYTHON -m pip install --retries 5 --timeout 120 -r $RequirementsPath
+              if ($LASTEXITCODE -eq 0) {
+                return
+              }
+              if ($attempt -lt $dependencyInstallAttempts) {
+                Write-Warning "Installing $RequirementsPath failed (attempt $attempt/$dependencyInstallAttempts); retrying in 15 seconds."
+                Start-Sleep -Seconds 15
+              }
+            }
+            throw "Dependency installation failed after $dependencyInstallAttempts attempts. Check the self-hosted runner's access to https://pypi.org/simple/."
+          }
+
+          & $env:PICSYNCRA_PYTHON -m pip install --upgrade pip --retries 5 --timeout 120
+          if ($LASTEXITCODE -ne 0) { throw "Pip upgrade failed." }
+          Install-RequirementsWithRetry "requirements-build.txt"
           if ("${{ matrix.target }}" -eq "web" -or "${{ matrix.target }}" -eq "web-ocr") {
-            & $env:PICSYNCRA_PYTHON -m pip install -r requirements-web.txt
+            Install-RequirementsWithRetry "requirements-web.txt"
           }
           if ("${{ matrix.target }}" -eq "web-ocr") {
             & $env:PICSYNCRA_PYTHON -m pip uninstall --yes opencv-python opencv-python-headless opencv-contrib-python
-            & $env:PICSYNCRA_PYTHON -m pip install -r requirements-vision.txt
+            if ($LASTEXITCODE -ne 0) { throw "Removing conflicting OpenCV packages failed." }
+            Install-RequirementsWithRetry "requirements-vision.txt"
           }
 
       - name: Prepare Windows icons
@@ -398,21 +419,6 @@ jobs:
             --add-data "pic/PIC9_WEB-OCR.png;pic" `
             PicSyncra-WEB.pyw
 
-      - name: Package web runtime
-        if: matrix.target == 'web' || matrix.target == 'web-ocr'
-        shell: pwsh
-        run: |
-          $webRoot = "dist/web/PicSyncra-web-${{ matrix.target }}"
-          Remove-Item -Path "dist/web" -Recurse -Force -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Path $webRoot -Force | Out-Null
-          Copy-Item -Path "dist/output/PicSyncra-WEB.exe" -Destination "$webRoot/PicSyncra-WEB.exe" -Force
-          Copy-Item -Path "picsyncra" -Destination "$webRoot/picsyncra" -Recurse -Force
-          Copy-Item -Path "pic" -Destination "$webRoot/pic" -Recurse -Force
-          Copy-Item -Path "tools" -Destination "$webRoot/tools" -Recurse -Force
-          Copy-Item -Path "requirements-web.txt", "START_WEB.bat", "STOP_WEB.bat", "README.md", "LICENSE", "PicSyncra-WEB.pyw" -Destination $webRoot -Force
-          $zipPath = "dist/web/PicSyncra-web-${{ matrix.target }}-$env:PICSYNCRA_ASSET_VERSION.zip"
-          Compress-Archive -Path "$webRoot/*" -DestinationPath $zipPath -Force
-
       - name: Prepare local release asset
         if: github.event_name == 'release' && matrix.target == 'local'
         shell: pwsh
@@ -425,8 +431,8 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path "dist/release" -Force | Out-Null
-          Copy-Item -Path "dist/output/PicSyncra-WEB.exe" -Destination "dist/release/PicSyncra-WEB-${{ matrix.target }}-$env:PICSYNCRA_ASSET_VERSION.exe" -Force
-          Copy-Item -Path "dist/web/PicSyncra-web-${{ matrix.target }}-$env:PICSYNCRA_ASSET_VERSION.zip" -Destination "dist/release/PicSyncra-web-${{ matrix.target }}-$env:PICSYNCRA_ASSET_VERSION.zip" -Force
+          $webAssetName = if ("${{ matrix.target }}" -eq "web-ocr") { "PicSyncra-WEB-OCR-$env:PICSYNCRA_ASSET_VERSION.exe" } else { "PicSyncra-WEB-$env:PICSYNCRA_ASSET_VERSION.exe" }
+          Copy-Item -Path "dist/output/PicSyncra-WEB.exe" -Destination "dist/release/$webAssetName" -Force
 
       - name: Prepare migrator release asset
         if: github.event_name == 'release' && matrix.target == 'migrator'
@@ -481,16 +487,6 @@ jobs:
           path: dist/output/PicSyncra-WEB.exe
           retention-days: 7
 
-      - name: Upload web artifact
-        id: upload-web
-        if: (matrix.target == 'web' || matrix.target == 'web-ocr') && steps.artifact-probe.outcome == 'success'
-        uses: actions/upload-artifact@v7
-        continue-on-error: true
-        with:
-          name: PicSyncra-web-${{ matrix.target }}
-          path: dist/web/*.zip
-          retention-days: 7
-
       - name: Report skipped artifact upload
         if: steps.artifact-probe.outcome != 'success'
         shell: pwsh
@@ -510,10 +506,10 @@ jobs:
           "Artifact upload was skipped or failed for PicSyncra-migrator. The EXE build completed; check upload-artifact logs for quota or permission details." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
 
       - name: Report failed web artifact upload
-        if: (matrix.target == 'web' || matrix.target == 'web-ocr') && steps.artifact-probe.outcome == 'success' && (steps.upload-web-exe.outcome != 'success' || steps.upload-web.outcome != 'success')
+        if: (matrix.target == 'web' || matrix.target == 'web-ocr') && steps.artifact-probe.outcome == 'success' && steps.upload-web-exe.outcome != 'success'
         shell: pwsh
         run: |
-          "Artifact upload was skipped or partially failed for web outputs. The EXE build completed; check upload-artifact logs for quota or permission details." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          "Artifact upload was skipped or failed for the web EXE. The EXE build completed; check upload-artifact logs for quota or permission details." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
 
       - name: Publish local asset to release
         id: publish-local-release-asset
@@ -557,9 +553,9 @@ jobs:
               });
             }
 
-      - name: Publish web assets to release
-        id: publish-web-release-assets
-        if: github.event_name == 'release' && (matrix.target == 'web' || matrix.target == 'web-ocr')
+      - name: Publish web asset to release
+        id: publish-web-release-asset
+        if: github.event_name == 'release' && matrix.target == 'web'
         continue-on-error: true
         uses: actions/github-script@v9
         with:
@@ -570,8 +566,7 @@ jobs:
             const { owner, repo } = context.repo;
             const release_id = context.payload.release.id;
             const assetPaths = [
-              `dist/release/PicSyncra-WEB-${{ matrix.target }}-${process.env.PICSYNCRA_ASSET_VERSION}.exe`,
-              `dist/release/PicSyncra-web-${{ matrix.target }}-${process.env.PICSYNCRA_ASSET_VERSION}.zip`,
+              `dist/release/PicSyncra-WEB-${process.env.PICSYNCRA_ASSET_VERSION}.exe`,
             ];
             const existingAssets = await github.paginate(
               github.rest.repos.listReleaseAssets,
@@ -599,6 +594,54 @@ jobs:
                 },
               });
             }
+
+      - name: Publish OCR web asset to release
+        id: publish-ocr-web-release-asset
+        if: github.event_name == 'release' && matrix.target == 'web-ocr'
+        continue-on-error: true
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $assetPath = "dist/release/PicSyncra-WEB-OCR-$env:PICSYNCRA_ASSET_VERSION.exe"
+          if (-not (Test-Path $assetPath)) {
+            throw "Release asset file does not exist: $assetPath"
+          }
+          $assetName = [System.IO.Path]::GetFileName($assetPath)
+          $assetSize = (Get-Item -LiteralPath $assetPath).Length
+          $headers = @{
+            Accept = "application/vnd.github+json"
+            Authorization = "Bearer $env:GITHUB_TOKEN"
+            "X-GitHub-Api-Version" = "2022-11-28"
+            "User-Agent" = "PicSyncra-release-upload"
+          }
+          $assetsUrl = "https://api.github.com/repos/${{ github.repository }}/releases/${{ github.event.release.id }}/assets?per_page=100"
+          $uploadUrl = ("${{ github.event.release.upload_url }}" -replace '\{\?name,label\}$', "")
+
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            $existingAssets = @(Invoke-RestMethod -Method Get -Uri $assetsUrl -Headers $headers)
+            $existingAsset = $existingAssets | Where-Object { $_.name -eq $assetName } | Select-Object -First 1
+            if ($existingAsset -and $existingAsset.state -eq "uploaded" -and $existingAsset.size -eq $assetSize) {
+              Write-Host "Release asset already uploaded: $assetName"
+              exit 0
+            }
+            if ($existingAsset) {
+              Invoke-RestMethod -Method Delete -Uri $existingAsset.url -Headers $headers
+            }
+
+            try {
+              $encodedAssetName = [System.Uri]::EscapeDataString($assetName)
+              Invoke-WebRequest -Method Post -Uri "$uploadUrl?name=$encodedAssetName" -Headers $headers -ContentType "application/octet-stream" -InFile $assetPath -TimeoutSec 1800 | Out-Null
+              exit 0
+            } catch {
+              if ($attempt -eq 3) {
+                throw
+              }
+              Write-Warning "OCR release upload failed (attempt $attempt/3): $($_.Exception.Message)"
+              Start-Sleep -Seconds 20
+            }
+          }
 
       - name: Publish migrator asset to release
         id: publish-migrator-release-asset
@@ -645,10 +688,16 @@ jobs:
           "Release asset upload was skipped or failed for the local EXE. The EXE build completed; check GitHub API upload logs for quota or permission details." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
 
       - name: Report skipped web release asset upload
-        if: github.event_name == 'release' && (matrix.target == 'web' || matrix.target == 'web-ocr') && steps.publish-web-release-assets.outcome != 'success'
+        if: github.event_name == 'release' && matrix.target == 'web' && steps.publish-web-release-asset.outcome != 'success'
         shell: pwsh
         run: |
-          "Release asset upload was skipped or failed for web outputs. The EXE build completed; check GitHub API upload logs for quota or permission details." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          "Release asset upload was skipped or failed for PicSyncra-WEB. The EXE build completed; check GitHub API upload logs for quota or permission details." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+
+      - name: Report skipped OCR web release asset upload
+        if: github.event_name == 'release' && matrix.target == 'web-ocr' && steps.publish-ocr-web-release-asset.outcome != 'success'
+        shell: pwsh
+        run: |
+          "Release asset upload was skipped or failed for PicSyncra-WEB-OCR after three extended-timeout attempts. The EXE build completed; check upload logs and runner network connectivity." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
 
       - name: Report skipped migrator release asset upload
         if: github.event_name == 'release' && matrix.target == 'migrator' && steps.publish-migrator-release-asset.outcome != 'success'
