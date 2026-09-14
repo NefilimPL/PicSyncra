@@ -14911,7 +14911,12 @@ function renderSettingsModuleStatus() {
     const body = document.createElement("tbody");
     tableWrapper.className = "module-build-status-table-wrapper";
     table.className = "module-build-status-table";
-    for (const label of ["Modul", "Wbudowany build", "Lokalne repozytorium", "Status"]) {
+    for (const label of [
+      "Modul",
+      "Ostatnia zmiana w buildzie",
+      "Ostatnia zmiana w biezacym repozytorium",
+      "Status",
+    ]) {
       const cell = document.createElement("th");
       cell.scope = "col";
       cell.textContent = label;

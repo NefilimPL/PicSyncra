@@ -47,6 +47,16 @@ def test_build_workflow_selects_self_hosted_runner_before_build() -> None:
     assert "core.setOutput('available_count'" in source
 
 
+def test_actions_checkout_fetches_history_for_module_revision_metadata() -> None:
+    source = workflow_source()
+    checkout_start = source.index("      - name: Checkout")
+    checkout_end = source.index("      - name: Set up Python", checkout_start)
+    checkout_step = source[checkout_start:checkout_end]
+
+    assert "uses: actions/checkout@v7" in checkout_step
+    assert "fetch-depth: 0" in checkout_step
+
+
 def test_pull_request_ci_keeps_github_hosted_windows_runners() -> None:
     source = ci_workflow_source()
 

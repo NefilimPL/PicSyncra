@@ -132,6 +132,8 @@ class WebUiIntegrityTests(unittest.TestCase):
         self.assertIn("function renderSettingsModuleStatus()", source)
         self.assertIn("utilities.commitUrl", source)
         self.assertIn('link.target = "_blank"', source)
+        self.assertIn("Ostatnia zmiana w buildzie", source)
+        self.assertIn("Ostatnia zmiana w biezacym repozytorium", source)
 
     def test_ocr_background_queue_renders_safe_rows_in_workspace_position(self) -> None:
         html = INDEX_HTML.read_text(encoding="utf-8")
