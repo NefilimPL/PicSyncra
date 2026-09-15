@@ -47,6 +47,16 @@ def test_build_workflow_selects_self_hosted_runner_before_build() -> None:
     assert "core.setOutput('available_count'" in source
 
 
+def test_actions_checkout_fetches_history_for_module_revision_metadata() -> None:
+    source = workflow_source()
+    checkout_start = source.index("      - name: Checkout")
+    checkout_end = source.index("      - name: Set up Python", checkout_start)
+    checkout_step = source[checkout_start:checkout_end]
+
+    assert "uses: actions/checkout@v7" in checkout_step
+    assert "fetch-depth: 0" in checkout_step
+
+
 def test_pull_request_ci_keeps_github_hosted_windows_runners() -> None:
     source = ci_workflow_source()
 
@@ -101,6 +111,15 @@ def test_build_dependencies_install_into_isolated_virtualenv() -> None:
     assert 'pip install "pyinstaller>=6.6,<7"' not in source
 
 
+def test_build_dependency_install_retries_transient_package_index_errors() -> None:
+    source = workflow_source()
+
+    assert "Install dependencies (pinned packager)" in source
+    assert "$dependencyInstallAttempts = 3" in source
+    assert "--retries 5 --timeout 120" in source
+    assert "Dependency installation failed after $dependencyInstallAttempts attempts." in source
+
+
 def test_web_build_installs_msal_before_static_pyinstaller_analysis() -> None:
     source = workflow_source()
     web_requirements = WEB_REQUIREMENTS.read_text(encoding="utf-8")
@@ -109,9 +128,9 @@ def test_web_build_installs_msal_before_static_pyinstaller_analysis() -> None:
 
     assert "msal>=1.37,<2" in web_requirements.splitlines()
     assert "msal>=1.37,<2" in build_requirements.splitlines()
-    assert "-m pip install -r requirements-build.txt" in source
-    assert "-m pip install -r requirements-web.txt" in source
-    assert source.index("-m pip install -r requirements-web.txt") < source.index(
+    assert 'Install-RequirementsWithRetry "requirements-build.txt"' in source
+    assert 'Install-RequirementsWithRetry "requirements-web.txt"' in source
+    assert source.index('Install-RequirementsWithRetry "requirements-web.txt"') < source.index(
         "Build web manager EXE with PyInstaller"
     )
     assert "--collect-submodules picsyncra" in source
@@ -138,6 +157,19 @@ def test_all_exe_builds_request_a_generated_module_manifest() -> None:
         source = build_script.read_text(encoding="utf-8")
         assert "New-ModuleBuildManifestArguments" in source
         assert "@ModuleBuildManifestArguments" in source
+
+
+def test_actions_build_embeds_module_manifest_for_every_build_variant() -> None:
+    source = workflow_source()
+
+    assert "Generate module build manifest" in source
+    assert "tools/generate_module_build_manifest.py" in source
+    assert '--build-variant "${{ matrix.target }}"' in source
+    assert '--output "build/module_build_manifest.json"' in source
+    assert '--add-data "build/module_build_manifest.json;picsyncra"' in source
+    assert source.index("Generate module build manifest") < source.index(
+        "Build local EXE with PyInstaller"
+    )
 
 
 def test_web_build_supports_opt_in_vision_engine_and_embedded_models() -> None:
@@ -211,6 +243,37 @@ def test_workflow_defines_migrator_build_and_artifact() -> None:
     assert "Build migrator EXE with PyInstaller" in source
     assert "PicSyncra-Migrator.exe" in source
     assert "name: PicSyncra-migrator" in source
+
+
+def test_web_release_assets_have_consistent_names_without_runtime_zip() -> None:
+    source = workflow_source()
+
+    assert "PicSyncra-WEB-$env:PICSYNCRA_ASSET_VERSION.exe" in source
+    assert "PicSyncra-WEB-OCR-$env:PICSYNCRA_ASSET_VERSION.exe" in source
+    assert "PicSyncra-web-${{ matrix.target }}" not in source
+    assert "dist/web/*.zip" not in source
+    assert "Compress-Archive" not in source
+    assert "Upload web artifact" not in source
+
+
+def test_large_ocr_release_asset_uses_extended_timeout_upload() -> None:
+    source = workflow_source()
+    step_start = source.index("      - name: Publish OCR web asset to release")
+    step_end = source.index("      - name: Publish migrator asset to release", step_start)
+    ocr_upload_step = source[step_start:step_end]
+
+    assert "if: github.event_name == 'release' && matrix.target == 'web-ocr'" in ocr_upload_step
+    assert "GITHUB_TOKEN: ${{ github.token }}" in ocr_upload_step
+    assert "GITHUB_API_URL: ${{ github.api_url }}" in ocr_upload_step
+    assert "Invoke-RestMethod -Method Get -Uri $releaseUrl" in ocr_upload_step
+    assert "$release.upload_url" in ocr_upload_step
+    assert "github.event.release.upload_url" not in ocr_upload_step
+    assert "Invalid release upload URL" in ocr_upload_step
+    assert '$targetUrl = "${uploadUrl}?name=$encodedAssetName"' in ocr_upload_step
+    assert "TryCreate($targetUrl, [UriKind]::Absolute" in ocr_upload_step
+    assert "continue-on-error: true" not in ocr_upload_step
+    assert "-TimeoutSec 1800" in ocr_upload_step
+    assert "PicSyncra-WEB-OCR" in ocr_upload_step
 
 
 def test_plain_web_build_disables_ocr_at_runtime() -> None:

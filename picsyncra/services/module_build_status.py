@@ -2,10 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from importlib import metadata
 import json
 from pathlib import Path
+import re
 import subprocess
+import sys
 from typing import Mapping
+
+from ..github_status import github_branch_module_snapshot
 
 
 @dataclass(frozen=True)
@@ -29,6 +34,38 @@ MODULES = (
     ModuleDefinition("generator_web", "Generator web", ("Generator exe/build_web_exe.ps1",)),
 )
 MODULES_BY_ID = {module.id: module for module in MODULES}
+
+REQUIREMENT_FILES = (
+    "requirements-build.txt",
+    "requirements-web.txt",
+    "requirements-qt.txt",
+    "requirements-vision.txt",
+)
+
+PACKAGE_GITHUB_URLS = {
+    "certifi": "https://github.com/certifi/python-certifi",
+    "fastapi": "https://github.com/fastapi/fastapi",
+    "mysql-connector-python": "https://github.com/mysql/mysql-connector-python",
+    "msal": "https://github.com/AzureAD/microsoft-authentication-library-for-python",
+    "numpy": "https://github.com/numpy/numpy",
+    "opencv-contrib-python": "https://github.com/opencv/opencv-python",
+    "openpyxl": "https://github.com/theorchard/openpyxl",
+    "paddleocr": "https://github.com/PaddlePaddle/PaddleOCR",
+    "paddlepaddle": "https://github.com/PaddlePaddle/Paddle",
+    "paddlex": "https://github.com/PaddlePaddle/PaddleX",
+    "pillow": "https://github.com/python-pillow/Pillow",
+    "pyinstaller": "https://github.com/pyinstaller/pyinstaller",
+    "pyside6": "https://github.com/pyside/pyside-setup",
+    "pyodbc": "https://github.com/mkleehammer/pyodbc",
+    "pystray": "https://github.com/moses-palmer/pystray",
+    "python-multipart": "https://github.com/Kludex/python-multipart",
+    "requests": "https://github.com/psf/requests",
+    "tkinterdnd2": "https://github.com/pmgagne/tkinterdnd2",
+    "tzdata": "https://github.com/python/tzdata",
+    "uvicorn": "https://github.com/encode/uvicorn",
+}
+
+_REQUIREMENT_NAME = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^]]+\])?")
 
 
 def _git(repo_root: Path, *args: str) -> str:
@@ -62,14 +99,58 @@ def _manifest_module(repo_root: Path, module: ModuleDefinition) -> dict[str, str
     }
 
 
+def _dependency_name(requirement: str) -> str:
+    match = _REQUIREMENT_NAME.match(requirement)
+    return match.group(1) if match else ""
+
+
+def _installed_package_version(package: str) -> str:
+    try:
+        return metadata.version(package)
+    except metadata.PackageNotFoundError:
+        return ""
+
+
+def _manifest_dependencies(repo_root: Path) -> list[dict[str, str]]:
+    dependencies = []
+    seen = set()
+    for filename in REQUIREMENT_FILES:
+        try:
+            lines = (repo_root / filename).read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            requirement = line.split("#", maxsplit=1)[0].strip()
+            package = _dependency_name(requirement)
+            normalized_package = package.lower().replace("_", "-").replace(".", "-")
+            if not package or normalized_package in seen:
+                continue
+            seen.add(normalized_package)
+            dependencies.append(
+                {
+                    "name": package,
+                    "requirement": requirement,
+                    "installed_version": _installed_package_version(package),
+                    "github_url": PACKAGE_GITHUB_URLS.get(normalized_package, ""),
+                }
+            )
+    return dependencies
+
+
 def build_manifest(
-    repo_root: Path, *, build_variant: str, now: datetime
+    repo_root: Path, *, build_variant: str, now: datetime, source_ref: str = ""
 ) -> dict[str, object]:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "build_variant": build_variant,
         "generated_at": now.astimezone(UTC).isoformat(),
         "repository_commit": _git(repo_root, "rev-parse", "HEAD"),
+        "source_ref": source_ref.strip() or _git(repo_root, "branch", "--show-current"),
+        "python": {
+            "version": sys.version.split()[0],
+            "implementation": sys.implementation.name,
+        },
+        "dependencies": _manifest_dependencies(repo_root),
         "modules": [_manifest_module(repo_root, module) for module in MODULES],
     }
 
@@ -107,24 +188,33 @@ def _module_git_state(
 def _manifest_is_valid(manifest: Mapping[str, object] | None) -> bool:
     return bool(
         manifest
-        and manifest.get("schema_version") == 1
+        and manifest.get("schema_version") in {1, 2}
         and isinstance(manifest.get("modules"), list)
     )
 
 
-def _build_details(manifest: Mapping[str, object]) -> dict[str, str]:
+def _build_details(manifest: Mapping[str, object]) -> dict[str, object]:
+    python = manifest.get("python")
+    dependencies = manifest.get("dependencies")
     return {
         "build_variant": str(manifest.get("build_variant") or ""),
         "generated_at": str(manifest.get("generated_at") or ""),
         "repository_commit": str(manifest.get("repository_commit") or ""),
+        "source_ref": str(manifest.get("source_ref") or ""),
+        "python": dict(python) if isinstance(python, Mapping) else {},
+        "dependencies": [
+            dict(item) for item in dependencies if isinstance(item, Mapping)
+        ]
+        if isinstance(dependencies, list)
+        else [],
     }
 
 
 def _public_module_row(
     item: Mapping[str, object],
     *,
-    local_commit: str,
-    local_committed_at: str,
+    github_commit: str,
+    github_committed_at: str,
     status: str,
 ) -> dict[str, str]:
     return {
@@ -132,8 +222,8 @@ def _public_module_row(
         "label": str(item.get("label") or ""),
         "build_commit": str(item.get("commit") or ""),
         "build_committed_at": str(item.get("committed_at") or ""),
-        "local_commit": local_commit,
-        "local_committed_at": local_committed_at,
+        "github_commit": github_commit,
+        "github_committed_at": github_committed_at,
         "status": status,
     }
 
@@ -142,6 +232,8 @@ def module_status_snapshot(
     manifest: Mapping[str, object] | None,
     runtime_root: Path,
     env: Mapping[str, str],
+    *,
+    force_refresh: bool = False,
 ) -> dict[str, object]:
     if not _manifest_is_valid(manifest):
         return {
@@ -153,24 +245,46 @@ def module_status_snapshot(
 
     assert manifest is not None
     module_items = [item for item in manifest["modules"] if isinstance(item, Mapping)]
-    repo_root = _find_repo_root(
-        runtime_root, env.get("PICSYNCRA_REPOSITORY_ROOT", "")
-    )
-    if repo_root is None:
+    source_ref = str(manifest.get("source_ref") or "").strip()
+    if not source_ref:
         return {
             "build": _build_details(manifest),
-            "repository_status": "unavailable",
+            "repository_status": "source_ref_missing",
             "modules": [
                 _public_module_row(
                     item,
-                    local_commit="",
-                    local_committed_at="",
-                    status="repository_unavailable",
+                    github_commit="",
+                    github_committed_at="",
+                    status="source_ref_missing",
                 )
                 for item in module_items
             ],
         }
 
+    github_snapshot = github_branch_module_snapshot(
+        source_ref,
+        str(manifest.get("repository_commit") or ""),
+        {module.id: module.paths for module in MODULES},
+        force_refresh=force_refresh,
+    )
+    if not github_snapshot.get("available"):
+        return {
+            "build": _build_details(manifest),
+            "repository_status": "github_unavailable",
+            "repository_message": str(github_snapshot.get("message") or ""),
+            "modules": [
+                _public_module_row(
+                    item,
+                    github_commit="",
+                    github_committed_at="",
+                    status="github_unavailable",
+                )
+                for item in module_items
+            ],
+        }
+
+    github_modules = github_snapshot.get("modules")
+    relation = str(github_snapshot.get("relation_to_build") or "unknown")
     rows = []
     for item in module_items:
         module = MODULES_BY_ID.get(str(item.get("id") or ""))
@@ -178,31 +292,37 @@ def module_status_snapshot(
             rows.append(
                 _public_module_row(
                     item,
-                    local_commit="",
-                    local_committed_at="",
-                    status="repository_unavailable",
+                    github_commit="",
+                    github_committed_at="",
+                    status="github_unavailable",
                 )
             )
             continue
-        local_commit, local_committed_at, dirty = _module_git_state(repo_root, module)
+        github_item = (
+            github_modules.get(module.id, {})
+            if isinstance(github_modules, Mapping)
+            else {}
+        )
+        github_commit = str(github_item.get("commit") or "") if isinstance(github_item, Mapping) else ""
+        github_committed_at = str(github_item.get("committed_at") or "") if isinstance(github_item, Mapping) else ""
         build_commit = str(item.get("commit") or "")
         status = (
-            "uncommitted_changes"
-            if dirty
-            else "matching"
-            if local_commit == build_commit
-            else "rebuild_required"
+            "matching"
+            if github_commit and build_commit and github_commit == build_commit
+            else "update_available"
+            if relation == "ahead"
+            else "build_outside_source"
         )
         rows.append(
             _public_module_row(
                 item,
-                local_commit=local_commit,
-                local_committed_at=local_committed_at,
+                github_commit=github_commit,
+                github_committed_at=github_committed_at,
                 status=status,
             )
         )
     return {
         "build": _build_details(manifest),
-        "repository_status": "available",
+        "repository_status": "github_available",
         "modules": rows,
     }

@@ -1190,6 +1190,22 @@ h2 {
   overflow-wrap: anywhere;
 }
 
+.module-build-dependencies {
+  margin: 12px 0;
+}
+
+.module-build-dependencies > summary {
+  cursor: pointer;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.module-build-dependencies-table {
+  min-width: 680px;
+  margin-top: 8px;
+}
+
 .module-build-status-badge {
   display: inline-flex;
   align-items: center;
