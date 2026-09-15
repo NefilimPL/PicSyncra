@@ -1,11 +1,18 @@
 """Base directory handling and shared paths."""
 
+from pathlib import Path
+
+from .install_paths import resolve_install_context
 from .common import *  # noqa: F401,F403 - legacy global names
+
+_INSTALL_CONTEXT = resolve_install_context(Path(sys.executable))
 
 
 def _resolve_settings_root():
     """Return the folder that should host ``local_settings.json``."""
 
+    if _INSTALL_CONTEXT is not None:
+        return str(_INSTALL_CONTEXT.config_root)
     if getattr(sys, "frozen", False):
         base_path = A.path.dirname(sys.executable)
         return base_path or A.getcwd()
@@ -74,10 +81,14 @@ _RUNTIME_INITIALIZED = h
 
 
 def _default_base_dir():
+    if _INSTALL_CONTEXT is not None:
+        return str(_INSTALL_CONTEXT.state_root / "data")
     return A.path.dirname(BASE_DIR_SETTINGS_PATH) or A.getcwd()
 
 
 def _default_log_dir():
+    if _INSTALL_CONTEXT is not None:
+        return str(_INSTALL_CONTEXT.state_root / "logs")
     return A.path.join(_resolve_settings_root(), "logs")
 
 
@@ -98,7 +109,8 @@ def _apply_base_dir(base_dir):
     LOG_DIR = _default_log_dir()
     l = A.path.join(AC, "_ZDJECIA PRZEROBIONE_")
     LISTS_WORKBOOK_PATH = A.path.join(AC, "lists.xlsx")
-    AD = A.path.join(AC, "config.json")
+    config_root = _resolve_settings_root() if _INSTALL_CONTEXT is not None else AC
+    AD = A.path.join(config_root, "config.json")
     AM = A.path.join(LOG_DIR, "error_log.txt")
     BM = A.path.join(LOG_DIR, "changes_log.txt")
     AN = A.path.join(AC, "temp_backup")

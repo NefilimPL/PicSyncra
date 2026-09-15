@@ -77,7 +77,7 @@ from .ocr_settings import OCR_SETTINGS_KEY, normalize_ocr_settings
 from .sql_profiles import additional_sql_profiles
 from . import settings
 
-CONFIG_PATH = A.path.join(settings.AC, "config.json")
+CONFIG_PATH = settings.AD
 CONFIG_SAVE_FAILED_MSG = "Nie udało się zapisać pliku konfiguracyjnego:\n{error}"
 CONFIG = Ar.loads(Ar.dumps(DEFAULT_CONFIG))
 
@@ -114,6 +114,9 @@ def _active_sqlite_store():
 
 
 def _get_config_path():
+    install_context = getattr(settings, "_INSTALL_CONTEXT", None)
+    if install_context is not None:
+        return A.path.join(str(install_context.config_root), "config.json")
     return A.path.join(settings.AC, "config.json")
 
 
