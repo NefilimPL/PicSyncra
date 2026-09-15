@@ -19,6 +19,36 @@ class ServiceApi(Protocol):
     def snapshot(self, service_name: str) -> dict[str, bool]: ...
 
 
+class PipeServer(Protocol):
+    """The lifecycle surface used by the controller's named-pipe host."""
+
+    def __enter__(self) -> "PipeServer": ...
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None: ...
+
+    def serve_once(self) -> None: ...
+
+
+class ControllerPipeHost:
+    """Serve sequential controller pipe instances until Windows requests a stop."""
+
+    def __init__(
+        self,
+        *,
+        server_factory: Callable[[], PipeServer],
+        stop_requested: Callable[[], bool],
+    ) -> None:
+        self._server_factory = server_factory
+        self._stop_requested = stop_requested
+
+    def serve_forever(self) -> None:
+        """Finish any connected request before observing the next stop signal."""
+
+        while not self._stop_requested():
+            with self._server_factory() as server:
+                server.serve_once()
+
+
 class Pywin32ServiceApi:
     """SCM implementation backed by pywin32, imported only in installed runtime."""
 
@@ -132,4 +162,10 @@ class WindowsServiceAdapter:
         return dict(self._service_api.snapshot(self._service_name))
 
 
-__all__ = ["Pywin32ServiceApi", "ServiceApi", "WindowsServiceAdapter"]
+__all__ = [
+    "ControllerPipeHost",
+    "PipeServer",
+    "Pywin32ServiceApi",
+    "ServiceApi",
+    "WindowsServiceAdapter",
+]

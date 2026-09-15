@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from picsyncra.installation.windows_service import WindowsServiceAdapter
+import threading
+
+from picsyncra.installation.windows_service import (
+    ControllerPipeHost,
+    WindowsServiceAdapter,
+)
 
 
 class FakeServiceApi:
@@ -48,3 +53,31 @@ def test_windows_service_adapter_uses_the_registered_service_and_confirmed_state
     assert api.started == ["PicSyncraBackend-primary"]
     assert api.stopped == [("PicSyncraBackend-primary", True)]
     assert adapter.snapshot() == {"backend_running": False, "autostart": True}
+
+
+def test_controller_pipe_host_stops_after_the_current_request_when_signalled() -> None:
+    """Catches a service host reopening pipe instances after its stop request."""
+
+    stop_requested = threading.Event()
+    events: list[str] = []
+
+    class FakePipeServer:
+        def __enter__(self):
+            events.append("open")
+            return self
+
+        def serve_once(self) -> None:
+            events.append("request")
+            stop_requested.set()
+
+        def __exit__(self, _exc_type, _exc_value, _traceback) -> None:
+            events.append("close")
+
+    host = ControllerPipeHost(
+        server_factory=FakePipeServer,
+        stop_requested=stop_requested.is_set,
+    )
+
+    host.serve_forever()
+
+    assert events == ["open", "request", "close"]
