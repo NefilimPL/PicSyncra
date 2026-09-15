@@ -60,6 +60,12 @@ class _Process:
         return self.returncode if self.returncode is not None else 0
 
 
+class _UnresponsiveProcess(_Process):
+    def wait(self, timeout: float | None = None) -> int:
+        del timeout
+        raise TimeoutError("runtime did not stop")
+
+
 def test_hello_requires_the_expected_protocol_build_and_component() -> None:
     """Catches accepting a stale or unrelated OCR executable."""
 
@@ -205,6 +211,69 @@ def test_installed_worker_reports_a_runtime_that_exits_after_startup(tmp_path: P
     assert worker.poll() == [{"kind": "error", "code": "runtime_exited"}]
 
 
+def test_graceful_stop_keeps_an_unresponsive_runtime_available_for_forced_cleanup(
+    tmp_path: Path,
+) -> None:
+    """Catches graceful shutdown forgetting a still-running OCR process."""
+
+    process = _UnresponsiveProcess(
+        [
+            json.dumps(
+                {
+                    "kind": "hello",
+                    "protocol": OCR_PROTOCOL_VERSION,
+                    "build_id": "release-12",
+                    "component_id": "ocr-12",
+                }
+            )
+            + "\n"
+        ]
+    )
+    worker = InstalledOcrWorker(
+        executable=tmp_path / "PicSyncra-OCR.exe",
+        build_id="release-12",
+        component_id="ocr-12",
+        process_factory=lambda _args: process,
+    )
+
+    worker.start()
+    worker.stop(force=False)
+
+    assert process.terminated is False
+    assert worker.status()["alive"] is True
+
+
+def test_runtime_server_acknowledges_only_valid_cpu_limits() -> None:
+    """Catches a component silently ignoring WEB's resource limit updates."""
+
+    stdin = StringIO(
+        json.dumps({"kind": "update_limits", "cpu_percent": 42})
+        + "\n"
+        + json.dumps({"kind": "update_limits", "cpu_percent": 101})
+        + "\n"
+        + json.dumps({"kind": "stop"})
+        + "\n"
+    )
+    stdout = StringIO()
+
+    assert (
+        serve_ocr_runtime(
+            stdin,
+            stdout,
+            build_id="release-12",
+            component_id="ocr-12",
+            run_job=lambda _job: {},
+        )
+        == 0
+    )
+
+    messages = [json.loads(line) for line in stdout.getvalue().splitlines()]
+    assert messages[2:] == [
+        {"kind": "limits_updated", "cpu_percent": 42},
+        {"kind": "error", "code": "invalid_command"},
+    ]
+
+
 def test_runtime_server_revalidates_each_job_before_returning_a_result(tmp_path: Path) -> None:
     """Catches a direct stdin caller bypassing the adapter's job-root guard."""
 
@@ -246,6 +315,7 @@ def test_runtime_server_revalidates_each_job_before_returning_a_result(tmp_path:
         "stage_started",
         "result",
     ]
+    assert isinstance(messages[1].get("pid"), int)
     assert messages[-1] == {
         "kind": "result",
         "run_id": "run-1",

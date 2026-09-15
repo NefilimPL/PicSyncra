@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from queue import Empty, Queue
+import re
+import shutil
 import subprocess
 from threading import Thread
 from typing import Callable, Mapping, TextIO
+
+from .contracts import InstallContext
+from .ocr_component import resolve_active_ocr_component
 
 
 OCR_PROTOCOL_VERSION = 1
@@ -205,6 +211,35 @@ class InstalledOcrWorker:
             events.append({"kind": "error", "code": "runtime_exited"})
         return events
 
+    def poll_events(self) -> list[dict[str, object]]:
+        """Compatibility surface used by the existing OCR execution service."""
+
+        return self.poll()
+
+    def update_limits(self, *, cpu_percent: int) -> None:
+        if isinstance(cpu_percent, bool) or not isinstance(cpu_percent, int):
+            raise ValueError("OCR CPU limit must be an integer.")
+        if not 1 <= cpu_percent <= 100:
+            raise ValueError("OCR CPU limit must be between 1 and 100.")
+        self._send({"kind": "update_limits", "cpu_percent": cpu_percent})
+
+    def status(self) -> dict[str, object]:
+        process = self._process
+        if process is None:
+            return {"pid": None, "alive": False, "exit_code": None}
+        exit_code = getattr(process, "poll")()
+        return {
+            "pid": getattr(process, "pid", None),
+            "alive": exit_code is None,
+            "exit_code": exit_code,
+        }
+
+    def cancel(self, run_id: str) -> None:
+        """The closed protocol has no per-job kill; end its single active worker."""
+
+        del run_id
+        self.stop(force=True)
+
     def stop(self, *, force: bool) -> None:
         """Ask the runtime to stop, terminating it only when force is explicit."""
 
@@ -217,8 +252,9 @@ class InstalledOcrWorker:
         except Exception:
             if force:
                 self._terminate(process)
-        finally:
-            self._process = None
+                self._process = None
+            return
+        self._process = None
 
     def _send(self, command: dict[str, object]) -> None:
         process = self._process
@@ -254,6 +290,137 @@ class InstalledOcrWorker:
             pass
 
 
+class StagedInstalledOcrWorker:
+    """Adapt the installed runtime to the existing OCR execution-service worker API."""
+
+    _RUN_ID = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,62}[A-Za-z0-9])?")
+
+    def __init__(self, *, runtime: object, staging_root: Path) -> None:
+        self._runtime = runtime
+        self._staging_root = Path(staging_root)
+        self._runs: dict[str, Path] = {}
+        self._pending_events: list[dict[str, object]] = []
+
+    def start(self) -> None:
+        getattr(self._runtime, "start")()
+
+    def submit(
+        self,
+        *,
+        run_id: str,
+        path: str,
+        profile_ids: list[object],
+        resource_settings: dict[str, object] | None = None,
+    ) -> None:
+        """Copy one source image into the controlled job root before submission."""
+
+        del resource_settings
+        if not isinstance(run_id, str) or self._RUN_ID.fullmatch(run_id) is None:
+            raise OcrRuntimeProtocolError("OCR run identifier is invalid.")
+        if run_id in self._runs:
+            raise OcrRuntimeProtocolError("OCR run identifier is already active.")
+        try:
+            source = Path(path).resolve(strict=True)
+        except (OSError, RuntimeError) as exc:
+            raise OcrRuntimeProtocolError("OCR source image is unavailable.") from exc
+        if not source.is_file():
+            raise OcrRuntimeProtocolError("OCR source must be a file.")
+        root = self._staging_root.resolve(strict=False)
+        run_directory = root / run_id
+        suffix = source.suffix if re.fullmatch(r"\.[A-Za-z0-9]{1,10}", source.suffix) else ".img"
+        staged_path = run_directory / f"input{suffix.lower()}"
+        try:
+            run_directory.mkdir(parents=True, exist_ok=False)
+            shutil.copy2(source, staged_path)
+            getattr(self._runtime, "submit")(
+                {
+                    "run_id": run_id,
+                    "path": str(staged_path),
+                    "work_root": str(run_directory),
+                    "profile_ids": [str(profile) for profile in profile_ids],
+                }
+            )
+        except Exception:
+            self._remove_run_directory(run_directory, root)
+            raise
+        self._runs[run_id] = run_directory
+
+    def update_telemetry(self, telemetry: object) -> None:
+        del telemetry  # Resource policy remains enforced by the WEB execution service.
+
+    def update_limits(self, *, cpu_percent: int) -> None:
+        getattr(self._runtime, "update_limits")(cpu_percent=cpu_percent)
+
+    def poll_events(self) -> list[dict[str, object]]:
+        events = list(self._pending_events)
+        self._pending_events.clear()
+        events.extend(getattr(self._runtime, "poll")())
+        for event in events:
+            run_id = event.get("run_id")
+            if (
+                isinstance(run_id, str)
+                and event.get("kind") in {"result", "error"}
+                and run_id in self._runs
+            ):
+                self._remove_run(run_id)
+        return events
+
+    def cancel(self, run_id: str) -> None:
+        if run_id not in self._runs:
+            return
+        getattr(self._runtime, "stop")(force=True)
+        self._remove_run(run_id)
+        self._pending_events.append(
+            {"kind": "error", "run_id": run_id, "message": "OCR job cancelled."}
+        )
+
+    def status(self) -> dict[str, object]:
+        return dict(getattr(self._runtime, "status")())
+
+    def stop(self, *, timeout: float) -> None:
+        del timeout
+        getattr(self._runtime, "stop")(force=True)
+        for run_id in tuple(self._runs):
+            self._remove_run(run_id)
+
+    def _remove_run(self, run_id: str) -> None:
+        directory = self._runs.pop(run_id, None)
+        if directory is not None:
+            self._remove_run_directory(directory, self._staging_root.resolve(strict=False))
+
+    @staticmethod
+    def _remove_run_directory(directory: Path, root: Path) -> None:
+        try:
+            resolved = directory.resolve(strict=True)
+            resolved.relative_to(root.resolve(strict=True))
+        except (OSError, RuntimeError, ValueError):
+            return
+        if resolved.is_dir() and not resolved.is_symlink():
+            shutil.rmtree(resolved)
+
+
+def create_installed_ocr_worker(
+    context: InstallContext,
+    *,
+    process_factory=_launch_runtime,
+) -> StagedInstalledOcrWorker | None:
+    """Build the WEB-compatible worker only from an active verified component."""
+
+    active = resolve_active_ocr_component(context)
+    if active is None:
+        return None
+    runtime = InstalledOcrWorker(
+        executable=active.directory / "PicSyncra-OCR.exe",
+        build_id=active.build_id,
+        component_id=active.component_id,
+        process_factory=process_factory,
+    )
+    return StagedInstalledOcrWorker(
+        runtime=runtime,
+        staging_root=context.state_root / "cache" / "ocr-jobs",
+    )
+
+
 def _write_runtime_message(stdout: TextIO, message: dict[str, object]) -> None:
     encoded = json.dumps(message, separators=(",", ":"))
     if len(encoded.encode("utf-8")) > MAX_OCR_MESSAGE_BYTES:
@@ -281,7 +448,7 @@ def serve_ocr_runtime(
             "component_id": component_id,
         },
     )
-    _write_runtime_message(stdout, {"kind": "ready"})
+    _write_runtime_message(stdout, {"kind": "ready", "pid": os.getpid()})
     for line in stdin:
         try:
             command = parse_ocr_message(line.rstrip("\r\n"))
@@ -347,7 +514,9 @@ __all__ = [
     "OCR_PROTOCOL_VERSION",
     "OcrRuntimeProtocolError",
     "InstalledOcrWorker",
+    "StagedInstalledOcrWorker",
     "build_ocr_job",
+    "create_installed_ocr_worker",
     "parse_ocr_message",
     "serve_ocr_runtime",
     "validate_ocr_hello",

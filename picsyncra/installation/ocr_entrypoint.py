@@ -9,6 +9,16 @@ import sys
 from .ocr_runtime import serve_ocr_runtime
 from ..services.image_dimensions import diagnostics_for_boxes
 from ..services.ocr_pipeline import OcrPipelineReport, run_ocr_pipeline_report
+from ..services.ocr_values import comparison_key
+
+
+def _serialize_box(box: object) -> dict[str, object]:
+    return {
+        "text": str(getattr(box, "text")),
+        "value": comparison_key(str(getattr(box, "text"))),
+        "confidence": float(getattr(box, "confidence")),
+        "bbox": [int(value) for value in getattr(box, "bbox")],
+    }
 
 
 def run_ocr_job(
@@ -37,7 +47,23 @@ def run_ocr_job(
             }
             for candidate in diagnostics.candidates
         ],
-        "regions": [],
+        "regions": [
+            {
+                "region_id": region.region_id,
+                "fast": _serialize_box(region.fast_box),
+                "source_bbox": list(region.source_bbox),
+                "crop_bbox": list(region.crop_bbox) if region.crop_bbox else None,
+                "accurate": [_serialize_box(box) for box in region.accurate_boxes],
+                "status": region.status,
+                "reason": region.reason,
+                "timings_ms": {
+                    "fast": region.fast_elapsed_ms,
+                    "crop": region.crop_elapsed_ms,
+                    "accurate": region.accurate_elapsed_ms,
+                },
+            }
+            for region in report.regions
+        ],
         "timings_ms": {"total": report.total_elapsed_ms},
     }
 

@@ -61,6 +61,8 @@ from ..database import connect_db
 from ..github_status import github_repository_status
 from ..history_changes import history_change_set
 from ..image_utils import fit_image_to_content
+from ..install_paths import resolve_install_context
+from ..installation.ocr_runtime import create_installed_ocr_worker
 from ..services.image_dimensions import (
     ImageOcrDiagnostics,
     OcrDiagnosticCandidate,
@@ -244,6 +246,15 @@ OCR_FEATURE_ENABLED = os.getenv("PICSYNCRA_OCR_ENABLED", "1").strip().lower() no
     "no",
     "off",
 }
+
+
+def _create_ocr_execution_worker(ocr_settings: dict[str, object]) -> object | None:
+    """Choose the isolated installed OCR component, or the portable worker."""
+
+    context = resolve_install_context(Path(sys.executable))
+    if context is not None:
+        return create_installed_ocr_worker(context)
+    return OcrWorkerProcess(cpu_percent=int(ocr_settings.get("max_cpu_percent") or 35))
 
 
 def _require_ocr_feature() -> None:
@@ -5400,44 +5411,43 @@ def create_app() -> FastAPI:
         _ensure_active_client_registry()
         _RESOURCE_MONITOR.start()
         if OCR_FEATURE_ENABLED:
-            _clear_ocr_crop_queue_on_startup()
             ocr_settings = normalize_ocr_settings(config.CONFIG.get(OCR_SETTINGS_KEY, {}))
-            ocr_worker = OcrWorkerProcess(
-                cpu_percent=int(ocr_settings.get("max_cpu_percent") or 35)
-            )
-            execution_service = OcrExecutionService(
-                worker=ocr_worker,
-                registry=OcrProgressRegistry(),
-                settings=lambda: normalize_ocr_settings(
-                    config.CONFIG.get(OCR_SETTINGS_KEY, {})
-                ),
-                telemetry=_ocr_resource_telemetry,
-                on_worker_ready=(
-                    callback
-                    if callable(
-                        callback := getattr(
-                            _RESOURCE_MONITOR, "register_ocr_worker_pid", None
+            ocr_worker = _create_ocr_execution_worker(ocr_settings)
+            if ocr_worker is not None:
+                _clear_ocr_crop_queue_on_startup()
+                execution_service = OcrExecutionService(
+                    worker=ocr_worker,
+                    registry=OcrProgressRegistry(),
+                    settings=lambda: normalize_ocr_settings(
+                        config.CONFIG.get(OCR_SETTINGS_KEY, {})
+                    ),
+                    telemetry=_ocr_resource_telemetry,
+                    on_worker_ready=(
+                        callback
+                        if callable(
+                            callback := getattr(
+                                _RESOURCE_MONITOR, "register_ocr_worker_pid", None
+                            )
                         )
-                    )
-                    else None
-                ),
-            )
-            execution_service.start()
-            app.state.ocr_execution_worker = ocr_worker
-            app.state.ocr_execution_service = execution_service
-            _OCR_EXECUTION_SERVICE = execution_service
-            app.state.ocr_queue_stop.clear()
-            worker = OcrQueueWorker(
-                run_once=_run_ocr_queue_once,
-                poll_seconds=0.5,
-                stop_event=app.state.ocr_queue_stop,
-            )
-            app.state.ocr_queue_thread = threading.Thread(
-                target=worker.run,
-                name="picsyncra-ocr-queue",
-                daemon=True,
-            )
-            app.state.ocr_queue_thread.start()
+                        else None
+                    ),
+                )
+                execution_service.start()
+                app.state.ocr_execution_worker = ocr_worker
+                app.state.ocr_execution_service = execution_service
+                _OCR_EXECUTION_SERVICE = execution_service
+                app.state.ocr_queue_stop.clear()
+                worker = OcrQueueWorker(
+                    run_once=_run_ocr_queue_once,
+                    poll_seconds=0.5,
+                    stop_event=app.state.ocr_queue_stop,
+                )
+                app.state.ocr_queue_thread = threading.Thread(
+                    target=worker.run,
+                    name="picsyncra-ocr-queue",
+                    daemon=True,
+                )
+                app.state.ocr_queue_thread.start()
         cleanup_web_ftp_cache(force=True)
         cleanup_web_upload_cache(force=True)
         try:

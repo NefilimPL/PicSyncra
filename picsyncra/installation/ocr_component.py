@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 import re
 
@@ -11,6 +12,13 @@ from .contracts import InstallContext
 
 OCR_COMPONENT_PROTOCOL = 1
 _COMPONENT_ID = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,62}[A-Za-z0-9])?")
+
+
+@dataclass(frozen=True)
+class ActiveOcrComponent:
+    directory: Path
+    build_id: str
+    component_id: str
 
 
 def _load_json(path: Path) -> dict[str, object] | None:
@@ -37,8 +45,8 @@ def _active_release(context: InstallContext) -> int | None:
     return release_id
 
 
-def resolve_ocr_component(context: InstallContext) -> Path | None:
-    """Return the active OCR component directory only when it matches the build."""
+def resolve_active_ocr_component(context: InstallContext) -> ActiveOcrComponent | None:
+    """Return verified active OCR metadata only when it matches the build."""
 
     release_id = _active_release(context)
     if release_id is None:
@@ -72,7 +80,27 @@ def resolve_ocr_component(context: InstallContext) -> Path | None:
     except (OSError, RuntimeError, ValueError):
         return None
     executable = component / "PicSyncra-OCR.exe"
-    return component if executable.is_file() else None
+    return (
+        ActiveOcrComponent(
+            directory=component,
+            build_id=str(payload["build_id"]),
+            component_id=component_id,
+        )
+        if executable.is_file()
+        else None
+    )
 
 
-__all__ = ["OCR_COMPONENT_PROTOCOL", "resolve_ocr_component"]
+def resolve_ocr_component(context: InstallContext) -> Path | None:
+    """Return the active OCR component directory only when it matches the build."""
+
+    active = resolve_active_ocr_component(context)
+    return active.directory if active is not None else None
+
+
+__all__ = [
+    "ActiveOcrComponent",
+    "OCR_COMPONENT_PROTOCOL",
+    "resolve_active_ocr_component",
+    "resolve_ocr_component",
+]
