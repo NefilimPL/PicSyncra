@@ -10,11 +10,11 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from picsyncra.installation.release_catalog import catalog_releases
 
 
-def manifest(release_id: int, tag: str, *, channel="stable", prerelease=False):
+def manifest(release_id: int, tag: str, *, channel="stable", prerelease=False, minimum_controller=1):
     return {
         "schema": 1, "release_id": release_id, "tag": tag, "commit": "a" * 40,
         "channel": channel, "source_branch": "main" if channel == "stable" else "dev",
-        "prerelease": prerelease, "platform": "windows-x64", "minimum_controller": 1,
+        "prerelease": prerelease, "platform": "windows-x64", "minimum_controller": minimum_controller,
         "components": [
             {"name": "web", "component_id": f"web-{release_id}", "asset_name": "web.zip", "sha256": "b" * 64, "size": 1},
             {"name": "migrator", "component_id": f"migrator-{release_id}", "asset_name": "migrator.zip", "sha256": "c" * 64, "size": 1},
@@ -68,3 +68,15 @@ def test_catalog_never_uses_draft_or_release_from_wrong_channel() -> None:
     loader, keys = signed_loader()
     choices = catalog_releases([release(1, "v1.0.0", draft=True), release(2, "v1.1.0", prerelease=True)], channel="stable", manifest_loader=loader, trusted_keys=keys)
     assert choices == ()
+
+
+def test_catalog_blocks_a_signed_release_that_requires_a_newer_controller() -> None:
+    loader, keys = signed_loader()
+    choices = catalog_releases(
+        [release(3, "v1.2.0", manifest_payload=manifest(3, "v1.2.0", minimum_controller=2))],
+        channel="stable", manifest_loader=loader, trusted_keys=keys,
+    )
+
+    assert len(choices) == 1
+    assert choices[0].can_install is False
+    assert choices[0].blocked_reason == "controller_outdated"

@@ -43,6 +43,7 @@ def test_valid_stable_manifest_verifies_and_produces_release_choice() -> None:
     choice = verify_manifest(raw, signature, {"test-key": public}, key_id="test-key")
     assert choice.release_id == 42
     assert choice.channel == "stable"
+    assert choice.minimum_controller == 1
     assert [component.name for component in choice.components] == ["web", "migrator"]
 
 

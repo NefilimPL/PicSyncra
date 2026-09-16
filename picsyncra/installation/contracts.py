@@ -54,6 +54,7 @@ class ReleaseChoice:
     components: tuple[ComponentRef, ...]
     can_install: bool
     blocked_reason: str | None
+    minimum_controller: int = 1
 
 
 @dataclass(frozen=True)

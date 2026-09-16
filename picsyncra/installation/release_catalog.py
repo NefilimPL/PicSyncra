@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import replace
 from typing import Any, Literal
 
+from .controller_version import CONTROLLER_VERSION
 from .contracts import ReleaseChoice
 from .release_manifest import ManifestError, verify_manifest
 
@@ -75,6 +77,11 @@ def catalog_releases(
             blocked = _blocked(release, "release_mismatch")
             if blocked is not None:
                 choices.append(blocked)
+            continue
+        if choice.minimum_controller > CONTROLLER_VERSION:
+            choices.append(
+                replace(choice, can_install=False, blocked_reason="controller_outdated")
+            )
             continue
         choices.append(choice)
     return tuple(choices)

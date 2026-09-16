@@ -88,11 +88,12 @@ def parse_manifest(payload: object) -> ReleaseChoice:
         raise ManifestError("manifest release metadata is invalid")
     if (channel == "stable" and (prerelease or branch != "main")) or (channel == "dev" and not prerelease):
         raise ManifestError("channel and prerelease metadata disagree")
-    _positive_int(payload.get("minimum_controller"), "minimum_controller")
+    minimum_controller = _positive_int(payload.get("minimum_controller"), "minimum_controller")
     components = _components(payload.get("components"))
     return ReleaseChoice(
         release_id=release_id, tag=tag, commit=commit, channel=channel, source_branch=branch,
         manifest_sha256="", components=components, can_install=True, blocked_reason=None,
+        minimum_controller=minimum_controller,
     )
 
 
@@ -127,4 +128,5 @@ def verify_manifest(
         release_id=parsed.release_id, tag=parsed.tag, commit=parsed.commit, channel=parsed.channel,
         source_branch=parsed.source_branch, manifest_sha256=hashlib.sha256(raw_manifest).hexdigest(),
         components=parsed.components, can_install=True, blocked_reason=None,
+        minimum_controller=parsed.minimum_controller,
     )
