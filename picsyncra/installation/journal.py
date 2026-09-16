@@ -123,6 +123,14 @@ class OperationJournal:
             operation_id = self._requests.get(_valid_id(request_id, name="request"))
             return self._operations.get(operation_id) if operation_id is not None else None
 
+    def unfinished(self) -> OperationSnapshot | None:
+        """Return the sole durable operation that needs startup recovery."""
+        with self._lock:
+            active = [item for item in self._operations.values() if item.state not in _TERMINAL]
+            if len(active) > 1:
+                raise OperationJournalError("More than one unfinished operation exists.")
+            return active[0] if active else None
+
     def transition(self, operation_id: str, state: OperationState, *, error_code: str | None = None) -> OperationSnapshot:
         with self._lock:
             current = self.read(operation_id)
