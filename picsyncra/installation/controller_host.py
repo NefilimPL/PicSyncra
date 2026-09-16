@@ -41,6 +41,7 @@ class Process(Protocol):
 
 
 ProcessFactory = Callable[[list[str]], Process]
+ScheduledWork = Callable[[], None]
 
 
 def _within(path: Path, root: Path) -> bool:
@@ -195,6 +196,61 @@ class ActiveBackendSupervisor:
             return False
 
 
+class DeferredRestartController:
+    """Reply to the pipe client before its WEB process is stopped.
+
+    The caller is ordinarily a request handler inside the backend being
+    restarted.  Deferring the destructive part lets the pipe response, journal
+    commit and HTTP ``202`` leave that process first.
+    """
+
+    def __init__(
+        self,
+        controller: InstallationController,
+        *,
+        schedule: Callable[[ScheduledWork], object] | None = None,
+    ) -> None:
+        self._controller = controller
+        self._lock = threading.Lock()
+        self._restart_pending = False
+        self._schedule = schedule or self._schedule_after_response
+
+    def snapshot(self) -> dict[str, object]:
+        return self._controller.snapshot()
+
+    def start_backend(self) -> None:
+        self._controller.start_backend()
+
+    def stop_backend(self, force: bool) -> bool:
+        return self._controller.stop_backend(force=force)
+
+    def set_autostart(self, enabled: bool) -> bool:
+        return self._controller.set_autostart(enabled)
+
+    def restart_backend(self) -> bool:
+        with self._lock:
+            if self._restart_pending:
+                return False
+            self._restart_pending = True
+        self._schedule(self._restart_after_response)
+        return True
+
+    def _restart_after_response(self) -> None:
+        try:
+            self._controller.restart_backend()
+        finally:
+            with self._lock:
+                self._restart_pending = False
+
+    @staticmethod
+    def _schedule_after_response(work: ScheduledWork) -> None:
+        # A short grace period gives the named-pipe server and the requesting
+        # HTTP handler enough time to flush their success responses.
+        timer = threading.Timer(1.0, work)
+        timer.daemon = True
+        timer.start()
+
+
 def run_controller(installation_id: str, *, stop_requested: Callable[[], bool] | None = None) -> int:
     """Run one registered controller task until Windows stops the process."""
 
@@ -206,7 +262,7 @@ def run_controller(installation_id: str, *, stop_requested: Callable[[], bool] |
     if supervisor.autostart_enabled():
         controller.start_backend()
     dispatcher = ControlDispatcher(
-        controller,
+        DeferredRestartController(controller),
         installation_id=context.installation_id,
         authorized_identities={"S-1-5-18"},
     )
@@ -234,6 +290,7 @@ def main(argv: list[str] | None = None) -> int:
 __all__ = [
     "ActiveBackendSupervisor",
     "ControllerHostError",
+    "DeferredRestartController",
     "active_web_executable",
     "main",
     "run_controller",

@@ -72,6 +72,22 @@ def test_controller_host_never_stops_a_foreign_listener(tmp_path: Path) -> None:
     assert supervisor.stop_backend(force=True) is False
 
 
+def test_controller_host_defers_restart_until_the_pipe_can_reply() -> None:
+    from picsyncra.installation.controller_host import DeferredRestartController
+
+    work: list[object] = []
+    delegate = FakeController()
+    controller = DeferredRestartController(delegate, schedule=work.append)
+
+    assert controller.restart_backend() is True
+    assert controller.restart_backend() is False
+    assert delegate.restart_calls == 0
+
+    work.pop()()
+    assert delegate.restart_calls == 1
+    assert controller.restart_backend() is True
+
+
 class FakeProcess:
     def __init__(self) -> None:
         self.returncode: int | None = None
@@ -94,3 +110,24 @@ class FakeProcess:
     def kill(self) -> None:
         self.killed = True
         self.returncode = 1
+
+
+class FakeController:
+    def __init__(self) -> None:
+        self.restart_calls = 0
+
+    def restart_backend(self) -> bool:
+        self.restart_calls += 1
+        return True
+
+    def start_backend(self) -> None:
+        pass
+
+    def stop_backend(self, *, force: bool) -> bool:
+        return force
+
+    def set_autostart(self, enabled: bool) -> bool:
+        return enabled
+
+    def snapshot(self) -> dict[str, bool]:
+        return {"backend_running": True, "autostart": True}

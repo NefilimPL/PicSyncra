@@ -102,6 +102,11 @@ class InstalledOperationService:
     def _submit_release(self, request: OperationRequest, actor_id: str) -> dict[str, object]:
         if request.action not in {"update", "downgrade", "install_ocr"}:
             raise OperationUnavailable("Ta operacja wymaga jeszcze zweryfikowanego wykonawcy pakietu.")
+        if (
+            request.action in {"update", "downgrade"}
+            and request.release_id == read_active_release(self._context)
+        ):
+            raise OperationUnavailable("Wybrane wydanie jest juz aktywne.")
         factory = self._ocr_executor_factory if request.action == "install_ocr" else self._release_executor_factory
         if factory is None:
             raise OperationUnavailable("Brak zweryfikowanego pakietu dla wybranego wydania.")

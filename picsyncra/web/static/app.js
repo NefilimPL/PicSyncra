@@ -14797,14 +14797,15 @@ function renderInstalledUpdateControls(panel) {
   update.type = selected.type = ocr.type = restart.type = force.type = "button";
   update.className = "primary-button";
   update.textContent = "Aktualizuj";
-  update.disabled = !state.installationReleases.some((item) => item.can_install);
+  const currentReleaseId = Number(snapshot.build);
+  const updateTarget = utilities.selectUpdateTarget(state.installationReleases, currentReleaseId);
+  update.disabled = !updateTarget;
   update.addEventListener("click", () => {
-    const newest = state.installationReleases.find((item) => item.can_install);
-    if (newest) submit("update", newest.release_id).catch((error) => { state.installationUpdatesError = error.message; renderSettings(); });
+    if (updateTarget) submit("update", updateTarget.release_id).catch((error) => { state.installationUpdatesError = error.message; renderSettings(); });
   });
   selected.className = ocr.className = restart.className = force.className = "secondary-button";
   selected.textContent = "Zainstaluj wybraną wersję";
-  selected.disabled = !releases.value;
+  selected.disabled = !releases.value || Number(releases.value) === currentReleaseId;
   selected.addEventListener("click", () => {
     const releaseId = Number(releases.value);
     const action = releaseId < Number(snapshot.build) ? "downgrade" : "update";

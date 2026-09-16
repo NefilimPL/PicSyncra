@@ -76,10 +76,23 @@
     });
   }
 
+  function selectUpdateTarget(releases, currentBuild) {
+    const active = Number(currentBuild);
+    const currentReleaseId = Number.isInteger(active) && active > 0 ? active : null;
+    if (!Array.isArray(releases)) return null;
+    const normalized = releases.map(normalizeRelease);
+    const activeIndex = normalized.findIndex((release) => release.release_id === currentReleaseId);
+    const newer = activeIndex >= 0 ? normalized.slice(0, activeIndex) : normalized;
+    return newer.find((release) =>
+      release.can_install && release.release_id !== currentReleaseId
+    ) || null;
+  }
+
   root.InstallationUpdates = {
     normalizeSnapshot,
     normalizeRelease,
     operationRequest,
+    selectUpdateTarget,
     loadReleases,
     submitOperation,
   };

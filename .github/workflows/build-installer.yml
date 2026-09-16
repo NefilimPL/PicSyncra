@@ -44,7 +44,7 @@ jobs:
         run: |
           $releaseId = '${{ github.event.release.id || inputs.release_id }}'
           $channel = '${{ inputs.channel || (github.event.release.prerelease && 'dev' || 'stable') }}'
-          $branch = if ($channel -eq 'stable') { 'main' } else { '${{ github.ref_name }}' }
+          $branch = if ($channel -eq 'stable') { 'main' } else { '${{ github.event.release.target_commitish || github.ref_name }}' }
           $pre = if ($channel -eq 'dev') { '--prerelease' } else { '' }
           Compress-Archive -Path "dist/installed/versions/$releaseId/web/*" -DestinationPath dist/installed/web.zip
           Compress-Archive -Path "dist/installed/versions/$releaseId/migrator/*" -DestinationPath dist/installed/migrator.zip

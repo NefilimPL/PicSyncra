@@ -78,6 +78,22 @@ def test_update_submission_stays_disabled_until_verified_package_executor_is_con
         service.submit(OperationRequest("update-1", "update", 42, None, False), actor_id="admin-1")
 
 
+def test_current_release_cannot_be_reinstalled_as_an_update(tmp_path: Path) -> None:
+    from picsyncra.installation.operation_service import InstalledOperationService, OperationUnavailable
+
+    calls: list[OperationRequest] = []
+    service = InstalledOperationService(
+        context(tmp_path),
+        Controller(),
+        release_executor_factory=lambda request: calls.append(request),
+    )
+
+    with pytest.raises(OperationUnavailable, match="aktywn"):
+        service.submit(OperationRequest("update-current", "update", 41, None, False), actor_id="admin-1")
+
+    assert calls == []
+
+
 def test_verified_release_executor_runs_backup_before_switching_and_invalidates_sessions(tmp_path: Path) -> None:
     from picsyncra.installation.contracts import BackupReceipt
     from picsyncra.installation.operation_service import InstalledOperationService

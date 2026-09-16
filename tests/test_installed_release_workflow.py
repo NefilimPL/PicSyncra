@@ -9,3 +9,4 @@ def test_installed_release_workflow_keeps_signing_secret_out_of_pull_requests() 
     assert "PicSyncra-installed-manifest.sig" in source
     assert 'dist/installed/ocr.zip' in source
     assert '--component ocr:ocr-$releaseId:dist/installed/ocr.zip' in source
+    assert "github.event.release.target_commitish || github.ref_name" in source

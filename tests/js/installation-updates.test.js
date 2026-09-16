@@ -28,6 +28,20 @@ test("an update requires a selected signed release while restart does not", () =
   assert.equal(updates.operationRequest("update", 42).release_id, 42);
 });
 
+test("does not submit the currently active release as an update", () => {
+  const updates = loadUpdates();
+
+  assert.equal(
+    updates.selectUpdateTarget([
+      { release_id: 43, can_install: true },
+      { release_id: 42, can_install: true },
+      { release_id: 41, can_install: true },
+    ], 42).release_id,
+    43,
+  );
+  assert.equal(updates.selectUpdateTarget([{ release_id: 42, can_install: true }, { release_id: 41, can_install: true }], 42), null);
+});
+
 test("release loading and operation submission use only fixed installed API routes", async () => {
   const updates = loadUpdates();
   const calls = [];

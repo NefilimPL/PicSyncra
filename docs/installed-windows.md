@@ -12,8 +12,10 @@ zarządzanego przez instalację, więc usunięcie starego folderu portable nie
 usuwa sekretów ani ustawień używanych przez zainstalowaną aplikację.
 
 Lokalizacja zdjęć może nadal wskazywać udział sieciowy. Konto usługi musi mieć
-do niego dostęp; sprawdzenie odbywa się pod kontem usługi, a nie kontem osoby
-instalującej.
+do niego dostęp; WEB instalowany przez kontroler działa jako `SYSTEM`. Użyj
+ścieżki UNC (na przykład `\\serwer\\zdjecia`) i nadaj uprawnienie kontu
+komputera lub skonfiguruj dostęp do udziału dla `SYSTEM`. Dyski mapowane tylko
+w sesji osoby instalującej nie są widoczne dla usługi.
 
 ## Aktualizacje
 
@@ -28,3 +30,8 @@ użytkownikom wyświetla dwuminutowe ostrzeżenie. Administrator może wymusić
 anulowanie znanych zadań, gdy zadanie nie kończy się samodzielnie.
 
 Restart backendu i autostart są dostępne z WEB wyłącznie dla administratora.
+Instalator rejestruje zadanie `PicSyncra Controller primary-installation`,
+które jest właścicielem tylko uruchomionego przez siebie procesu WEB. Kontroler
+najpierw potwierdza żądanie administracyjne, a następnie restartuje WEB z
+aktywnego wydania; nie używa `taskkill` ani nie zatrzymuje procesu zajmującego
+ten sam port.
