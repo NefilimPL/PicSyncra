@@ -181,3 +181,28 @@ def test_execution_service_can_limit_a_queue_job_to_the_fast_profile():
     )
 
     assert worker.submissions[0]["profile_ids"] == ["fast"]
+
+
+def test_execution_service_keeps_ocr_in_maintenance_drain_and_cancels_it_when_forced():
+    from picsyncra.installation.maintenance import MaintenanceGate
+
+    worker = _FakeWorker()
+    gate = MaintenanceGate()
+    service = OcrExecutionService(
+        worker=worker,
+        registry=OcrProgressRegistry(),
+        settings=lambda: {"model_profiles": ["fast"]},
+        telemetry=lambda: _telemetry(),
+        maintenance_gate=gate,
+    )
+
+    run_id = service.submit_test(path="C:/cache/test.png")
+    assert gate.snapshot()["active_by_kind"] == {"ocr": 1}
+
+    gate.begin("update-1", initiator_id="admin-1")
+    gate.request_force_cancel()
+    assert worker.cancelled == [run_id]
+
+    worker.events = [{"kind": "result", "run_id": run_id, "diagnostics": {}}]
+    service.pump()
+    assert gate.snapshot()["active_tasks"] == 0

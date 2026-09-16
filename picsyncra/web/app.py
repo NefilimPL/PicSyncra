@@ -5477,6 +5477,11 @@ def create_app() -> FastAPI:
                         )
                         else None
                     ),
+                    maintenance_gate=(
+                        installation_service.maintenance_gate
+                        if installation_service is not None
+                        else None
+                    ),
                 )
                 execution_service.start()
                 app.state.ocr_execution_worker = ocr_worker
