@@ -6,15 +6,17 @@ from dataclasses import asdict
 import json
 import os
 from pathlib import Path
+import threading
+import time
 from typing import Protocol
 from uuid import uuid4
 
 from .contracts import InstallContext, OperationRequest
 from .journal import OperationJournal
+from .maintenance import MaintenanceCoordinator, MaintenanceGate
 from .presence import PresenceRegistry
 from .session_epoch import advance_session_epoch, read_session_epoch
 from .update_helper import read_active_release
-from .update_transaction import UpdateTransaction
 
 
 class OperationUnavailable(RuntimeError):
@@ -37,7 +39,16 @@ class InstalledOperationService:
         self._controller = controller
         self._journal = OperationJournal(context.state_root / "operations.json")
         self._presence = PresenceRegistry()
+        self._maintenance_gate = MaintenanceGate()
+        self._maintenance = MaintenanceCoordinator(self._maintenance_gate, self._presence)
+        self._operation_threads: dict[str, threading.Thread] = {}
+        self._operation_threads_lock = threading.Lock()
         self._settings_path = context.state_root / "installation-settings.json"
+
+    @property
+    def maintenance_gate(self) -> MaintenanceGate:
+        """The single admission gate shared with every installed write queue."""
+        return self._maintenance_gate
 
     def status(self) -> dict[str, object]:
         controller = self._controller.snapshot()
@@ -47,6 +58,7 @@ class InstalledOperationService:
             "backend_running": bool(controller.get("backend_running", False)),
             "autostart": bool(controller.get("autostart", False)),
             "session_epoch": read_session_epoch(self._context),
+            "maintenance": self._maintenance.snapshot(),
         }
 
     def submit(self, request: OperationRequest, *, actor_id: str) -> dict[str, object]:
@@ -55,17 +67,15 @@ class InstalledOperationService:
         existing = self._journal.by_request_id(request.request_id)
         if existing is not None:
             return asdict(existing)
-        transaction = UpdateTransaction(
-            self._journal,
-            create_backup=lambda _operation_id: (_ for _ in ()).throw(AssertionError("restart does not create a backup")),
-            apply=lambda _request: self._restart(),
-            validate=lambda _request: bool(self._controller.snapshot().get("backend_running", False)),
-            rollback=lambda _receipt: None,
-        )
-        snapshot = transaction.execute(request, actor_id=actor_id)
-        if snapshot.state == "committed":
-            advance_session_epoch(self._context)
-        return asdict(snapshot)
+        operation = self._journal.submit(request, actor_id=actor_id)
+        self._maintenance.begin(operation.operation_id, initiator_id=actor_id)
+        self._journal.transition(operation.operation_id, "draining")
+        phase = self._maintenance.advance()
+        self._sync_maintenance(operation.operation_id, phase)
+        if phase["state"] == "ready":
+            return asdict(self._execute_restart(operation.operation_id))
+        self._start_maintenance_worker(operation.operation_id)
+        return asdict(self._journal.read(operation.operation_id))
 
     def read_operation(self, operation_id: str) -> dict[str, object] | None:
         try:
@@ -73,9 +83,18 @@ class InstalledOperationService:
         except (KeyError, ValueError):
             return None
 
-    def force_operation(self, _operation_id: str) -> dict[str, object] | None:
-        # Force is added only when task cancellation is wired to every writer.
-        return None
+    def force_operation(self, operation_id: str) -> dict[str, object] | None:
+        try:
+            operation = self._journal.read(operation_id)
+        except (KeyError, ValueError):
+            return None
+        if operation.state in {"committed", "rolled_back", "recovery_required", "failed"}:
+            return None
+        phase = self._maintenance.snapshot()
+        if phase.get("operation_id") != operation_id:
+            return None
+        phase = self._maintenance.force()
+        return asdict(self._sync_maintenance(operation_id, phase))
 
     def change_channel(self, channel: str) -> dict[str, object]:
         if channel not in {"stable", "dev"}:
@@ -90,10 +109,77 @@ class InstalledOperationService:
 
     def heartbeat(self, user_id: str, session_id: str) -> dict[str, object]:
         self._presence.heartbeat(user_id, session_id)
-        return {"state": "idle", "session_epoch": read_session_epoch(self._context)}
+        phase = self._maintenance.advance()
+        return {
+            "state": phase["state"],
+            "active_tasks": phase["active_tasks"],
+            "other_users": phase["other_users"],
+            "deadline_utc": phase["deadline_utc"],
+            "session_epoch": read_session_epoch(self._context),
+        }
 
     def public_status(self) -> dict[str, object]:
-        return {"state": "idle", "build": str(read_active_release(self._context))}
+        phase = self._maintenance.snapshot()
+        return {
+            "state": phase["state"],
+            "active_tasks": phase["active_tasks"],
+            "other_users": phase["other_users"],
+            "deadline_utc": phase["deadline_utc"],
+            "build": str(read_active_release(self._context)),
+        }
+
+    def _start_maintenance_worker(self, operation_id: str) -> None:
+        with self._operation_threads_lock:
+            if operation_id in self._operation_threads:
+                return
+            worker = threading.Thread(
+                target=self._wait_for_maintenance_then_restart,
+                args=(operation_id,),
+                name=f"PicSyncraMaintenance-{operation_id}",
+                daemon=True,
+            )
+            self._operation_threads[operation_id] = worker
+            worker.start()
+
+    def _wait_for_maintenance_then_restart(self, operation_id: str) -> None:
+        try:
+            while True:
+                phase = self._maintenance.advance()
+                self._sync_maintenance(operation_id, phase)
+                if phase["state"] == "ready":
+                    self._execute_restart(operation_id)
+                    return
+                time.sleep(0.2)
+        finally:
+            with self._operation_threads_lock:
+                self._operation_threads.pop(operation_id, None)
+
+    def _execute_restart(self, operation_id: str):
+        try:
+            self._journal.transition(operation_id, "stopping")
+            self._journal.transition(operation_id, "installing")
+            self._restart()
+            self._journal.transition(operation_id, "validating")
+            if not bool(self._controller.snapshot().get("backend_running", False)):
+                return self._journal.transition(operation_id, "failed", error_code="validation_failed")
+            snapshot = self._journal.transition(operation_id, "committed")
+            advance_session_epoch(self._context)
+            return snapshot
+        except Exception:
+            return self._journal.transition(operation_id, "failed", error_code="apply_failed")
+        finally:
+            if self._maintenance_gate.wait_for_drain(timeout=0):
+                self._maintenance_gate.complete(operation_id)
+
+    def _sync_maintenance(self, operation_id: str, phase: dict[str, object]):
+        deadline = phase.get("deadline_utc")
+        return self._journal.update_runtime(
+            operation_id,
+            active_tasks=int(phase.get("active_tasks", 0)),
+            other_users=int(phase.get("other_users", 0)),
+            deadline_utc=None if deadline is None else str(deadline),
+            force_allowed=bool(phase.get("force_allowed", False)),
+        )
 
     def _restart(self) -> None:
         if not self._controller.restart_backend():

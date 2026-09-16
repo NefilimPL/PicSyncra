@@ -8,6 +8,8 @@ import threading
 import uuid
 from collections.abc import Callable
 
+from ..installation.maintenance import MaintenanceGate, MaintenanceLease
+
 
 @dataclass(frozen=True)
 class QueueLimits:
@@ -27,14 +29,25 @@ class OwnerQueueLimit(RuntimeError):
     """Raised when an owner has reached its reservation limit."""
 
 
+class MaintenanceInProgress(RuntimeError):
+    """Raised when installed maintenance has stopped admission of new jobs."""
+
+
 class QueueReservation:
     """A queue slot that may be submitted later or released idempotently."""
 
-    def __init__(self, queue: ProcessQueueService, token: str, owner_id: str):
+    def __init__(
+        self,
+        queue: ProcessQueueService,
+        token: str,
+        owner_id: str,
+        maintenance_lease: MaintenanceLease | None = None,
+    ):
         self._queue = queue
         self.token = token
         self.owner_id = owner_id
         self.state = "reserved"
+        self._maintenance_lease = maintenance_lease
 
     def release(self) -> bool:
         return self._queue._release(self)
@@ -52,7 +65,13 @@ class _QueuedJob:
 class ProcessQueueService:
     """Reserves the bounded capacity shared by process job producers."""
 
-    def __init__(self, limits: QueueLimits | None = None, *, start_workers: bool = True):
+    def __init__(
+        self,
+        limits: QueueLimits | None = None,
+        *,
+        start_workers: bool = True,
+        maintenance_gate: MaintenanceGate | None = None,
+    ):
         self.limits = limits or QueueLimits()
         self._condition = threading.Condition()
         self._reservations: dict[str, QueueReservation] = {}
@@ -62,6 +81,7 @@ class ProcessQueueService:
         self._stopping = False
         self._workers: list[threading.Thread] = []
         self._start_workers = start_workers
+        self._maintenance_gate = maintenance_gate
         if start_workers:
             self._workers = [
                 threading.Thread(
@@ -75,17 +95,30 @@ class ProcessQueueService:
                 worker.start()
 
     def reserve(self, owner_id: str) -> QueueReservation:
-        with self._condition:
-            if self._owner_counts.get(owner_id, 0) >= self.limits.max_per_owner:
-                raise OwnerQueueLimit("owner queue limit reached")
-            if len(self._reservations) >= self.limits.max_pending:
-                raise ProcessQueueFull(self.limits.retry_after_seconds)
+        maintenance_lease = (
+            self._maintenance_gate.try_admit("process")
+            if self._maintenance_gate is not None
+            else None
+        )
+        if self._maintenance_gate is not None and maintenance_lease is None:
+            raise MaintenanceInProgress("maintenance is in progress")
 
-            token = uuid.uuid4().hex
-            reservation = QueueReservation(self, token, owner_id)
-            self._reservations[token] = reservation
-            self._owner_counts[owner_id] = self._owner_counts.get(owner_id, 0) + 1
-            return reservation
+        with self._condition:
+            try:
+                if self._owner_counts.get(owner_id, 0) >= self.limits.max_per_owner:
+                    raise OwnerQueueLimit("owner queue limit reached")
+                if len(self._reservations) >= self.limits.max_pending:
+                    raise ProcessQueueFull(self.limits.retry_after_seconds)
+
+                token = uuid.uuid4().hex
+                reservation = QueueReservation(self, token, owner_id, maintenance_lease)
+                self._reservations[token] = reservation
+                self._owner_counts[owner_id] = self._owner_counts.get(owner_id, 0) + 1
+                return reservation
+            except Exception:
+                if maintenance_lease is not None:
+                    maintenance_lease.finish()
+                raise
 
     def _release(self, reservation: QueueReservation) -> bool:
         with self._condition:
@@ -107,6 +140,8 @@ class ProcessQueueService:
         else:
             del self._owner_counts[reservation.owner_id]
         reservation.state = "released"
+        if reservation._maintenance_lease is not None:
+            reservation._maintenance_lease.finish()
         return True
 
     def submit(
@@ -127,8 +162,19 @@ class ProcessQueueService:
             reservation.state = "submitted"
             self._jobs.append(job)
             self._jobs_by_id[job_id] = job
+            if reservation._maintenance_lease is not None:
+                reservation._maintenance_lease.set_cancel_callback(
+                    lambda: self.cancel(job_id)
+                )
             self._condition.notify()
             return len(self._jobs)
+
+    def set_maintenance_gate(self, gate: MaintenanceGate | None) -> None:
+        """Set the gate before installed maintenance starts accepting work."""
+        with self._condition:
+            if self._reservations:
+                raise RuntimeError("cannot replace maintenance gate while jobs are active")
+            self._maintenance_gate = gate
 
     def position(self, job_id: str) -> int | None:
         with self._condition:

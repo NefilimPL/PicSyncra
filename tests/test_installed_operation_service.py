@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import time
 
 import pytest
 
@@ -85,3 +86,29 @@ def test_channel_and_autostart_are_persisted_by_installed_service(tmp_path: Path
     assert service.set_autostart(True) == {"autostart": True}
     reloaded = InstalledOperationService(context(tmp_path), Controller())
     assert reloaded.status()["channel"] == "dev"
+
+
+def test_restart_waits_for_admitted_work_and_force_exposes_drain_status(tmp_path: Path) -> None:
+    from picsyncra.installation.operation_service import InstalledOperationService
+
+    controller = Controller()
+    service = InstalledOperationService(context(tmp_path), controller)
+    admitted = service.maintenance_gate.try_admit("upload")
+    assert admitted is not None
+
+    submitted = service.submit(restart_request(), actor_id="admin-1")
+    assert submitted["state"] == "draining"
+    assert submitted["active_tasks"] == 1
+    assert controller.restart_calls == 0
+    assert service.force_operation(str(submitted["operation_id"])) is not None
+
+    admitted.finish()
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline:
+        result = service.read_operation(str(submitted["operation_id"]))
+        if result is not None and result["state"] == "committed":
+            break
+        time.sleep(0.02)
+    assert result is not None
+    assert result["state"] == "committed"
+    assert controller.restart_calls == 1

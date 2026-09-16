@@ -21,6 +21,10 @@ class MaintenanceLease:
     def finish(self) -> bool:
         return self._gate._finish(self._token)
 
+    def set_cancel_callback(self, callback: Callable[[], None]) -> bool:
+        """Attach cancellation once the admitted operation has a concrete job."""
+        return self._gate._set_cancel_callback(self._token, callback)
+
 
 class MaintenanceGate:
     """Atomically reject new mutating work after draining begins."""
@@ -108,6 +112,22 @@ class MaintenanceGate:
             del self._leases[token]
             self._condition.notify_all()
             return True
+
+    def _set_cancel_callback(self, token: int, callback: Callable[[], None]) -> bool:
+        if not callable(callback):
+            raise TypeError("callback must be callable")
+        with self._condition:
+            current = self._leases.get(token)
+            if current is None:
+                return False
+            kind, existing_callback = current
+            if existing_callback is not None:
+                raise RuntimeError("a cancellation callback is already registered")
+            self._leases[token] = (kind, callback)
+            force_requested = self._force_requested
+        if force_requested:
+            callback()
+        return True
 
 
 class MaintenanceCoordinator:

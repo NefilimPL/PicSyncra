@@ -65,6 +65,7 @@ from ..install_paths import resolve_install_context
 from ..installation.ocr_runtime import create_installed_ocr_worker
 from ..installation.launcher import InstallationControlClient
 from ..installation.operation_service import InstalledOperationService
+from ..installation.release_client import list_installed_releases
 from ..installation.session_epoch import SessionEpochError, read_session_epoch
 from ..services.image_dimensions import (
     ImageOcrDiagnostics,
@@ -5259,6 +5260,8 @@ def create_app() -> FastAPI:
         else None
     )
     app.state.installation_service = installation_service
+    if installation_service is not None:
+        _PROCESS_QUEUE.set_maintenance_gate(installation_service.maintenance_gate)
 
     def _ocr_has_active_requests() -> bool:
         with app.state.ocr_activity_lock:
@@ -5537,7 +5540,9 @@ def create_app() -> FastAPI:
                     require_user=lambda request: _require_user(request),
                     require_csrf=lambda request: _validate_mutating_request(request),
                     installation_status=installation_service.status,
-                    list_releases=lambda _channel: [],
+                    list_releases=lambda channel: [
+                        asdict(release) for release in list_installed_releases(channel)
+                    ],
                     submit_operation=lambda request, actor_id: installation_service.submit(request, actor_id=actor_id),
                     read_operation=installation_service.read_operation,
                     force_operation=installation_service.force_operation,

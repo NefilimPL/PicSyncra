@@ -137,6 +137,38 @@ class OperationJournal:
             self._persist()
             return next_snapshot
 
+    def update_runtime(
+        self,
+        operation_id: str,
+        *,
+        active_tasks: int,
+        other_users: int,
+        deadline_utc: str | None,
+        force_allowed: bool,
+    ) -> OperationSnapshot:
+        """Persist live drain details without changing the operation state."""
+        if (
+            isinstance(active_tasks, bool) or not isinstance(active_tasks, int) or active_tasks < 0
+            or isinstance(other_users, bool) or not isinstance(other_users, int) or other_users < 0
+            or (deadline_utc is not None and not isinstance(deadline_utc, str))
+            or not isinstance(force_allowed, bool)
+        ):
+            raise ValueError("runtime operation details are invalid")
+        with self._lock:
+            current = self.read(operation_id)
+            next_snapshot = OperationSnapshot(
+                **{
+                    **asdict(current),
+                    "active_tasks": active_tasks,
+                    "other_users": other_users,
+                    "deadline_utc": deadline_utc,
+                    "force_allowed": force_allowed,
+                }
+            )
+            self._operations[current.operation_id] = next_snapshot
+            self._persist()
+            return next_snapshot
+
     def _load(self) -> None:
         if not self._path.exists():
             return
