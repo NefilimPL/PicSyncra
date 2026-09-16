@@ -232,6 +232,7 @@ BROWSER_EXTENSION_DIR = Path(__file__).resolve().parents[1] / "browser_extension
 SESSION_COOKIE = "picsyncra_web_session"
 SESSION_MAX_AGE_SECONDS = 12 * 60 * 60
 BROWSER_EXTENSION_TOKEN_MAX_AGE_SECONDS = 30 * 24 * 60 * 60
+EXTENSION_PROTOCOL_VERSION = 1
 DEFAULT_ADMIN_USERNAME = "admin"
 DEFAULT_ADMIN_PASSWORD = "admin"
 ACTIVE_CLIENT_MAX_AGE_SECONDS = 180
@@ -6142,6 +6143,8 @@ def create_app() -> FastAPI:
     @app.get("/api/browser-extension/ping")
     def browser_extension_ping_api(request: Request) -> JSONResponse:
         username = _require_browser_extension_user(request)
+        protocol = str(request.headers.get("x-picsyncra-extension-protocol") or "")
+        compatible = protocol in {"", str(EXTENSION_PROTOCOL_VERSION)}
         return _browser_extension_json(
             request,
             {
@@ -6149,6 +6152,9 @@ def create_app() -> FastAPI:
                 "username": username,
                 "version": get_display_version(),
                 "token_version": int((find_user(username) or {}).get("extension_token_version") or 0),
+                "extension_protocol": EXTENSION_PROTOCOL_VERSION,
+                "update_required": not compatible,
+                "extension_download": "/api/browser-extension/download" if not compatible else "",
             },
         )
 

@@ -457,12 +457,13 @@
     const apiToken = apiTokenInput.value.trim();
     setStatus("Test");
     const response = await fetch(`${panelUrl}/api/browser-extension/ping`, {
-      headers: { Authorization: `Bearer ${apiToken}` },
+      headers: { Authorization: `Bearer ${apiToken}`, "X-PicSyncra-Extension-Protocol": "1" },
     });
     if (!response.ok) {
       throw new Error(`Panel odrzucil polaczenie: ${response.status}`);
     }
-    setStatus("Polaczono");
+    const payload = await response.json().catch(() => ({}));
+    setStatus(payload.update_required ? "Wymagana aktualizacja rozszerzenia" : "Polaczono");
   }
 
   async function uploadSelected() {
