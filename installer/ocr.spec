@@ -18,9 +18,10 @@ model_cache = Path(model_cache_value) if model_cache_value else None
 if model_cache is None or not model_cache.is_dir():
     raise RuntimeError("Prepared OCR model cache is required for the installed OCR component.")
 datas += [(str(model_cache), "ocr_models")]
+ROOT = Path(SPECPATH).parent
 
 a = Analysis(
-    ["PicSyncra-OCR.py"],
+    [str(ROOT / "PicSyncra-OCR.py")],
     pathex=[],
     binaries=binaries,
     datas=datas,

@@ -21,6 +21,13 @@ def test_ocr_spec_packages_the_prepared_model_cache() -> None:
     assert '"ocr_models"' in source
 
 
+def test_ocr_spec_resolves_its_root_entrypoint_outside_installer_directory() -> None:
+    source = (ROOT / "installer" / "ocr.spec").read_text(encoding="utf-8")
+
+    assert "Path(SPECPATH).parent" in source
+    assert 'ROOT / "PicSyncra-OCR.py"' in source
+
+
 def test_setup_helper_spec_resolves_its_root_entrypoint_outside_installer_directory() -> None:
     source = (ROOT / "installer" / "installed.spec").read_text(encoding="utf-8")
 
