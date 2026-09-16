@@ -120,12 +120,22 @@ class InstalledOperationService:
         return asdict(self._execute_release(operation.operation_id, request, executor))
 
     def _execute_release(self, operation_id: str, request: OperationRequest, executor: object):
+        def validate(selected: OperationRequest) -> bool:
+            if not executor.validate(selected):
+                return False
+            self._restart()
+            return bool(self._controller.snapshot().get("backend_running", False))
+
+        def rollback(backup: object) -> None:
+            executor.rollback(backup)
+            self._restart()
+
         transaction = UpdateTransaction(
             self._journal,
             create_backup=executor.create_backup,
             apply=executor.apply,
-            validate=executor.validate,
-            rollback=executor.rollback,
+            validate=validate,
+            rollback=rollback,
         )
         result = transaction.execute(request, actor_id="installed-maintenance")
         if result.state == "committed":
