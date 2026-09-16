@@ -85,9 +85,12 @@ def build_installation_router(dependencies: InstallationApiDependencies) -> APIR
         _require_installed(dependencies)
         admin = dependencies.require_admin(request)
         dependencies.require_csrf(request)
-        result = dependencies.submit_operation(
-            _operation(await request.json()), str(admin.get("id") or admin.get("username") or "")
-        )
+        try:
+            result = dependencies.submit_operation(
+                _operation(await request.json()), str(admin.get("id") or admin.get("username") or "")
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         return JSONResponse(result, status_code=202)
 
     @router.get("/api/installation/operations/{operation_id}")

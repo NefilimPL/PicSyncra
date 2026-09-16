@@ -63,6 +63,8 @@ from ..history_changes import history_change_set
 from ..image_utils import fit_image_to_content
 from ..install_paths import resolve_install_context
 from ..installation.ocr_runtime import create_installed_ocr_worker
+from ..installation.launcher import InstallationControlClient
+from ..installation.operation_service import InstalledOperationService
 from ..services.image_dimensions import (
     ImageOcrDiagnostics,
     OcrDiagnosticCandidate,
@@ -129,6 +131,7 @@ from .process_models import (
     QueuedUploadFile as _QueuedUploadFile,
 )
 from .runtime_api import RuntimeApiDependencies, build_runtime_router
+from .installation_api import InstallationApiDependencies, build_installation_router
 from .process_queue import (
     ProcessQueueService,
     QueueReservation,
@@ -5230,6 +5233,15 @@ def create_app() -> FastAPI:
     app.state.ocr_queue_thread = None
     app.state.ocr_execution_service = None
     app.state.ocr_execution_worker = None
+    installed_context = resolve_install_context(Path(sys.executable))
+    installation_service = (
+        InstalledOperationService(
+            installed_context, InstallationControlClient(installed_context.installation_id)
+        )
+        if installed_context is not None
+        else None
+    )
+    app.state.installation_service = installation_service
 
     def _ocr_has_active_requests() -> bool:
         with app.state.ocr_activity_lock:
@@ -5498,6 +5510,27 @@ def create_app() -> FastAPI:
     )
     runtime_routes = {route.path: route for route in runtime_router.routes}
     app.routes.append(runtime_routes["/api/runtime-status"])
+
+    if installation_service is not None:
+        app.include_router(
+            build_installation_router(
+                InstallationApiDependencies(
+                    is_installed=lambda: True,
+                    require_admin=lambda request: _require_admin(request),
+                    require_user=lambda request: _require_user(request),
+                    require_csrf=lambda request: _validate_mutating_request(request),
+                    installation_status=installation_service.status,
+                    list_releases=lambda _channel: [],
+                    submit_operation=lambda request, actor_id: installation_service.submit(request, actor_id=actor_id),
+                    read_operation=installation_service.read_operation,
+                    force_operation=installation_service.force_operation,
+                    change_channel=installation_service.change_channel,
+                    set_autostart=installation_service.set_autostart,
+                    heartbeat=installation_service.heartbeat,
+                    public_status=installation_service.public_status,
+                )
+            )
+        )
 
     @app.post("/api/resource-monitor/simulate-safe")
     def resource_monitor_simulate_safe(request: Request) -> Dict[str, Any]:

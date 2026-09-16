@@ -117,6 +117,12 @@ class OperationJournal:
         with self._lock:
             return self._operations[_valid_id(operation_id, name="operation")]
 
+    def by_request_id(self, request_id: str) -> OperationSnapshot | None:
+        """Return an existing idempotency result without creating work."""
+        with self._lock:
+            operation_id = self._requests.get(_valid_id(request_id, name="request"))
+            return self._operations.get(operation_id) if operation_id is not None else None
+
     def transition(self, operation_id: str, state: OperationState, *, error_code: str | None = None) -> OperationSnapshot:
         with self._lock:
             current = self.read(operation_id)

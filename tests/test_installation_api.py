@@ -94,3 +94,12 @@ def test_presence_requires_logged_in_user_but_public_status_needs_no_session() -
     routes, _calls = app_with_dependencies()
     assert routes["/api/installation/public-status"]() == {"state": "countdown", "deadline_utc": "2026-09-16T12:00:00Z"}
     assert routes["/api/installation/presence"](RequestStub(), "tab-1") == {"user": "operator-1", "session": "tab-1"}
+
+
+def test_web_app_mounts_installation_routes_only_for_a_verified_installed_context() -> None:
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "picsyncra" / "web" / "app.py").read_text(encoding="utf-8")
+    assert "installed_context = resolve_install_context(Path(sys.executable))" in source
+    assert "if installation_service is not None:" in source
+    assert "app.include_router(" in source
