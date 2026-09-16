@@ -15,6 +15,7 @@ from .contracts import InstallContext, OperationRequest
 from .journal import OperationJournal
 from .maintenance import MaintenanceCoordinator, MaintenanceGate
 from .presence import PresenceRegistry
+from .recovery import recover_pending_operation
 from .session_epoch import advance_session_epoch, read_session_epoch
 from .update_helper import read_active_release
 from .update_transaction import UpdateTransaction
@@ -47,6 +48,7 @@ class InstalledOperationService:
         self._controller = controller
         self._release_executor_factory = release_executor_factory
         self._journal = OperationJournal(context.state_root / "operations.json")
+        self._recovered_operation = recover_pending_operation(context)
         self._presence = PresenceRegistry()
         self._maintenance_gate = MaintenanceGate()
         self._maintenance = MaintenanceCoordinator(self._maintenance_gate, self._presence)
@@ -72,6 +74,8 @@ class InstalledOperationService:
         }
 
     def submit(self, request: OperationRequest, *, actor_id: str) -> dict[str, object]:
+        if self._recovered_operation is not None:
+            raise OperationUnavailable("Poprzednia aktualizacja wymaga odzyskiwania przed kolejną operacją.")
         if request.action != "restart":
             return self._submit_release(request, actor_id)
         existing = self._journal.by_request_id(request.request_id)
