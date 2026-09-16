@@ -186,15 +186,37 @@ def download_release(
     open_url: OpenUrl = _open_github_asset,
 ) -> dict[str, Path]:
     """Download every signed component and publish them only after verification."""
+    return download_selected_components(
+        choice, release, staging, {component.name for component in choice.components}, open_url=open_url
+    )
+
+
+def download_selected_components(
+    choice: ReleaseChoice,
+    release: Mapping[str, object],
+    staging: Path,
+    component_names: set[str] | frozenset[str],
+    *,
+    open_url: OpenUrl = _open_github_asset,
+) -> dict[str, Path]:
+    """Download a non-empty signed subset, without fetching unrelated assets."""
     if not choice.can_install:
         raise DownloadError("A blocked release cannot be downloaded.")
+    selected = frozenset(component_names)
+    if not selected:
+        raise DownloadError("At least one signed component must be selected.")
+    components = {component.name: component for component in choice.components}
+    if selected - components.keys():
+        raise DownloadError("A selected component is absent from the signed release.")
     root = _safe_staging_root(staging)
     assets = _release_assets(release, choice)
     result: dict[str, Path] = {}
     for component in choice.components:
+        if component.name not in selected:
+            continue
         asset = _component_asset(component, assets)
         result[component.name] = _download_component(component, asset, root, open_url)
     return result
 
 
-__all__ = ["DownloadError", "download_release"]
+__all__ = ["DownloadError", "download_release", "download_selected_components"]

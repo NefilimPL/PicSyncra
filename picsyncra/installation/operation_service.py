@@ -43,10 +43,18 @@ class ReleaseOperationExecutor(Protocol):
 class InstalledOperationService:
     """Expose bounded installed operations without exposing system commands."""
 
-    def __init__(self, context: InstallContext, controller: InstalledController, *, release_executor_factory=None) -> None:
+    def __init__(
+        self,
+        context: InstallContext,
+        controller: InstalledController,
+        *,
+        release_executor_factory=None,
+        ocr_executor_factory=None,
+    ) -> None:
         self._context = context
         self._controller = controller
         self._release_executor_factory = release_executor_factory
+        self._ocr_executor_factory = ocr_executor_factory
         self._journal = OperationJournal(context.state_root / "operations.json")
         self._recovered_operation = recover_pending_operation(context)
         self._presence = PresenceRegistry()
@@ -92,14 +100,15 @@ class InstalledOperationService:
         return asdict(self._journal.read(operation.operation_id))
 
     def _submit_release(self, request: OperationRequest, actor_id: str) -> dict[str, object]:
-        if request.action not in {"update", "downgrade"}:
+        if request.action not in {"update", "downgrade", "install_ocr"}:
             raise OperationUnavailable("Ta operacja wymaga jeszcze zweryfikowanego wykonawcy pakietu.")
-        if self._release_executor_factory is None:
+        factory = self._ocr_executor_factory if request.action == "install_ocr" else self._release_executor_factory
+        if factory is None:
             raise OperationUnavailable("Brak zweryfikowanego pakietu dla wybranego wydania.")
         existing = self._journal.by_request_id(request.request_id)
         if existing is not None:
             return asdict(existing)
-        executor = self._release_executor_factory(request)
+        executor = factory(request)
         operation = self._journal.submit(request, actor_id=actor_id)
         self._maintenance.begin(operation.operation_id, initiator_id=actor_id)
         phase = self._maintenance.advance()

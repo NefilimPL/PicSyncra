@@ -107,6 +107,35 @@ def test_verified_release_executor_runs_backup_before_switching_and_invalidates_
     assert service.status()["session_epoch"] == 1
 
 
+def test_verified_ocr_executor_runs_as_a_backed_up_maintenance_operation(tmp_path: Path) -> None:
+    from picsyncra.installation.contracts import BackupReceipt
+    from picsyncra.installation.operation_service import InstalledOperationService
+
+    calls: list[str] = []
+
+    class Executor:
+        def create_backup(self, operation_id: str):
+            calls.append("backup")
+            return BackupReceipt(operation_id, operation_id, "a" * 64, "b" * 64, 1, 41, True)
+
+        def apply(self, _request):
+            calls.append("apply")
+
+        def validate(self, _request):
+            calls.append("validate")
+            return True
+
+        def rollback(self, _backup):
+            calls.append("rollback")
+
+    service = InstalledOperationService(context(tmp_path), Controller(), ocr_executor_factory=lambda _request: Executor())
+    result = service.submit(OperationRequest("ocr-1", "install_ocr", None, None, False), actor_id="admin-1")
+
+    assert result["state"] == "committed"
+    assert calls == ["backup", "apply", "validate"]
+    assert service.status()["session_epoch"] == 1
+
+
 def test_channel_and_autostart_are_persisted_by_installed_service(tmp_path: Path) -> None:
     from picsyncra.installation.operation_service import InstalledOperationService
 

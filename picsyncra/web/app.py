@@ -63,6 +63,7 @@ from ..history_changes import history_change_set
 from ..image_utils import fit_image_to_content
 from ..install_paths import resolve_install_context
 from ..installation.ocr_runtime import create_installed_ocr_worker
+from ..installation.ocr_operation_factory import VerifiedOcrOperationFactory
 from ..installation.launcher import InstallationControlClient
 from ..installation.operation_service import InstalledOperationService
 from ..installation.release_client import list_installed_releases, read_installed_release_record
@@ -5259,6 +5260,11 @@ def create_app() -> FastAPI:
             installed_context,
             InstallationControlClient(installed_context.installation_id),
             release_executor_factory=VerifiedReleaseOperationFactory(
+                installed_context,
+                catalog=lambda channel: tuple(list_installed_releases(channel)),
+                release_record=read_installed_release_record,
+            ),
+            ocr_executor_factory=VerifiedOcrOperationFactory(
                 installed_context,
                 catalog=lambda channel: tuple(list_installed_releases(channel)),
                 release_record=read_installed_release_record,

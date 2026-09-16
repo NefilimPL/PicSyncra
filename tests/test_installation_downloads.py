@@ -145,3 +145,32 @@ def test_download_refuses_existing_file_or_link_in_staging(tmp_path: Path) -> No
             open_url=lambda _url: Response(payload),
         )
     assert (staging / "web.zip").read_bytes() == b"older package"
+
+
+def test_download_selected_components_fetches_only_the_requested_signed_asset(tmp_path: Path) -> None:
+    from picsyncra.installation.downloads import download_selected_components
+
+    ocr_payload = b"optional ocr"
+    web_payload = b"web bundle"
+    selected = ReleaseChoice(
+        42, "v42", "a" * 40, "stable", "main", "b" * 64,
+        (
+            ComponentRef("web", "web-42", "web.zip", hashlib.sha256(web_payload).hexdigest(), len(web_payload)),
+            ComponentRef("ocr", "ocr-42", "ocr.zip", hashlib.sha256(ocr_payload).hexdigest(), len(ocr_payload)),
+        ),
+        True, None,
+    )
+    record = {
+        "id": 42,
+        "assets": [
+            {"name": "web.zip", "size": len(web_payload), "browser_download_url": "https://github.com/NefilimPL/PicSyncra/releases/download/v42/web.zip"},
+            {"name": "ocr.zip", "size": len(ocr_payload), "browser_download_url": "https://github.com/NefilimPL/PicSyncra/releases/download/v42/ocr.zip"},
+        ],
+    }
+
+    result = download_selected_components(
+        selected, record, tmp_path / "staging", {"ocr"},
+        open_url=lambda url: Response(ocr_payload) if url.endswith("ocr.zip") else pytest.fail("web must not be downloaded"),
+    )
+
+    assert result == {"ocr": tmp_path / "staging" / "ocr.zip"}
