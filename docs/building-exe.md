@@ -109,6 +109,16 @@ Inno Setup:
 powershell -NoProfile -File installer/build_installer.ps1 -ReleaseId 1
 ```
 
+W Windows można uruchomić ten sam build bez wpisywania polecenia PowerShell:
+
+```text
+Generator exe\BUILD_INSTALLER.bat 1
+```
+
+Skrypt domyślnie przygotowuje także pobierany później komponent OCR. Aby zbudować
+sam instalator podstawowy, użyj `Generator exe\BUILD_INSTALLER.bat 1 --without-ocr`.
+Gotowy plik instalatora trafia do katalogu `installer\Output`.
+
 Polecenie wymaga dostępnych w `PATH` interpretera Python i `ISCC.exe` z Inno
 Setup. LOCAL jest zawarty w artefakcie, ale pozostaje opcją instalatora;
 podstawowy pakiet nie zawiera OCR. Skrypt tworzy `active.json` dla wydania i
