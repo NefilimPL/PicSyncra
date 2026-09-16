@@ -1,0 +1,96 @@
+from pathlib import Path
+
+import pytest
+
+from picsyncra.installation.contracts import InstallContext
+
+
+def _context(tmp_path: Path) -> InstallContext:
+    program = tmp_path / "program"
+    state = tmp_path / "state"
+    (program / "versions" / "41" / "web").mkdir(parents=True)
+    state.mkdir()
+    (program / "versions" / "41" / "web" / "PicSyncra-WEB.exe").write_bytes(b"web")
+    (program / "active.json").write_text(
+        '{"schema":1,"installation_id":"site-1","release_id":41}', encoding="utf-8"
+    )
+    return InstallContext("site-1", program, state, state / "config", state / "data.sqlite")
+
+
+def test_controller_host_resolves_only_the_web_executable_in_the_active_bundle(tmp_path: Path) -> None:
+    from picsyncra.installation.controller_host import active_web_executable
+
+    assert active_web_executable(_context(tmp_path)) == tmp_path / "program" / "versions" / "41" / "web" / "PicSyncra-WEB.exe"
+
+
+def test_controller_host_rejects_a_missing_or_linked_active_web_executable(tmp_path: Path) -> None:
+    from picsyncra.installation.controller_host import ControllerHostError, active_web_executable
+
+    context = _context(tmp_path)
+    (context.program_root / "versions" / "41" / "web" / "PicSyncra-WEB.exe").unlink()
+    with pytest.raises(ControllerHostError, match="executable"):
+        active_web_executable(context)
+
+
+def test_controller_host_starts_and_stops_only_its_owned_web_process(tmp_path: Path) -> None:
+    from picsyncra.installation.controller_host import ActiveBackendSupervisor
+
+    created: list[FakeProcess] = []
+
+    def create_process(command: list[str]) -> "FakeProcess":
+        assert command[:2] == [
+            str(tmp_path / "program" / "versions" / "41" / "web" / "PicSyncra-WEB.exe"),
+            "--service-run",
+        ]
+        process = FakeProcess()
+        created.append(process)
+        return process
+
+    supervisor = ActiveBackendSupervisor(
+        _context(tmp_path),
+        process_factory=create_process,
+        port_in_use=lambda: False,
+    )
+
+    supervisor.start_backend()
+    assert supervisor.snapshot() == {"backend_running": True, "autostart": True}
+    assert supervisor.stop_backend(force=False) is True
+    assert created[0].terminated is True
+    assert supervisor.snapshot()["backend_running"] is False
+
+
+def test_controller_host_never_stops_a_foreign_listener(tmp_path: Path) -> None:
+    from picsyncra.installation.controller_host import ActiveBackendSupervisor
+
+    supervisor = ActiveBackendSupervisor(
+        _context(tmp_path),
+        process_factory=lambda _command: pytest.fail("must not launch over a foreign listener"),
+        port_in_use=lambda: True,
+    )
+
+    assert supervisor.listener_owner(8010) == "foreign-listener"
+    assert supervisor.stop_backend(force=True) is False
+
+
+class FakeProcess:
+    def __init__(self) -> None:
+        self.returncode: int | None = None
+        self.terminated = False
+        self.killed = False
+
+    def poll(self) -> int | None:
+        return self.returncode
+
+    def terminate(self) -> None:
+        self.terminated = True
+        self.returncode = 0
+
+    def wait(self, timeout: float) -> int:
+        assert timeout > 0
+        if self.returncode is None:
+            raise TimeoutError
+        return self.returncode
+
+    def kill(self) -> None:
+        self.killed = True
+        self.returncode = 1

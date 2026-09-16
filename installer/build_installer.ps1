@@ -26,6 +26,7 @@ try {
     Build-Onedir 'PicSyncra-WEB' 'PicSyncra-WEB.pyw'
     Build-Onedir 'PicSyncra-Migrator' 'PicSyncra-Migrator.pyw'
     Build-Onedir 'PicSyncra' 'PicSyncra.pyw'
+    Build-Onedir 'PicSyncra-Controller' 'PicSyncra-Controller.py'
     & $Python -m PyInstaller --noconfirm --clean --distpath $distRoot --workpath $workRoot installer/installed.spec
     if ($LASTEXITCODE -ne 0) { throw 'Nie udalo sie zbudowac PicSyncra-SetupHelper.' }
     if ($BuildOcr) {
@@ -47,6 +48,8 @@ try {
     Copy-Item (Join-Path $distRoot 'PicSyncra-WEB') (Join-Path $versionRoot 'web') -Recurse -Force
     Copy-Item (Join-Path $distRoot 'PicSyncra-Migrator') (Join-Path $versionRoot 'migrator') -Recurse -Force
     Copy-Item (Join-Path $distRoot 'PicSyncra') (Join-Path $versionRoot 'local') -Recurse -Force
+    # The controller lives outside a release bundle so it can start the newly
+    # active WEB executable after an update changes active.json.
     Copy-Item (Join-Path $distRoot 'PicSyncra-SetupHelper') (Join-Path $distRoot 'helper') -Recurse -Force
     [ordered]@{
         schema = 1

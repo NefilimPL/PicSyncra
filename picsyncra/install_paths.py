@@ -119,9 +119,7 @@ def _load_active_release(program_root: Path, installation_id: str) -> int | None
     return release_id
 
 
-def _context_for_registration(
-    executable: Path, registration: Mapping[str, object]
-) -> InstallContext | None:
+def _registered_context(registration: Mapping[str, object]) -> InstallContext | None:
     installation_id = registration.get("installation_id")
     if not _valid_installation_id(installation_id):
         return None
@@ -133,12 +131,9 @@ def _context_for_registration(
     try:
         canonical_program_root = program_root.resolve(strict=True)
         canonical_state_root = state_root.resolve(strict=True)
-        canonical_executable = executable.resolve(strict=True)
     except (OSError, RuntimeError):
         return None
     if not canonical_program_root.is_dir() or not canonical_state_root.is_dir():
-        return None
-    if not canonical_executable.is_file() or canonical_executable.suffix.lower() != ".exe":
         return None
     release_id = _load_active_release(canonical_program_root, installation_id)
     if release_id is None:
@@ -150,8 +145,6 @@ def _context_for_registration(
         return None
     if not _is_within(canonical_active_bundle, canonical_program_root):
         return None
-    if not _is_within(canonical_executable, canonical_active_bundle):
-        return None
     config_root = (canonical_state_root / "config").resolve(strict=False)
     if not _is_within(config_root, canonical_state_root):
         return None
@@ -162,6 +155,30 @@ def _context_for_registration(
         config_root=config_root,
         database_path=database_path,
     )
+
+
+def _context_for_registration(
+    executable: Path, registration: Mapping[str, object]
+) -> InstallContext | None:
+    context = _registered_context(registration)
+    if context is None:
+        return None
+    try:
+        canonical_executable = executable.resolve(strict=True)
+        active_bundle = (
+            context.program_root
+            / "versions"
+            / str(_load_active_release(context.program_root, context.installation_id))
+        ).resolve(strict=True)
+    except (OSError, RuntimeError):
+        return None
+    if (
+        not canonical_executable.is_file()
+        or canonical_executable.suffix.lower() != ".exe"
+        or not _is_within(canonical_executable, active_bundle)
+    ):
+        return None
+    return context
 
 
 def _matching_contexts(executable: Path) -> Iterator[InstallContext]:
@@ -187,6 +204,26 @@ def resolve_install_context(executable: Path) -> InstallContext | None:
     return matches[0]
 
 
+def load_registered_install_context(installation_id: str) -> InstallContext | None:
+    """Resolve one registry-owned installation for the independent controller.
+
+    Unlike :func:`resolve_install_context`, the controller itself is outside an
+    active release bundle, so there is no executable path to use as evidence.
+    The exact HKLM registration and active marker are still both required.
+    """
+
+    if not _valid_installation_id(installation_id):
+        return None
+    matches = [
+        context
+        for registration in _read_hklm_registrations()
+        if registration.get("installation_id") == installation_id
+        for context in [_registered_context(registration)]
+        if context is not None
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
 def resolve_config_root(executable: Path) -> Path | None:
     """Return the managed configuration root for ``executable`` when installed."""
 
@@ -194,4 +231,8 @@ def resolve_config_root(executable: Path) -> Path | None:
     return context.config_root if context is not None else None
 
 
-__all__ = ["resolve_config_root", "resolve_install_context"]
+__all__ = [
+    "load_registered_install_context",
+    "resolve_config_root",
+    "resolve_install_context",
+]

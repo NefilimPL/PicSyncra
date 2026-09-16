@@ -61,6 +61,23 @@ def test_registered_active_executable_resolves_install_context(
     ).resolve()
 
 
+def test_controller_can_resolve_exact_registered_context_without_a_bundle_executable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registration, _executable, program_root, state_root, database_path = _registered_layout(tmp_path)
+    monkeypatch.setattr(install_paths, "_read_hklm_registrations", lambda: (registration,))
+
+    context = install_paths.load_registered_install_context("primary")
+
+    assert context == InstallContext(
+        "primary",
+        program_root.resolve(),
+        state_root.resolve(),
+        (state_root / "config").resolve(),
+        database_path.resolve(),
+    )
+
+
 def test_missing_registration_keeps_portable_or_development_mode(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -74,6 +74,19 @@ def test_installed_build_always_bundles_local_for_the_optional_component() -> No
     assert "if ($IncludeLocal)" not in build_script
 
 
+def test_installer_deploys_the_independent_controller_before_starting_web() -> None:
+    """Catches shipping a pipe client with no privileged process to serve it."""
+
+    root = Path(__file__).resolve().parents[1]
+    installer = (root / "installer" / "PicSyncra.iss").read_text(encoding="utf-8")
+    build_script = (root / "installer" / "build_installer.ps1").read_text(encoding="utf-8")
+
+    assert "Build-Onedir 'PicSyncra-Controller' 'PicSyncra-Controller.py'" in build_script
+    assert 'Source: "{#BuildRoot}\\PicSyncra-Controller\\*"; DestDir: "{app}\\controller"' in installer
+    assert "PicSyncra Controller primary-installation" in installer
+    assert "--installation-id primary-installation" in installer
+
+
 def test_installed_build_keeps_pyinstaller_specs_as_versioned_source_files() -> None:
     """Catches a blanket ignore rule silently removing installer build inputs."""
 

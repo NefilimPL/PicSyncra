@@ -49,6 +49,7 @@ Name: "{commonappdata}\PicSyncra\primary-installation\staging"; Flags: uninsneve
 Source: "{#BuildRoot}\versions\{#ReleaseId}\web\*"; DestDir: "{app}\versions\{#ReleaseId}\web"; Components: web; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "{#BuildRoot}\versions\{#ReleaseId}\migrator\*"; DestDir: "{app}\versions\{#ReleaseId}\migrator"; Components: migrator; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "{#BuildRoot}\versions\{#ReleaseId}\local\*"; DestDir: "{app}\versions\{#ReleaseId}\local"; Components: local; Flags: recursesubdirs createallsubdirs ignoreversion
+Source: "{#BuildRoot}\PicSyncra-Controller\*"; DestDir: "{app}\controller"; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "{#BuildRoot}\helper\*"; DestDir: "{app}\controller\helper"; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "{#BuildRoot}\active.json"; DestDir: "{app}"; Flags: onlyifdoesntexist ignoreversion
 
@@ -62,6 +63,14 @@ Root: HKLM64; Subkey: "SOFTWARE\PicSyncra\Installations\primary-installation"; V
 Name: "{autoprograms}\PicSyncra WEB"; Filename: "{app}\versions\{#ReleaseId}\web\PicSyncra-WEB.exe"; Components: web
 Name: "{autoprograms}\PicSyncra Migrator"; Filename: "{app}\versions\{#ReleaseId}\migrator\PicSyncra-Migrator.exe"; Components: migrator
 Name: "{autoprograms}\PicSyncra"; Filename: "{app}\versions\{#ReleaseId}\local\PicSyncra.exe"; Components: local
+
+[Run]
+Filename: "{sys}\schtasks.exe"; Parameters: "/Create /TN ""PicSyncra Controller primary-installation"" /SC ONSTART /RU SYSTEM /RL HIGHEST /TR """"""{app}\controller\PicSyncra-Controller.exe"" --installation-id primary-installation"""" /F"; Flags: runhidden waituntilterminated
+Filename: "{sys}\schtasks.exe"; Parameters: "/Run /TN ""PicSyncra Controller primary-installation"""; Flags: runhidden waituntilterminated
+
+[UninstallRun]
+Filename: "{sys}\schtasks.exe"; Parameters: "/End /TN ""PicSyncra Controller primary-installation"""; Flags: runhidden waituntilterminated
+Filename: "{sys}\schtasks.exe"; Parameters: "/Delete /TN ""PicSyncra Controller primary-installation"" /F"; Flags: runhidden waituntilterminated
 
 [Code]
 var
@@ -175,7 +184,16 @@ begin
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
+var
+  ResultCode: Integer;
 begin
+  if CurStep = ssInstall then begin
+    { Stop only the registered controller before replacing its own onedir files.
+      A missing task on a first installation is harmless. }
+    Exec(ExpandConstant('{sys}\schtasks.exe'),
+      '/End /TN "PicSyncra Controller primary-installation"', '', SW_HIDE,
+      ewWaitUntilTerminated, ResultCode);
+  end;
   if CurStep = ssPostInstall then begin
     InspectSelectedDatabase;
     ImportSelectedConfiguration;
