@@ -31,6 +31,13 @@ try {
     if ($BuildOcr) {
         & $Python -m pip install -r requirements-vision.txt
         if ($LASTEXITCODE -ne 0) { throw 'Nie udalo sie zainstalowac zaleznosci komponentu OCR.' }
+        $modelCache = Join-Path $workRoot 'ocr-model-cache'
+        New-Item -ItemType Directory -Path $modelCache -Force | Out-Null
+        $env:PADDLE_PDX_CACHE_HOME = $modelCache
+        & $Python -c "from paddleocr import PaddleOCR; from picsyncra.services.ocr_profiles import available_ocr_profiles; [PaddleOCR(text_detection_model_name=profile.detector_model, text_recognition_model_name=profile.recognizer_model, enable_mkldnn=False, use_doc_orientation_classify=False, use_doc_unwarping=False, use_textline_orientation=False) for profile in available_ocr_profiles()]"
+        if ($LASTEXITCODE -ne 0) { throw 'Nie udalo sie przygotowac lokalnych modeli OCR.' }
+        & $Python -c "from picsyncra.services.image_dimensions import _model_cache_has_profile; from picsyncra.services.ocr_profiles import available_ocr_profiles; import os; missing = [profile.id for profile in available_ocr_profiles() if not _model_cache_has_profile(os.environ['PADDLE_PDX_CACHE_HOME'], profile)]; (_ for _ in ()).throw(RuntimeError('Brakuje modeli OCR: ' + ', '.join(missing))) if missing else None"
+        if ($LASTEXITCODE -ne 0) { throw 'Nie wszystkie lokalne profile OCR zostaly przygotowane.' }
         & $Python -m PyInstaller --noconfirm --clean --distpath $distRoot --workpath $workRoot installer/ocr.spec
         if ($LASTEXITCODE -ne 0) { throw 'Nie udalo sie zbudowac komponentu OCR.' }
     }
