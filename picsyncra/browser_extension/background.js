@@ -270,7 +270,10 @@ async function uploadOne(item, settings) {
   const uploadStartedAt = Date.now();
   const uploadResponse = await fetch(`${panelUrl}/api/browser-extension/upload-cache`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${apiToken}` },
+    headers: {
+      Authorization: `Bearer ${apiToken}`,
+      "X-PicSyncra-Extension-Protocol": "1",
+    },
     body: form,
   });
   const uploadMs = Date.now() - uploadStartedAt;

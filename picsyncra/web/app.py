@@ -867,6 +867,13 @@ def _require_browser_extension_user(request: Request) -> str:
     return username
 
 
+def _browser_extension_protocol_compatible(request: Request) -> bool:
+    """Keep legacy unpacked extensions working until their protocol is retired."""
+
+    protocol = str(request.headers.get("x-picsyncra-extension-protocol") or "")
+    return protocol in {"", str(EXTENSION_PROTOCOL_VERSION)}
+
+
 def _require_user(request: Request) -> str:
     if not _auth_enabled():
         return _admin_username()
@@ -1885,15 +1892,19 @@ def _browser_extension_cors_headers(request: Request) -> Dict[str, str]:
     if origin.startswith(("chrome-extension://", "edge-extension://")):
         return {
             "Access-Control-Allow-Origin": origin,
-            "Access-Control-Allow-Headers": "authorization, content-type",
+            "Access-Control-Allow-Headers": "authorization, content-type, x-picsyncra-extension-protocol",
             "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
             "Vary": "Origin",
         }
     return {}
 
 
-def _browser_extension_json(request: Request, payload: Dict[str, Any]) -> JSONResponse:
-    return JSONResponse(payload, headers=_browser_extension_cors_headers(request))
+def _browser_extension_json(
+    request: Request, payload: Dict[str, Any], *, status_code: int = 200
+) -> JSONResponse:
+    return JSONResponse(
+        payload, status_code=status_code, headers=_browser_extension_cors_headers(request)
+    )
 
 
 def _browser_extension_defaults(request: Request, username: str) -> str:
@@ -6176,8 +6187,7 @@ def create_app() -> FastAPI:
     @app.get("/api/browser-extension/ping")
     def browser_extension_ping_api(request: Request) -> JSONResponse:
         username = _require_browser_extension_user(request)
-        protocol = str(request.headers.get("x-picsyncra-extension-protocol") or "")
-        compatible = protocol in {"", str(EXTENSION_PROTOCOL_VERSION)}
+        compatible = _browser_extension_protocol_compatible(request)
         return _browser_extension_json(
             request,
             {
@@ -6200,6 +6210,16 @@ def create_app() -> FastAPI:
     async def browser_extension_upload_cache_api(request: Request) -> JSONResponse:
         started = time.perf_counter()
         username = _require_browser_extension_user(request)
+        if not _browser_extension_protocol_compatible(request):
+            return _browser_extension_json(
+                request,
+                {
+                    "detail": "Wymagana aktualizacja rozszerzenia przeglądarki.",
+                    "update_required": True,
+                    "extension_download": "/api/browser-extension/download",
+                },
+                status_code=426,
+            )
         form = await request.form()
         upload = form.get("file")
         if not isinstance(upload, UploadFile) or not upload.filename:
