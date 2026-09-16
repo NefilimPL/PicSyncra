@@ -32,3 +32,17 @@ def test_launcher_serializes_autostart_as_a_closed_controller_request() -> None:
             "payload": {"enabled": True},
         }
     ]
+
+
+def test_launcher_serializes_remote_restart_without_any_process_arguments() -> None:
+    pipe = FakePipeClient()
+    client = InstallationControlClient("primary-installation", pipe_client=pipe)
+
+    assert client.restart_backend() is True
+
+    assert json.loads(pipe.messages[0]) == {
+        "version": 1,
+        "installation_id": "primary-installation",
+        "command": "restart_backend",
+        "payload": {},
+    }

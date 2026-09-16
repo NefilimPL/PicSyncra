@@ -90,3 +90,26 @@ def test_controller_refuses_a_port_owned_by_another_process(tmp_path: Path) -> N
 
     assert scm.start_calls == 0
     assert scm.stop_calls == []
+
+
+def test_controller_restarts_only_its_confirmed_backend_service(tmp_path: Path) -> None:
+    scm = FakeScmAdapter(port_owner="primary-installation")
+    controller = InstallationController(_context(tmp_path), scm, backend_port=8010)
+
+    assert controller.restart_backend() is True
+    assert scm.stop_calls == [False]
+    assert scm.start_calls == 1
+
+
+def test_controller_does_not_restart_when_its_service_cannot_stop(tmp_path: Path) -> None:
+    class StuckScm(FakeScmAdapter):
+        def stop_backend(self, *, force: bool) -> bool:
+            self.stop_calls.append(force)
+            return False
+
+    scm = StuckScm(port_owner="primary-installation")
+    controller = InstallationController(_context(tmp_path), scm, backend_port=8010)
+
+    assert controller.restart_backend() is False
+    assert scm.stop_calls == [False]
+    assert scm.start_calls == 0

@@ -54,6 +54,11 @@ class InstallationControlClient:
         response = self._request("stop_backend", {"force": force}, require_ok=False)
         return bool(response["ok"])
 
+    def restart_backend(self) -> bool:
+        """Request the controller to restart its own backend service."""
+        response = self._request("restart_backend", {}, require_ok=False)
+        return bool(response["ok"])
+
     def set_autostart(self, enabled: bool) -> bool:
         if not isinstance(enabled, bool):
             raise ValueError("enabled must be a boolean.")

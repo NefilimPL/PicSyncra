@@ -138,3 +138,22 @@ def test_dispatcher_drops_private_fields_from_a_snapshot() -> None:
         "ok": True,
         "snapshot": {"backend_running": True, "autostart": False},
     }
+
+
+def test_dispatcher_allows_only_the_closed_restart_backend_action() -> None:
+    class FakeController:
+        def restart_backend(self) -> bool:
+            return True
+
+    dispatcher = ControlDispatcher(
+        FakeController(),
+        installation_id="primary-installation",
+        authorized_identities={"S-1-5-21-1000"},
+    )
+
+    response = dispatcher.dispatch(
+        _message(command="restart_backend", payload={}),
+        peer_identity="S-1-5-21-1000",
+    )
+
+    assert response == {"ok": True}

@@ -37,6 +37,8 @@ class ControllerCommands(Protocol):
 
     def stop_backend(self, force: bool) -> bool: ...
 
+    def restart_backend(self) -> bool: ...
+
     def set_autostart(self, enabled: bool) -> bool: ...
 
 
@@ -44,6 +46,7 @@ _COMMAND_PAYLOADS: dict[str, frozenset[str]] = {
     "snapshot": frozenset(),
     "start_backend": frozenset(),
     "stop_backend": frozenset({"force"}),
+    "restart_backend": frozenset(),
     "set_autostart": frozenset({"enabled"}),
 }
 
@@ -131,6 +134,8 @@ class ControlDispatcher:
             return {"ok": True}
         if request.command == "stop_backend":
             return {"ok": self._controller.stop_backend(request.payload["force"])}
+        if request.command == "restart_backend":
+            return {"ok": self._controller.restart_backend()}
         if request.command == "set_autostart":
             return {
                 "ok": True,

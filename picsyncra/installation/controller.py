@@ -61,6 +61,17 @@ class InstallationController:
             return False
         return self._scm.stop_backend(force=force)
 
+    def restart_backend(self) -> bool:
+        """Restart only this installation's service through the SCM boundary."""
+
+        if self._foreign_listener_exists() or not self.stop_backend(force=False):
+            return False
+        try:
+            self.start_backend()
+        except InstallationControllerError:
+            return False
+        return True
+
     def set_autostart(self, enabled: bool) -> bool:
         """Persist the SCM start mode and return its confirmed result."""
 
