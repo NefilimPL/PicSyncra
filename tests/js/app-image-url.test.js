@@ -8,7 +8,8 @@ function loadSafeOcrDiagnosticImageUrl() {
   const appPath = path.resolve(__dirname, "../..", "picsyncra/web/static/app.js");
   const appSource = fs.readFileSync(appPath, "utf8");
   const start = appSource.indexOf("function safeOcrDiagnosticImageUrl(value) {");
-  const end = appSource.indexOf("\n\nfunction renderOcrDiagnosticView", start);
+  const renderer = /\r?\n\r?\nfunction renderOcrDiagnosticView/.exec(appSource.slice(start));
+  const end = renderer ? start + renderer.index : -1;
 
   assert.notEqual(start, -1, "app must define safeOcrDiagnosticImageUrl");
   assert.notEqual(end, -1, "safeOcrDiagnosticImageUrl must precede the OCR renderer");
