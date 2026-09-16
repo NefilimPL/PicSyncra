@@ -17,6 +17,7 @@ from .maintenance import MaintenanceCoordinator, MaintenanceGate
 from .presence import PresenceRegistry
 from .session_epoch import advance_session_epoch, read_session_epoch
 from .update_helper import read_active_release
+from .update_transaction import UpdateTransaction
 
 
 class OperationUnavailable(RuntimeError):
@@ -31,17 +32,26 @@ class InstalledController(Protocol):
     def set_autostart(self, enabled: bool) -> bool: ...
 
 
+class ReleaseOperationExecutor(Protocol):
+    def create_backup(self, operation_id: str): ...
+    def apply(self, request: OperationRequest) -> None: ...
+    def validate(self, request: OperationRequest) -> bool: ...
+    def rollback(self, backup: object) -> None: ...
+
+
 class InstalledOperationService:
     """Expose bounded installed operations without exposing system commands."""
 
-    def __init__(self, context: InstallContext, controller: InstalledController) -> None:
+    def __init__(self, context: InstallContext, controller: InstalledController, *, release_executor_factory=None) -> None:
         self._context = context
         self._controller = controller
+        self._release_executor_factory = release_executor_factory
         self._journal = OperationJournal(context.state_root / "operations.json")
         self._presence = PresenceRegistry()
         self._maintenance_gate = MaintenanceGate()
         self._maintenance = MaintenanceCoordinator(self._maintenance_gate, self._presence)
         self._operation_threads: dict[str, threading.Thread] = {}
+        self._pending_release_operations: dict[str, tuple[OperationRequest, object]] = {}
         self._operation_threads_lock = threading.Lock()
         self._settings_path = context.state_root / "installation-settings.json"
 
@@ -63,7 +73,7 @@ class InstalledOperationService:
 
     def submit(self, request: OperationRequest, *, actor_id: str) -> dict[str, object]:
         if request.action != "restart":
-            raise OperationUnavailable("Ta operacja wymaga jeszcze zweryfikowanego wykonawcy pakietu.")
+            return self._submit_release(request, actor_id)
         existing = self._journal.by_request_id(request.request_id)
         if existing is not None:
             return asdict(existing)
@@ -76,6 +86,40 @@ class InstalledOperationService:
             return asdict(self._execute_restart(operation.operation_id))
         self._start_maintenance_worker(operation.operation_id)
         return asdict(self._journal.read(operation.operation_id))
+
+    def _submit_release(self, request: OperationRequest, actor_id: str) -> dict[str, object]:
+        if request.action not in {"update", "downgrade"}:
+            raise OperationUnavailable("Ta operacja wymaga jeszcze zweryfikowanego wykonawcy pakietu.")
+        if self._release_executor_factory is None:
+            raise OperationUnavailable("Brak zweryfikowanego pakietu dla wybranego wydania.")
+        existing = self._journal.by_request_id(request.request_id)
+        if existing is not None:
+            return asdict(existing)
+        executor = self._release_executor_factory(request)
+        operation = self._journal.submit(request, actor_id=actor_id)
+        self._maintenance.begin(operation.operation_id, initiator_id=actor_id)
+        phase = self._maintenance.advance()
+        self._sync_maintenance(operation.operation_id, phase)
+        if phase["state"] != "ready":
+            self._pending_release_operations[operation.operation_id] = (request, executor)
+            self._start_maintenance_worker(operation.operation_id)
+            return asdict(self._journal.read(operation.operation_id))
+        return asdict(self._execute_release(operation.operation_id, request, executor))
+
+    def _execute_release(self, operation_id: str, request: OperationRequest, executor: object):
+        transaction = UpdateTransaction(
+            self._journal,
+            create_backup=executor.create_backup,
+            apply=executor.apply,
+            validate=executor.validate,
+            rollback=executor.rollback,
+        )
+        result = transaction.execute(request, actor_id="installed-maintenance")
+        if result.state == "committed":
+            advance_session_epoch(self._context)
+        if self._maintenance_gate.wait_for_drain(timeout=0):
+            self._maintenance_gate.complete(operation_id)
+        return result
 
     def read_operation(self, operation_id: str) -> dict[str, object] | None:
         try:
@@ -147,7 +191,11 @@ class InstalledOperationService:
                 phase = self._maintenance.advance()
                 self._sync_maintenance(operation_id, phase)
                 if phase["state"] == "ready":
-                    self._execute_restart(operation_id)
+                    pending = self._pending_release_operations.pop(operation_id, None)
+                    if pending is None:
+                        self._execute_restart(operation_id)
+                    else:
+                        self._execute_release(operation_id, *pending)
                     return
                 time.sleep(0.2)
         finally:
