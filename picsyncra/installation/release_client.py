@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ..github_status import GitHubStatusError, _github_fetch_json
+from ..brand import GITHUB_REPOSITORY
 from .downloads import _open_github_asset, _trusted_url
 from .release_keys import trusted_release_keys
 from .release_source import list_signed_releases
@@ -45,4 +46,14 @@ def list_installed_releases(channel: str) -> tuple[object, ...]:
         raise ReleaseSourceError("GitHub release catalog is unavailable.") from exc
 
 
-__all__ = ["ReleaseSourceError", "list_installed_releases"]
+def read_installed_release_record(release_id: int) -> dict[str, object] | None:
+    if isinstance(release_id, bool) or not isinstance(release_id, int) or release_id <= 0:
+        raise ValueError("release_id must be positive")
+    try:
+        payload = _github_fetch_json(f"/repos/{GITHUB_REPOSITORY}/releases/{release_id}")
+    except GitHubStatusError as exc:
+        raise ReleaseSourceError("GitHub release record is unavailable.") from exc
+    return payload if isinstance(payload, dict) and payload.get("id") == release_id else None
+
+
+__all__ = ["ReleaseSourceError", "list_installed_releases", "read_installed_release_record"]

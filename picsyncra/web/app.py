@@ -65,7 +65,8 @@ from ..install_paths import resolve_install_context
 from ..installation.ocr_runtime import create_installed_ocr_worker
 from ..installation.launcher import InstallationControlClient
 from ..installation.operation_service import InstalledOperationService
-from ..installation.release_client import list_installed_releases
+from ..installation.release_client import list_installed_releases, read_installed_release_record
+from ..installation.release_operation_factory import VerifiedReleaseOperationFactory
 from ..installation.session_epoch import SessionEpochError, read_session_epoch
 from ..services.image_dimensions import (
     ImageOcrDiagnostics,
@@ -5254,7 +5255,13 @@ def create_app() -> FastAPI:
     installed_context = resolve_install_context(Path(sys.executable))
     installation_service = (
         InstalledOperationService(
-            installed_context, InstallationControlClient(installed_context.installation_id)
+            installed_context,
+            InstallationControlClient(installed_context.installation_id),
+            release_executor_factory=VerifiedReleaseOperationFactory(
+                installed_context,
+                catalog=lambda channel: tuple(list_installed_releases(channel)),
+                release_record=read_installed_release_record,
+            ),
         )
         if installed_context is not None
         else None
