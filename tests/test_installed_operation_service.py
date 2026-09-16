@@ -178,6 +178,38 @@ def test_failed_updated_backend_restores_the_previous_release_and_restarts_it(tm
     assert service.status()["session_epoch"] == 0
 
 
+def test_update_rolls_back_when_session_invalidation_cannot_be_saved(tmp_path: Path, monkeypatch) -> None:
+    from picsyncra.installation.contracts import BackupReceipt
+    from picsyncra.installation import operation_service as module
+
+    calls: list[str] = []
+
+    class Executor:
+        def create_backup(self, operation_id: str):
+            return BackupReceipt(operation_id, operation_id, "a" * 64, "b" * 64, 1, 41, True)
+
+        def apply(self, _request):
+            calls.append("apply")
+
+        def validate(self, _request):
+            calls.append("validate")
+            return True
+
+        def rollback(self, _backup):
+            calls.append("rollback")
+
+    monkeypatch.setattr(module, "advance_session_epoch", lambda _context: (_ for _ in ()).throw(OSError("disk full")))
+    controller = Controller()
+    service = module.InstalledOperationService(context(tmp_path), controller, release_executor_factory=lambda _request: Executor())
+
+    result = service.submit(OperationRequest("update-1", "update", 42, None, False), actor_id="admin-1")
+
+    assert result["state"] == "rolled_back"
+    assert calls == ["apply", "validate", "rollback"]
+    assert controller.restart_calls == 2
+    assert service.maintenance_gate.snapshot()["state"] == "idle"
+
+
 def test_channel_and_autostart_are_persisted_by_installed_service(tmp_path: Path) -> None:
     from picsyncra.installation.operation_service import InstalledOperationService
 

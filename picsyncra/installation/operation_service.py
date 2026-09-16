@@ -124,7 +124,10 @@ class InstalledOperationService:
             if not executor.validate(selected):
                 return False
             self._restart()
-            return bool(self._controller.snapshot().get("backend_running", False))
+            if not bool(self._controller.snapshot().get("backend_running", False)):
+                return False
+            advance_session_epoch(self._context)
+            return True
 
         def rollback(backup: object) -> None:
             executor.rollback(backup)
@@ -138,8 +141,6 @@ class InstalledOperationService:
             rollback=rollback,
         )
         result = transaction.execute(request, actor_id="installed-maintenance")
-        if result.state == "committed":
-            advance_session_epoch(self._context)
         if self._maintenance_gate.wait_for_drain(timeout=0):
             self._maintenance_gate.complete(operation_id)
         return result
