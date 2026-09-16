@@ -29,6 +29,10 @@ przyjmowanie nowych zadań, czeka na zakończenie aktualnych, a pozostałym
 użytkownikom wyświetla dwuminutowe ostrzeżenie. Administrator może wymusić
 anulowanie znanych zadań, gdy zadanie nie kończy się samodzielnie.
 
+Jeżeli OCR był już doinstalowany, aktualizacja programu pobiera również
+podpisany komponent OCR zgodny z nowym wydaniem i przełącza go w tej samej
+transakcji. Instalacja bez OCR nie pobiera modeli automatycznie.
+
 Restart backendu i autostart są dostępne z WEB wyłącznie dla administratora.
 Instalator rejestruje zadanie `PicSyncra Controller primary-installation`,
 które jest właścicielem tylko uruchomionego przez siebie procesu WEB. Kontroler

@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from .contracts import InstallContext, OperationRequest, ReleaseChoice
 from .downloads import download_selected_components
+from .ocr_component import resolve_active_ocr_component
 from .release_executor import StagedReleaseExecutor
 
 
@@ -38,13 +39,26 @@ class VerifiedReleaseOperationFactory:
         if record is None:
             raise ReleaseSelectionError("Selected release record is unavailable.")
         staging = self._context.state_root / "staging" / f"{choice.release_id}-{uuid4().hex}"
+        installed_ocr = resolve_active_ocr_component(self._context)
+        ocr_component = next((component for component in choice.components if component.name == "ocr"), None)
+        if installed_ocr is not None and ocr_component is None:
+            raise ReleaseSelectionError("The selected release has no compatible OCR component.")
+        names = {component.name for component in choice.components if component.name != "ocr"}
+        if installed_ocr is not None:
+            names.add("ocr")
         staged = download_selected_components(
             choice,
             record,
             staging,
-            {component.name for component in choice.components if component.name != "ocr"},
+            names,
         )
-        return StagedReleaseExecutor(self._context, choice, staged)
+        return StagedReleaseExecutor(
+            self._context,
+            choice,
+            staged,
+            ocr_component=ocr_component if installed_ocr is not None else None,
+            ocr_archive=staged.get("ocr") if installed_ocr is not None else None,
+        )
 
     def _channel(self) -> str:
         settings = self._context.state_root / "installation-settings.json"

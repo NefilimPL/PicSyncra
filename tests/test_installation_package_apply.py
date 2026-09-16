@@ -77,3 +77,26 @@ def test_installer_skips_the_optional_ocr_archive_during_a_regular_program_updat
 
     assert install_release_packages(installed, release_with_ocr, {"web": staged / "web.zip", "migrator": staged / "migrator.zip"}) == 42
     assert not (installed.program_root / "versions" / "42" / "ocr").exists()
+
+
+def test_installer_never_duplicates_staged_ocr_inside_the_program_bundle(tmp_path: Path) -> None:
+    from picsyncra.installation.package_apply import install_release_packages
+
+    staged = tmp_path / "staged"
+    staged.mkdir()
+    installed = context(tmp_path)
+    web = archive(staged / "web.zip", "PicSyncra-WEB.exe")
+    migrator = archive(staged / "migrator.zip", "PicSyncra-Migrator.exe")
+    ocr_archive = archive(staged / "ocr.zip", "PicSyncra-OCR.exe")
+    ocr = ComponentRef("ocr", "ocr-42", ocr_archive.asset_name, ocr_archive.sha256, ocr_archive.size)
+    release_with_ocr = ReleaseChoice(
+        42, "v42", "a" * 40, "stable", "main", "b" * 64, (web, migrator, ocr), True, None
+    )
+
+    install_release_packages(
+        installed,
+        release_with_ocr,
+        {"web": staged / "web.zip", "migrator": staged / "migrator.zip", "ocr": staged / "ocr.zip"},
+    )
+
+    assert not (installed.program_root / "versions" / "42" / "ocr").exists()

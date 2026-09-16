@@ -34,3 +34,39 @@ def test_factory_rejects_a_release_outside_the_signed_catalog(tmp_path: Path) ->
     factory = VerifiedReleaseOperationFactory(context(tmp_path), catalog=lambda _channel: (), release_record=lambda _id: None)
     with pytest.raises(ReleaseSelectionError):
         factory(OperationRequest("request-1", "update", 42, None, False))
+
+
+def test_factory_stages_compatible_ocr_only_when_ocr_is_already_installed(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from picsyncra.installation import release_operation_factory as module
+
+    installed = context(tmp_path)
+    ocr_root = installed.program_root / "components" / "ocr"
+    (ocr_root / "ocr-41").mkdir(parents=True)
+    (ocr_root / "ocr-41" / "PicSyncra-OCR.exe").write_bytes(b"old")
+    (ocr_root / "active.json").write_text(
+        '{"schema":1,"release_id":41,"component_id":"ocr-41","build_id":"release-41","protocol":1}',
+        encoding="utf-8",
+    )
+    ocr = ComponentRef("ocr", "ocr-42", "ocr.zip", "c" * 64, 1)
+    target = ReleaseChoice(
+        42, "v42", "c" * 40, "stable", "main", "d" * 64,
+        (*release().components, ocr), True, None,
+    )
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        module,
+        "download_selected_components",
+        lambda _choice, _record, _staging, names: captured.update(names=names) or {
+            "web": Path("web.zip"), "migrator": Path("migrator.zip"), "ocr": Path("ocr.zip")
+        },
+    )
+
+    module.VerifiedReleaseOperationFactory(
+        installed,
+        catalog=lambda _channel: (target,),
+        release_record=lambda release_id: {"id": release_id, "assets": []},
+    )(OperationRequest("request-1", "update", 42, None, False))
+
+    assert captured["names"] == {"web", "migrator", "ocr"}

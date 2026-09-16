@@ -97,10 +97,10 @@ def install_release_packages(
         versions.mkdir(exist_ok=True)
         temporary.mkdir()
         for component in choice.components:
+            if component.name in _SEPARATELY_INSTALLED:
+                continue
             archive = staged_components.get(component.name)
             if archive is None:
-                if component.name in _SEPARATELY_INSTALLED:
-                    continue
                 raise PackageApplyError("A signed release component is missing from staging.")
             destination = temporary / component.name
             destination.mkdir()
