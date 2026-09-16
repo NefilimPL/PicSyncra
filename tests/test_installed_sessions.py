@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import base64
+from unittest.mock import patch
 
 from picsyncra.installation.contracts import InstallContext
 
@@ -36,3 +38,21 @@ def test_session_epoch_rejects_corrupt_persisted_state(tmp_path: Path) -> None:
         pass
     else:
         raise AssertionError("A corrupt session epoch must not be accepted")
+
+
+def test_installed_web_session_is_rejected_after_epoch_changes(tmp_path: Path) -> None:
+    from picsyncra.web import app as web_app
+    from picsyncra.installation.session_epoch import advance_session_epoch
+
+    value = context(tmp_path)
+    user = {"id": "user-1", "username": "operator", "session_version": 2, "enabled": True, "locked": False}
+    with (
+        patch.object(web_app, "resolve_install_context", return_value=value),
+        patch.object(web_app, "find_user_by_id", return_value=user),
+    ):
+        token = web_app._make_session_token(user)
+        payload = base64.urlsafe_b64decode(token.encode("ascii")).decode("utf-8")
+        assert payload.startswith("session-v3|user-1|2|0|")
+        assert web_app._read_session_token(token) == "operator"
+        advance_session_epoch(value)
+        assert web_app._read_session_token(token) is None

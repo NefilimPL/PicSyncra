@@ -65,6 +65,7 @@ from ..install_paths import resolve_install_context
 from ..installation.ocr_runtime import create_installed_ocr_worker
 from ..installation.launcher import InstallationControlClient
 from ..installation.operation_service import InstalledOperationService
+from ..installation.session_epoch import SessionEpochError, read_session_epoch
 from ..services.image_dimensions import (
     ImageOcrDiagnostics,
     OcrDiagnosticCandidate,
@@ -681,7 +682,15 @@ def _validate_mutating_request(request: Request) -> None:
 def _make_session_token(user: Dict[str, Any]) -> str:
     session_version = int(user.get("session_version") or 0)
     user_id = str(user.get("id") or "")
-    payload = f"session-v2|{user_id}|{session_version}|{int(time.time())}|{secrets.token_hex(12)}"
+    context = resolve_install_context(Path(sys.executable))
+    if context is None:
+        payload = f"session-v2|{user_id}|{session_version}|{int(time.time())}|{secrets.token_hex(12)}"
+    else:
+        try:
+            epoch = read_session_epoch(context)
+        except SessionEpochError as exc:
+            raise RuntimeError("Nie mozna utworzyc sesji zainstalowanej aplikacji.") from exc
+        payload = f"session-v3|{user_id}|{session_version}|{epoch}|{int(time.time())}|{secrets.token_hex(12)}"
     token = f"{payload}|{_sign(payload)}"
     return base64.urlsafe_b64encode(token.encode("utf-8")).decode("ascii")
 
@@ -705,13 +714,21 @@ def _read_session_token(token: Optional[str]) -> Optional[str]:
     if not hmac.compare_digest(_sign(payload), signature):
         return None
     parts = payload.split("|")
-    if len(parts) != 5 or parts[0] != "session-v2":
-        return None
-    _marker, user_id, version_raw, issued_raw, _nonce = parts
+    context = resolve_install_context(Path(sys.executable))
+    if context is None:
+        if len(parts) != 5 or parts[0] != "session-v2":
+            return None
+        _marker, user_id, version_raw, issued_raw, _nonce = parts
+    else:
+        if len(parts) != 6 or parts[0] != "session-v3":
+            return None
+        _marker, user_id, version_raw, epoch_raw, issued_raw, _nonce = parts
     try:
         issued = int(issued_raw)
         session_version = int(version_raw)
-    except ValueError:
+        if context is not None and int(epoch_raw) != read_session_epoch(context):
+            return None
+    except (ValueError, SessionEpochError):
         return None
     if int(time.time()) - issued > SESSION_MAX_AGE_SECONDS:
         return None
