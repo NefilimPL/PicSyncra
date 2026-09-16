@@ -27,7 +27,7 @@ _TRANSITIONS: dict[str, frozenset[str]] = {
     "verified": frozenset({"draining", "failed"}),
     "draining": frozenset({"countdown", "stopping", "backing_up", "failed"}),
     "countdown": frozenset({"stopping", "backing_up", "failed"}),
-    "stopping": frozenset({"backing_up", "failed"}),
+    "stopping": frozenset({"backing_up", "installing", "failed"}),
     "backing_up": frozenset({"installing", "migrating", "validating", "rolling_back", "failed"}),
     "installing": frozenset({"migrating", "validating", "rolling_back", "failed"}),
     "migrating": frozenset({"validating", "rolling_back", "recovery_required", "failed"}),
