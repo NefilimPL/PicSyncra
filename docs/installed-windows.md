@@ -28,4 +28,3 @@ użytkownikom wyświetla dwuminutowe ostrzeżenie. Administrator może wymusić
 anulowanie znanych zadań, gdy zadanie nie kończy się samodzielnie.
 
 Restart backendu i autostart są dostępne z WEB wyłącznie dla administratora.
-
