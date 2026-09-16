@@ -6,6 +6,7 @@ the installer can be rebuilt on a clean CI runner.
 """
 
 from PyInstaller.utils.hooks import collect_all
+from pathlib import Path
 
 
 datas, binaries, hiddenimports = collect_all("picsyncra")
@@ -13,9 +14,10 @@ certifi_datas, certifi_binaries, certifi_hiddenimports = collect_all("certifi")
 datas += certifi_datas
 binaries += certifi_binaries
 hiddenimports += certifi_hiddenimports
+ROOT = Path(SPECPATH).parent
 
 a = Analysis(
-    ["PicSyncra-SetupHelper.py"],
+    [str(ROOT / "PicSyncra-SetupHelper.py")],
     pathex=[],
     binaries=binaries,
     datas=datas,
