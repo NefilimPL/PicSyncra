@@ -74,6 +74,21 @@ def test_installed_build_always_bundles_local_for_the_optional_component() -> No
     assert "if ($IncludeLocal)" not in build_script
 
 
+def test_installed_build_keeps_pyinstaller_specs_as_versioned_source_files() -> None:
+    """Catches a blanket ignore rule silently removing installer build inputs."""
+
+    root = Path(__file__).resolve().parents[1]
+    ignored = (root / ".gitignore").read_text(encoding="utf-8")
+    build_script = (root / "installer" / "build_installer.ps1").read_text(encoding="utf-8")
+
+    assert (root / "installer" / "installed.spec").is_file()
+    assert (root / "installer" / "ocr.spec").is_file()
+    assert "!installer/installed.spec" in ignored
+    assert "!installer/ocr.spec" in ignored
+    assert "installer/installed.spec" in build_script
+    assert "installer/ocr.spec" in build_script
+
+
 def test_inno_collects_database_and_optional_config_through_protected_requests() -> None:
     """Catches silently discarding the selected database/configuration at install time."""
 

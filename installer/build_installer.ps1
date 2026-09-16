@@ -2,6 +2,7 @@
 param(
     [ValidatePattern('^[1-9][0-9]*$')]
     [string]$ReleaseId = '1',
+    [switch]$BuildOcr,
     [string]$Python = 'python'
 )
 
@@ -27,6 +28,10 @@ try {
     Build-Onedir 'PicSyncra' 'PicSyncra.pyw'
     & $Python -m PyInstaller --noconfirm --clean --distpath $distRoot --workpath $workRoot installer/installed.spec
     if ($LASTEXITCODE -ne 0) { throw 'Nie udalo sie zbudowac PicSyncra-SetupHelper.' }
+    if ($BuildOcr) {
+        & $Python -m PyInstaller --noconfirm --clean --distpath $distRoot --workpath $workRoot installer/ocr.spec
+        if ($LASTEXITCODE -ne 0) { throw 'Nie udalo sie zbudowac komponentu OCR.' }
+    }
 
     $versionRoot = Join-Path $distRoot "versions\$ReleaseId"
     New-Item -ItemType Directory -Path $versionRoot -Force | Out-Null
