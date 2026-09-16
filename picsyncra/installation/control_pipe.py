@@ -137,7 +137,17 @@ class NamedPipeControlServer:
                 sid, _attributes = win32security.GetTokenInformation(
                     token, win32security.TokenUser
                 )
-                return win32security.ConvertSidToStringSid(sid)
+                identity = win32security.ConvertSidToStringSid(sid)
+                if identity in self._allowed_sids:
+                    return identity
+                administrators_sid = "S-1-5-32-544"
+                if administrators_sid in self._allowed_sids:
+                    group = win32security.CreateWellKnownSid(
+                        win32security.WinBuiltinAdministratorsSid, None
+                    )
+                    if win32security.CheckTokenMembership(token, group):
+                        return administrators_sid
+                return identity
             finally:
                 token.Close()
         finally:

@@ -35,3 +35,8 @@ które jest właścicielem tylko uruchomionego przez siebie procesu WEB. Kontrol
 najpierw potwierdza żądanie administracyjne, a następnie restartuje WEB z
 aktywnego wydania; nie używa `taskkill` ani nie zatrzymuje procesu zajmującego
 ten sam port.
+
+Lokalne okno zarządzania WEB może zatrzymywać lub uruchamiać backend po
+uruchomieniu jako administrator. Zwykły użytkownik nie ma dostępu do pipe’a
+kontrolera; zdalny restart pozostaje operacją administratora zalogowanego w
+WEB.

@@ -65,3 +65,67 @@ def test_named_pipe_dispatches_one_authorized_message_and_returns_json() -> None
     assert not worker.is_alive()
     assert response == {"ok": True, "autostart": True}
     assert controller.enabled is True
+
+
+def test_pipe_maps_an_elevated_administrator_to_the_authorized_group(
+    monkeypatch,
+) -> None:
+    """Catches granting a local administrator an ACL entry but rejecting it in the protocol."""
+
+    from picsyncra.installation import control_pipe
+
+    class Handle:
+        def Close(self) -> None:
+            pass
+
+    class Api:
+        @staticmethod
+        def OpenProcess(_access, _inherit, _process_id):
+            return Handle()
+
+    class Con:
+        PROCESS_QUERY_LIMITED_INFORMATION = 1
+        TOKEN_QUERY = 2
+
+    class Security:
+        TokenUser = 1
+        WinBuiltinAdministratorsSid = 2
+
+        @staticmethod
+        def OpenProcessToken(_process, _access):
+            return Handle()
+
+        @staticmethod
+        def GetTokenInformation(_token, _kind):
+            return ("person", 0)
+
+        @staticmethod
+        def ConvertSidToStringSid(_sid):
+            return "S-1-5-21-1000"
+
+        @staticmethod
+        def CreateWellKnownSid(_kind, _domain):
+            return "administrators"
+
+        @staticmethod
+        def CheckTokenMembership(_token, group):
+            return group == "administrators"
+
+    class Pipe:
+        @staticmethod
+        def GetNamedPipeClientProcessId(_handle):
+            return 99
+
+    monkeypatch.setattr(
+        control_pipe,
+        "_windows_modules",
+        lambda: (Api, Con, object(), Pipe, Security),
+    )
+    server = control_pipe.NamedPipeControlServer(
+        dispatcher=object(),
+        installation_id="primary",
+        allowed_sids={"S-1-5-18", "S-1-5-32-544"},
+    )
+    server._handle = object()
+
+    assert server._client_sid(Pipe) == "S-1-5-32-544"

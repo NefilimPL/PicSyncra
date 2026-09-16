@@ -264,13 +264,13 @@ def run_controller(installation_id: str, *, stop_requested: Callable[[], bool] |
     dispatcher = ControlDispatcher(
         DeferredRestartController(controller),
         installation_id=context.installation_id,
-        authorized_identities={"S-1-5-18"},
+        authorized_identities={"S-1-5-18", "S-1-5-32-544"},
     )
     ControllerPipeHost(
         server_factory=lambda: NamedPipeControlServer(
             dispatcher,
             installation_id=context.installation_id,
-            allowed_sids={"S-1-5-18"},
+            allowed_sids={"S-1-5-18", "S-1-5-32-544"},
         ),
         stop_requested=stop_requested or (lambda: False),
     ).serve_forever()
