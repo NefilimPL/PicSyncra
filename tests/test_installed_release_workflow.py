@@ -7,3 +7,5 @@ def test_installed_release_workflow_keeps_signing_secret_out_of_pull_requests() 
     assert "if: github.event_name != 'pull_request'" in source
     assert "write_trusted_release_keys.py" in source
     assert "PicSyncra-installed-manifest.sig" in source
+    assert 'dist/installed/ocr.zip' in source
+    assert '--component ocr:ocr-$releaseId:dist/installed/ocr.zip' in source

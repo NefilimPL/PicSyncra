@@ -60,3 +60,20 @@ def test_installer_rejects_zip_traversal_and_removes_incomplete_release(tmp_path
     with pytest.raises(PackageApplyError):
         install_release_packages(installed, choice(web, migrator), {"web": staged / "web.zip", "migrator": staged / "migrator.zip"})
     assert not (installed.program_root / "versions" / "42").exists()
+
+
+def test_installer_skips_the_optional_ocr_archive_during_a_regular_program_update(tmp_path: Path) -> None:
+    from picsyncra.installation.package_apply import install_release_packages
+
+    staged = tmp_path / "staged"
+    staged.mkdir()
+    installed = context(tmp_path)
+    web = archive(staged / "web.zip", "PicSyncra-WEB.exe")
+    migrator = archive(staged / "migrator.zip", "PicSyncra-Migrator.exe")
+    ocr = ComponentRef("ocr", "ocr-42", "ocr.zip", "a" * 64, 1)
+    release_with_ocr = ReleaseChoice(
+        42, "v42", "a" * 40, "stable", "main", "b" * 64, (web, migrator, ocr), True, None
+    )
+
+    assert install_release_packages(installed, release_with_ocr, {"web": staged / "web.zip", "migrator": staged / "migrator.zip"}) == 42
+    assert not (installed.program_root / "versions" / "42" / "ocr").exists()

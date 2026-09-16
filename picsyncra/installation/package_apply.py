@@ -18,6 +18,7 @@ class PackageApplyError(RuntimeError):
 
 
 _REQUIRED = frozenset({"web", "migrator"})
+_SEPARATELY_INSTALLED = frozenset({"ocr"})
 _MAX_FILES_PER_COMPONENT = 20_000
 _MAX_UNPACKED_BYTES = 4 * 1024 * 1024 * 1024
 
@@ -98,6 +99,8 @@ def install_release_packages(
         for component in choice.components:
             archive = staged_components.get(component.name)
             if archive is None:
+                if component.name in _SEPARATELY_INSTALLED:
+                    continue
                 raise PackageApplyError("A signed release component is missing from staging.")
             destination = temporary / component.name
             destination.mkdir()

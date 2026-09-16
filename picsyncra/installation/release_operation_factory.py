@@ -7,7 +7,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from .contracts import InstallContext, OperationRequest, ReleaseChoice
-from .downloads import download_release
+from .downloads import download_selected_components
 from .release_executor import StagedReleaseExecutor
 
 
@@ -38,7 +38,12 @@ class VerifiedReleaseOperationFactory:
         if record is None:
             raise ReleaseSelectionError("Selected release record is unavailable.")
         staging = self._context.state_root / "staging" / f"{choice.release_id}-{uuid4().hex}"
-        staged = download_release(choice, record, staging)
+        staged = download_selected_components(
+            choice,
+            record,
+            staging,
+            {component.name for component in choice.components if component.name != "ocr"},
+        )
         return StagedReleaseExecutor(self._context, choice, staged)
 
     def _channel(self) -> str:

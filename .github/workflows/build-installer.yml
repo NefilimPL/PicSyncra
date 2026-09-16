@@ -48,7 +48,9 @@ jobs:
           $pre = if ($channel -eq 'dev') { '--prerelease' } else { '' }
           Compress-Archive -Path "dist/installed/versions/$releaseId/web/*" -DestinationPath dist/installed/web.zip
           Compress-Archive -Path "dist/installed/versions/$releaseId/migrator/*" -DestinationPath dist/installed/migrator.zip
-          python tools/generate_installed_release_manifest.py --release-id $releaseId --tag '${{ github.event.release.tag_name || github.ref_name }}' --commit '${{ github.sha }}' --channel $channel --source-branch $branch $pre --component web:web:dist/installed/web.zip --component migrator:migrator:dist/installed/migrator.zip --output dist/installed/PicSyncra-installed-manifest.json
+          Compress-Archive -Path "dist/installed/versions/$releaseId/local/*" -DestinationPath dist/installed/local.zip
+          Compress-Archive -Path "dist/installed/PicSyncra-OCR/*" -DestinationPath dist/installed/ocr.zip
+          python tools/generate_installed_release_manifest.py --release-id $releaseId --tag '${{ github.event.release.tag_name || github.ref_name }}' --commit '${{ github.sha }}' --channel $channel --source-branch $branch $pre --component web:web-$releaseId:dist/installed/web.zip --component migrator:migrator-$releaseId:dist/installed/migrator.zip --component local:local-$releaseId:dist/installed/local.zip --component ocr:ocr-$releaseId:dist/installed/ocr.zip --output dist/installed/PicSyncra-installed-manifest.json
           python tools/sign_installed_release_manifest.py --input dist/installed/PicSyncra-installed-manifest.json --output dist/installed/PicSyncra-installed-manifest.sig
           Set-Content -NoNewline -Encoding ascii dist/installed/PicSyncra-installed-manifest.key-id 'release-1'
       - name: Upload packages and manifest last

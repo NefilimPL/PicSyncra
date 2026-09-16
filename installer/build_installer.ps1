@@ -29,6 +29,8 @@ try {
     & $Python -m PyInstaller --noconfirm --clean --distpath $distRoot --workpath $workRoot installer/installed.spec
     if ($LASTEXITCODE -ne 0) { throw 'Nie udalo sie zbudowac PicSyncra-SetupHelper.' }
     if ($BuildOcr) {
+        & $Python -m pip install -r requirements-vision.txt
+        if ($LASTEXITCODE -ne 0) { throw 'Nie udalo sie zainstalowac zaleznosci komponentu OCR.' }
         & $Python -m PyInstaller --noconfirm --clean --distpath $distRoot --workpath $workRoot installer/ocr.spec
         if ($LASTEXITCODE -ne 0) { throw 'Nie udalo sie zbudowac komponentu OCR.' }
     }
