@@ -28,6 +28,29 @@ def test_interrupted_install_requires_explicit_recovery_and_is_idempotent(tmp_pa
     assert recover_pending_operation(value) is None
 
 
+def test_controller_handoff_is_not_mistaken_for_a_crashed_validation(tmp_path: Path) -> None:
+    from picsyncra.installation.recovery import recover_pending_operation
+    from picsyncra.installation.restart_handoff import create_restart_handoff
+
+    value = context(tmp_path)
+    journal = OperationJournal(value.state_root / "operations.json")
+    operation = journal.submit(OperationRequest("restart-1", "restart", None, None, False), actor_id="admin")
+    journal.transition(operation.operation_id, "draining")
+    journal.transition(operation.operation_id, "stopping")
+    journal.transition(operation.operation_id, "installing")
+    journal.transition(operation.operation_id, "validating")
+    create_restart_handoff(
+        value,
+        operation_id=operation.operation_id,
+        previous_release=41,
+        target_release=41,
+        previous_ocr_marker=None,
+    )
+
+    assert recover_pending_operation(value) is None
+    assert journal.read(operation.operation_id).state == "validating"
+
+
 def test_service_blocks_new_operations_after_startup_recovery(tmp_path: Path) -> None:
     from picsyncra.installation.operation_service import InstalledOperationService, OperationUnavailable
 

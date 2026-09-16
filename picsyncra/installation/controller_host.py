@@ -14,7 +14,10 @@ from pathlib import Path
 import socket
 import subprocess
 import threading
+import time
 from typing import Callable, Protocol
+from urllib.error import URLError
+from urllib.request import urlopen
 from uuid import uuid4
 
 from ..install_paths import load_registered_install_context
@@ -22,6 +25,14 @@ from .contracts import InstallContext
 from .control_pipe import NamedPipeControlServer
 from .control_protocol import ControlDispatcher
 from .controller import InstallationController
+from .journal import OperationJournal
+from .restart_handoff import (
+    RestartHandoffError,
+    clear_restart_handoff,
+    read_restart_handoff,
+    restore_restart_handoff,
+)
+from .session_epoch import advance_session_epoch
 from .windows_service import ControllerPipeHost
 from .update_helper import ActiveReleaseError, read_active_release
 
@@ -285,11 +296,13 @@ class DeferredRestartController:
         controller: InstallationController,
         *,
         schedule: Callable[[ScheduledWork], object] | None = None,
+        complete_restart: Callable[[bool], None] | None = None,
     ) -> None:
         self._controller = controller
         self._lock = threading.Lock()
         self._restart_pending = False
         self._schedule = schedule or self._schedule_after_response
+        self._complete_restart = complete_restart
 
     def snapshot(self) -> dict[str, object]:
         return self._controller.snapshot()
@@ -313,7 +326,9 @@ class DeferredRestartController:
 
     def _restart_after_response(self) -> None:
         try:
-            self._controller.restart_backend()
+            succeeded = self._controller.restart_backend()
+            if self._complete_restart is not None:
+                self._complete_restart(succeeded)
         finally:
             with self._lock:
                 self._restart_pending = False
@@ -327,6 +342,63 @@ class DeferredRestartController:
         timer.start()
 
 
+def _backend_ready(controller: InstallationController, *, timeout_seconds: float = 30.0) -> bool:
+    """Require the new process to serve its own health response before commit."""
+
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if not bool(controller.snapshot().get("backend_running", False)):
+            return False
+        try:
+            with urlopen("http://127.0.0.1:8010/api/health", timeout=1.0) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            if isinstance(payload, dict) and payload.get("ok") is True:
+                return True
+        except (OSError, URLError, ValueError, json.JSONDecodeError):
+            time.sleep(0.2)
+    return False
+
+
+def _complete_restart_handoff(
+    context: InstallContext,
+    controller: InstallationController,
+    restarted: bool,
+    *,
+    readiness_check: Callable[[InstallationController], bool] = _backend_ready,
+) -> None:
+    """Commit only a healthy new backend, otherwise restore its active bundle."""
+
+    try:
+        handoff = read_restart_handoff(context)
+        if handoff is None:
+            return
+        journal = OperationJournal(context.state_root / "operations.json")
+        operation = journal.read(handoff.operation_id)
+        if operation.state != "validating":
+            return
+        if restarted and readiness_check(controller):
+            try:
+                advance_session_epoch(context)
+            except OSError:
+                restarted = False
+            else:
+                journal.transition(operation.operation_id, "committed")
+                clear_restart_handoff(context, operation.operation_id)
+                return
+        controller.stop_backend(force=True)
+        restore_restart_handoff(context, handoff)
+        if controller.restart_backend() and readiness_check(controller):
+            journal.transition(operation.operation_id, "rolling_back", error_code="restart_failed")
+            journal.transition(operation.operation_id, "rolled_back", error_code="restart_failed")
+            clear_restart_handoff(context, operation.operation_id)
+            return
+        journal.transition(operation.operation_id, "recovery_required", error_code="restart_failed")
+    except (RestartHandoffError, OSError, ValueError):
+        # The durable journal remains non-terminal and is converted only when
+        # possible; no unverified release is reported as committed.
+        return
+
+
 def run_controller(installation_id: str, *, stop_requested: Callable[[], bool] | None = None) -> int:
     """Run one registered controller task until Windows stops the process."""
 
@@ -337,8 +409,12 @@ def run_controller(installation_id: str, *, stop_requested: Callable[[], bool] |
     controller = InstallationController(context, supervisor, backend_port=8010)
     if supervisor.autostart_enabled():
         controller.start_backend()
+        _complete_restart_handoff(context, controller, True)
     dispatcher = ControlDispatcher(
-        DeferredRestartController(controller),
+        DeferredRestartController(
+            controller,
+            complete_restart=lambda restarted: _complete_restart_handoff(context, controller, restarted),
+        ),
         installation_id=context.installation_id,
         authorized_identities={"S-1-5-18", "S-1-5-32-544"},
     )

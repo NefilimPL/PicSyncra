@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from picsyncra.installation.contracts import InstallContext
+from picsyncra.installation.contracts import InstallContext, OperationRequest
 
 
 def _context(tmp_path: Path) -> InstallContext:
@@ -96,6 +96,69 @@ def test_controller_host_defers_restart_until_the_pipe_can_reply() -> None:
     work.pop()()
     assert delegate.restart_calls == 1
     assert controller.restart_backend() is True
+
+
+def test_deferred_restart_reports_the_actual_restart_result_to_handoff_finalizer() -> None:
+    from picsyncra.installation.controller_host import DeferredRestartController
+
+    work: list[object] = []
+    completed: list[bool] = []
+    delegate = FakeController()
+    controller = DeferredRestartController(
+        delegate, schedule=work.append, complete_restart=completed.append
+    )
+
+    assert controller.restart_backend() is True
+    work.pop()()
+
+    assert completed == [True]
+
+
+def test_controller_commits_handoff_only_after_a_ready_backend(tmp_path: Path) -> None:
+    from picsyncra.installation.controller_host import _complete_restart_handoff
+    from picsyncra.installation.journal import OperationJournal
+    from picsyncra.installation.restart_handoff import create_restart_handoff, read_restart_handoff
+    from picsyncra.installation.session_epoch import read_session_epoch
+
+    value = _context(tmp_path)
+    journal = OperationJournal(value.state_root / "operations.json")
+    operation = journal.submit(OperationRequest("restart-1", "restart", None, None, False), actor_id="admin")
+    journal.transition(operation.operation_id, "draining")
+    journal.transition(operation.operation_id, "stopping")
+    journal.transition(operation.operation_id, "installing")
+    journal.transition(operation.operation_id, "validating")
+    create_restart_handoff(value, operation_id=operation.operation_id, previous_release=41, target_release=41, previous_ocr_marker=None)
+
+    _complete_restart_handoff(value, FakeController(), True, readiness_check=lambda _controller: True)
+
+    assert OperationJournal(value.state_root / "operations.json").read(operation.operation_id).state == "committed"
+    assert read_session_epoch(value) == 1
+    assert read_restart_handoff(value) is None
+
+
+def test_controller_rolls_back_handoff_when_new_backend_never_becomes_ready(tmp_path: Path) -> None:
+    from picsyncra.installation.controller_host import _complete_restart_handoff
+    from picsyncra.installation.journal import OperationJournal
+    from picsyncra.installation.restart_handoff import create_restart_handoff, read_restart_handoff
+    from picsyncra.installation.update_helper import activate_release, read_active_release
+
+    value = _context(tmp_path)
+    (value.program_root / "versions" / "42").mkdir()
+    activate_release(value, 42)
+    journal = OperationJournal(value.state_root / "operations.json")
+    operation = journal.submit(OperationRequest("update-1", "update", 42, None, False), actor_id="admin")
+    journal.transition(operation.operation_id, "draining")
+    journal.transition(operation.operation_id, "backing_up")
+    journal.transition(operation.operation_id, "installing")
+    journal.transition(operation.operation_id, "validating")
+    create_restart_handoff(value, operation_id=operation.operation_id, previous_release=41, target_release=42, previous_ocr_marker=None)
+    checks = iter((False, True))
+
+    _complete_restart_handoff(value, FakeController(), True, readiness_check=lambda _controller: next(checks))
+
+    assert OperationJournal(value.state_root / "operations.json").read(operation.operation_id).state == "rolled_back"
+    assert read_active_release(value) == 41
+    assert read_restart_handoff(value) is None
 
 
 class FakeProcess:

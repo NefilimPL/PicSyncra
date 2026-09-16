@@ -70,6 +70,22 @@ def test_failed_remote_restart_is_recorded_without_advancing_session_epoch(tmp_p
     assert service.status()["session_epoch"] == 0
 
 
+def test_deferred_controller_leaves_restart_validating_for_its_own_health_check(tmp_path: Path) -> None:
+    from picsyncra.installation.operation_service import InstalledOperationService
+    from picsyncra.installation.restart_handoff import read_restart_handoff
+
+    class DeferredController(Controller):
+        restart_is_deferred = True
+
+    value = context(tmp_path)
+    service = InstalledOperationService(value, DeferredController())
+    result = service.submit(restart_request(), actor_id="admin-1")
+
+    assert result["state"] == "validating"
+    assert service.status()["session_epoch"] == 0
+    assert read_restart_handoff(value) is not None
+
+
 def test_update_submission_stays_disabled_until_verified_package_executor_is_connected(tmp_path: Path) -> None:
     from picsyncra.installation.operation_service import OperationUnavailable, InstalledOperationService
 

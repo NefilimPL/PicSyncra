@@ -25,6 +25,10 @@ class PipeClient(Protocol):
 class InstallationControlClient:
     """Client for the fixed, local controller command set."""
 
+    # The controller acknowledges the pipe request before it stops this WEB
+    # process. It later commits the durable handoff after a health check.
+    restart_is_deferred = True
+
     def __init__(
         self, installation_id: str, *, pipe_client: PipeClient | None = None
     ) -> None:

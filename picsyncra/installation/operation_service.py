@@ -16,6 +16,7 @@ from .journal import OperationJournal
 from .maintenance import MaintenanceCoordinator, MaintenanceGate
 from .presence import PresenceRegistry
 from .recovery import recover_pending_operation
+from .restart_handoff import clear_restart_handoff, create_restart_handoff
 from .session_epoch import advance_session_epoch, read_session_epoch
 from .update_helper import read_active_release
 from .update_transaction import UpdateTransaction
@@ -125,13 +126,23 @@ class InstalledOperationService:
         return asdict(self._execute_release(operation.operation_id, request, executor))
 
     def _execute_release(self, operation_id: str, request: OperationRequest, executor: object):
+        previous_release = read_active_release(self._context)
+
         def validate(selected: OperationRequest) -> bool:
             if not executor.validate(selected):
                 return False
-            self._restart()
+            if self._restart_is_deferred():
+                self._create_restart_handoff(
+                    operation_id,
+                    previous_release=previous_release,
+                    target_release=selected.release_id,
+                )
+            if not self._restart_after_handoff(operation_id):
+                return False
             if not bool(self._controller.snapshot().get("backend_running", False)):
                 return False
-            advance_session_epoch(self._context)
+            if not self._restart_is_deferred():
+                advance_session_epoch(self._context)
             return True
 
         def rollback(backup: object) -> None:
@@ -145,8 +156,12 @@ class InstalledOperationService:
             validate=validate,
             rollback=rollback,
         )
-        result = transaction.execute(request, actor_id="installed-maintenance")
-        if self._maintenance_gate.wait_for_drain(timeout=0):
+        result = transaction.execute(
+            request,
+            actor_id="installed-maintenance",
+            defer_commit=self._restart_is_deferred(),
+        )
+        if result.state != "validating" and self._maintenance_gate.wait_for_drain(timeout=0):
             self._maintenance_gate.complete(operation_id)
         return result
 
@@ -235,17 +250,29 @@ class InstalledOperationService:
         try:
             self._journal.transition(operation_id, "stopping")
             self._journal.transition(operation_id, "installing")
+            if self._restart_is_deferred():
+                release_id = read_active_release(self._context)
+                self._create_restart_handoff(
+                    operation_id, previous_release=release_id, target_release=release_id
+                )
             self._restart()
             self._journal.transition(operation_id, "validating")
+            if self._restart_is_deferred():
+                return self._journal.read(operation_id)
             if not bool(self._controller.snapshot().get("backend_running", False)):
                 return self._journal.transition(operation_id, "failed", error_code="validation_failed")
             snapshot = self._journal.transition(operation_id, "committed")
             advance_session_epoch(self._context)
             return snapshot
         except Exception:
+            if self._restart_is_deferred():
+                try:
+                    clear_restart_handoff(self._context, operation_id)
+                except Exception:
+                    pass
             return self._journal.transition(operation_id, "failed", error_code="apply_failed")
         finally:
-            if self._maintenance_gate.wait_for_drain(timeout=0):
+            if not self._restart_is_deferred() and self._maintenance_gate.wait_for_drain(timeout=0):
                 self._maintenance_gate.complete(operation_id)
 
     def _sync_maintenance(self, operation_id: str, phase: dict[str, object]):
@@ -261,6 +288,34 @@ class InstalledOperationService:
     def _restart(self) -> None:
         if not self._controller.restart_backend():
             raise OperationUnavailable("Kontroler nie potwierdzil restartu backendu.")
+
+    def _restart_after_handoff(self, operation_id: str) -> bool:
+        try:
+            self._restart()
+            return True
+        except OperationUnavailable:
+            if self._restart_is_deferred():
+                clear_restart_handoff(self._context, operation_id)
+            return False
+
+    def _restart_is_deferred(self) -> bool:
+        return bool(getattr(self._controller, "restart_is_deferred", False))
+
+    def _create_restart_handoff(
+        self, operation_id: str, *, previous_release: int, target_release: int | None
+    ) -> None:
+        if target_release is None:
+            raise OperationUnavailable("Brak wydania docelowego dla restartu.")
+        marker = self._context.program_root / "components" / "ocr" / "active.json"
+        if marker.is_symlink():
+            raise OperationUnavailable("Znacznik aktywnego OCR jest niebezpieczny.")
+        create_restart_handoff(
+            self._context,
+            operation_id=operation_id,
+            previous_release=previous_release,
+            target_release=target_release,
+            previous_ocr_marker=marker.read_bytes() if marker.is_file() else None,
+        )
 
     def _channel(self) -> str:
         try:

@@ -36,7 +36,9 @@ class UpdateTransaction:
         self._validate = validate
         self._rollback = rollback
 
-    def execute(self, request: OperationRequest, *, actor_id: str) -> OperationSnapshot:
+    def execute(
+        self, request: OperationRequest, *, actor_id: str, defer_commit: bool = False
+    ) -> OperationSnapshot:
         """Run the operation and persist its final state before returning."""
         operation = self._journal.submit(request, actor_id=actor_id)
         if operation.state in {"committed", "rolled_back", "recovery_required", "failed"}:
@@ -64,6 +66,10 @@ class UpdateTransaction:
             valid = False
         if not valid:
             return self._rollback_after_failure(operation_id, backup, "validation_failed")
+        if defer_commit:
+            # A controller owns the child WEB process and confirms the final
+            # health check after this process has safely replied to its caller.
+            return self._journal.read(operation_id)
         return self._journal.transition(operation_id, "committed")
 
     def _rollback_after_failure(
