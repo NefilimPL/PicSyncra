@@ -40,7 +40,16 @@ class Process(Protocol):
     def kill(self) -> None: ...
 
 
+class ChildProcessJob(Protocol):
+    """Own child processes for the lifetime of the controller task."""
+
+    def assign(self, process: Process) -> None: ...
+
+    def close(self) -> None: ...
+
+
 ProcessFactory = Callable[[list[str]], Process]
+JobFactory = Callable[[], ChildProcessJob]
 ScheduledWork = Callable[[], None]
 
 
@@ -83,6 +92,44 @@ def _default_process_factory(command: list[str]) -> Process:
     return subprocess.Popen(command, close_fds=True, creationflags=creation_flags)
 
 
+class _WindowsKillOnCloseJob:
+    """A Windows Job Object which kills its child if the controller dies."""
+
+    def __init__(self) -> None:  # pragma: no cover - exercised by installed build
+        try:
+            import win32api
+            import win32job
+        except ImportError as exc:
+            raise ControllerHostError("pywin32 job support is required for the controller.") from exc
+        self._win32api = win32api
+        self._win32job = win32job
+        self._handle = win32job.CreateJobObject(None, None)
+        information = win32job.QueryInformationJobObject(
+            self._handle, win32job.JobObjectExtendedLimitInformation
+        )
+        information["BasicLimitInformation"]["LimitFlags"] |= (
+            win32job.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        )
+        win32job.SetInformationJobObject(
+            self._handle, win32job.JobObjectExtendedLimitInformation, information
+        )
+
+    def assign(self, process: Process) -> None:  # pragma: no cover - installed build
+        handle = getattr(process, "_handle", None)
+        if not isinstance(handle, int):
+            raise ControllerHostError("The backend process has no Windows handle.")
+        self._win32job.AssignProcessToJobObject(self._handle, handle)
+
+    def close(self) -> None:  # pragma: no cover - installed build
+        if self._handle is not None:
+            self._win32api.CloseHandle(self._handle)
+            self._handle = None
+
+
+def _default_job_factory() -> ChildProcessJob:
+    return _WindowsKillOnCloseJob()
+
+
 class ActiveBackendSupervisor:
     """Own precisely one child backend and persist its boot preference.
 
@@ -98,6 +145,7 @@ class ActiveBackendSupervisor:
         backend_port: int = 8010,
         host: str = "0.0.0.0",
         process_factory: ProcessFactory = _default_process_factory,
+        job_factory: JobFactory = _default_job_factory,
         port_in_use: Callable[[], bool] | None = None,
         stop_timeout_seconds: float = 30.0,
     ) -> None:
@@ -109,10 +157,12 @@ class ActiveBackendSupervisor:
         self._backend_port = backend_port
         self._host = host
         self._process_factory = process_factory
+        self._job_factory = job_factory
         self._port_in_use = port_in_use or self._listen_probe
         self._stop_timeout_seconds = stop_timeout_seconds
         self._lock = threading.RLock()
         self._process: Process | None = None
+        self._job: ChildProcessJob | None = None
         self._settings_path = context.state_root / "controller-settings.json"
 
     def listener_owner(self, port: int) -> str | None:
@@ -127,12 +177,25 @@ class ActiveBackendSupervisor:
         with self._lock:
             if self._is_running():
                 return
+            self._process = None
+            self._close_job()
             if self._port_in_use():
                 raise ControllerHostError("The configured WEB port is already in use.")
             executable = active_web_executable(self._context)
-            self._process = self._process_factory(
+            process = self._process_factory(
                 [str(executable), "--service-run", "--port", str(self._backend_port), "--host", self._host]
             )
+            try:
+                job = self._job_factory()
+                job.assign(process)
+            except Exception:
+                try:
+                    process.terminate()
+                except Exception:
+                    pass
+                raise
+            self._process = process
+            self._job = job
 
     def stop_backend(self, *, force: bool) -> bool:
         if not isinstance(force, bool):
@@ -141,6 +204,7 @@ class ActiveBackendSupervisor:
             process = self._process
             if process is None or process.poll() is not None:
                 self._process = None
+                self._close_job()
                 return not self._port_in_use()
             process.terminate()
             try:
@@ -154,7 +218,13 @@ class ActiveBackendSupervisor:
                 except (subprocess.TimeoutExpired, TimeoutError):
                     return False
             self._process = None
+            self._close_job()
             return True
+
+    def shutdown(self) -> None:
+        """End the owned WEB child when the controller exits normally."""
+
+        self.stop_backend(force=True)
 
     def set_autostart(self, enabled: bool) -> bool:
         if not isinstance(enabled, bool):
@@ -187,6 +257,12 @@ class ActiveBackendSupervisor:
 
     def _is_running(self) -> bool:
         return self._process is not None and self._process.poll() is None
+
+    def _close_job(self) -> None:
+        job = self._job
+        self._job = None
+        if job is not None:
+            job.close()
 
     def _listen_probe(self) -> bool:
         try:
@@ -266,14 +342,17 @@ def run_controller(installation_id: str, *, stop_requested: Callable[[], bool] |
         installation_id=context.installation_id,
         authorized_identities={"S-1-5-18", "S-1-5-32-544"},
     )
-    ControllerPipeHost(
-        server_factory=lambda: NamedPipeControlServer(
-            dispatcher,
-            installation_id=context.installation_id,
-            allowed_sids={"S-1-5-18", "S-1-5-32-544"},
-        ),
-        stop_requested=stop_requested or (lambda: False),
-    ).serve_forever()
+    try:
+        ControllerPipeHost(
+            server_factory=lambda: NamedPipeControlServer(
+                dispatcher,
+                installation_id=context.installation_id,
+                allowed_sids={"S-1-5-18", "S-1-5-32-544"},
+            ),
+            stop_requested=stop_requested or (lambda: False),
+        ).serve_forever()
+    finally:
+        supervisor.shutdown()
     return 0
 
 

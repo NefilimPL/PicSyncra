@@ -36,6 +36,7 @@ def test_controller_host_starts_and_stops_only_its_owned_web_process(tmp_path: P
     from picsyncra.installation.controller_host import ActiveBackendSupervisor
 
     created: list[FakeProcess] = []
+    jobs: list[FakeJob] = []
 
     def create_process(command: list[str]) -> "FakeProcess":
         assert command[:2] == [
@@ -46,10 +47,16 @@ def test_controller_host_starts_and_stops_only_its_owned_web_process(tmp_path: P
         created.append(process)
         return process
 
+    def create_job() -> "FakeJob":
+        job = FakeJob()
+        jobs.append(job)
+        return job
+
     supervisor = ActiveBackendSupervisor(
         _context(tmp_path),
         process_factory=create_process,
         port_in_use=lambda: False,
+        job_factory=create_job,
     )
 
     supervisor.start_backend()
@@ -57,6 +64,9 @@ def test_controller_host_starts_and_stops_only_its_owned_web_process(tmp_path: P
     assert supervisor.stop_backend(force=False) is True
     assert created[0].terminated is True
     assert supervisor.snapshot()["backend_running"] is False
+    assert supervisor._job is None
+    assert jobs[0].assigned is created[0]
+    assert jobs[0].closed is True
 
 
 def test_controller_host_never_stops_a_foreign_listener(tmp_path: Path) -> None:
@@ -110,6 +120,18 @@ class FakeProcess:
     def kill(self) -> None:
         self.killed = True
         self.returncode = 1
+
+
+class FakeJob:
+    def __init__(self) -> None:
+        self.assigned: FakeProcess | None = None
+        self.closed = False
+
+    def assign(self, process: FakeProcess) -> None:
+        self.assigned = process
+
+    def close(self) -> None:
+        self.closed = True
 
 
 class FakeController:
