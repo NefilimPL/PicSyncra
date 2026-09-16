@@ -69,6 +69,7 @@ from ..installation.operation_service import InstalledOperationService
 from ..installation.release_client import list_installed_releases, read_installed_release_record
 from ..installation.release_operation_factory import VerifiedReleaseOperationFactory
 from ..installation.session_epoch import SessionEpochError, read_session_epoch
+from .maintenance_requests import MaintenanceRequestAdmission
 from ..services.image_dimensions import (
     ImageOcrDiagnostics,
     OcrDiagnosticCandidate,
@@ -5274,6 +5275,11 @@ def create_app() -> FastAPI:
         else None
     )
     app.state.installation_service = installation_service
+    app.state.maintenance_request_admission = (
+        MaintenanceRequestAdmission(installation_service.maintenance_gate)
+        if installation_service is not None
+        else None
+    )
     if installation_service is not None:
         _PROCESS_QUEUE.set_maintenance_gate(installation_service.maintenance_gate)
 
@@ -5424,6 +5430,22 @@ def create_app() -> FastAPI:
         response.headers.setdefault("Referrer-Policy", "same-origin")
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         return response
+
+    @app.middleware("http")
+    async def _admit_installed_mutating_work(request: Request, call_next):
+        admission = app.state.maintenance_request_admission
+        if admission is None or not admission.requires_admission(request.method, request.url.path):
+            return await call_next(request)
+        lease = admission.admit(request.method, request.url.path)
+        if lease is None:
+            return JSONResponse(
+                status_code=503,
+                content={"detail": "Trwa konserwacja aplikacji. Nowe zmiany są chwilowo wstrzymane."},
+            )
+        try:
+            return await call_next(request)
+        finally:
+            lease.finish()
 
     @app.middleware("http")
     async def _track_active_clients(request: Request, call_next):
