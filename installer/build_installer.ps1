@@ -13,7 +13,7 @@ $workRoot = Join-Path $repoRoot 'build\installed'
 
 Push-Location $repoRoot
 try {
-    & $Python -m pip install -r requirements-build.txt -r requirements-installed.txt
+    & $Python -m pip install -r requirements-build.txt -r requirements-web.txt -r requirements-installed.txt
     if ($LASTEXITCODE -ne 0) { throw 'Nie udalo sie zainstalowac zaleznosci builda.' }
 
     function Build-Onedir([string]$Name, [string]$Entrypoint) {
