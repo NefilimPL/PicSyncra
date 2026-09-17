@@ -3,7 +3,7 @@
 ; files; no secret is placed in an Inno command-line parameter.
 
 #define AppName "PicSyncra"
-#define AppId "{C70B4E13-B158-4E9F-867F-3F0E04DB2283}"
+#define AppId "{{C70B4E13-B158-4E9F-867F-3F0E04DB2283}}"
 #ifndef BuildRoot
   #define BuildRoot "..\dist\installed"
 #endif
