@@ -42,3 +42,19 @@ def test_local_installer_generator_uses_the_canonical_installer_build_script() -
     assert "-BuildOcr" in source
     assert "--without-ocr" in source
     assert "-ReleaseId" in source
+
+
+def test_installed_build_packages_web_static_files_and_generates_icons() -> None:
+    """Catches a frozen WEB backend without static assets or application icons."""
+
+    source = (ROOT / "installer" / "build_installer.ps1").read_text(encoding="utf-8")
+    ignored = (ROOT / ".gitignore").read_text(encoding="utf-8")
+
+    assert "PIC9_WEB.png" in source
+    assert "PIC9_LOCAL.png" in source
+    assert "function New-BuildIcon" in source
+    assert "--icon $IconPath" in source
+    assert "'runtime-status.js'" in source
+    assert "$sourcePath;picsyncra\\web\\static" in source
+    assert "PicSyncra-Setup.ico" in source
+    assert "installer/Output/" in ignored

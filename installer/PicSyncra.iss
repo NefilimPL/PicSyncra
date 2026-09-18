@@ -15,6 +15,9 @@
 AppId={#AppId}
 AppName={#AppName}
 AppVersion={#ReleaseId}
+OutputDir={#BuildRoot}
+OutputBaseFilename=PicSyncra-Setup-{#ReleaseId}
+SetupIconFile={#BuildRoot}\PicSyncra-Setup.ico
 DefaultDirName={autopf}\PicSyncra
 DefaultGroupName=PicSyncra
 PrivilegesRequired=admin
@@ -37,7 +40,6 @@ Name: "local"; Description: "Wersja lokalna (opcjonalna)"
 ; ProgramData is intentionally not cleaned by the uninstaller: it may contain
 ; a selected external database, configuration and rollback backups.
 Name: "{commonappdata}\PicSyncra\primary-installation"; Flags: uninsneveruninstall
-Name: "{commonappdata}\PicSyncra\primary-installation\config"; Flags: uninsneveruninstall
 Name: "{commonappdata}\PicSyncra\primary-installation\data"; Flags: uninsneveruninstall
 Name: "{commonappdata}\PicSyncra\primary-installation\logs"; Flags: uninsneveruninstall
 Name: "{commonappdata}\PicSyncra\primary-installation\cache"; Flags: uninsneveruninstall
@@ -69,13 +71,14 @@ Filename: "{sys}\schtasks.exe"; Parameters: "/Create /TN ""PicSyncra Controller 
 Filename: "{sys}\schtasks.exe"; Parameters: "/Run /TN ""PicSyncra Controller primary-installation"""; Flags: runhidden waituntilterminated
 
 [UninstallRun]
-Filename: "{sys}\schtasks.exe"; Parameters: "/End /TN ""PicSyncra Controller primary-installation"""; Flags: runhidden waituntilterminated
-Filename: "{sys}\schtasks.exe"; Parameters: "/Delete /TN ""PicSyncra Controller primary-installation"" /F"; Flags: runhidden waituntilterminated
+Filename: "{sys}\schtasks.exe"; Parameters: "/End /TN ""PicSyncra Controller primary-installation"""; RunOnceId: "stop-controller"; Flags: runhidden waituntilterminated
+Filename: "{sys}\schtasks.exe"; Parameters: "/Delete /TN ""PicSyncra Controller primary-installation"" /F"; RunOnceId: "delete-controller-task"; Flags: runhidden waituntilterminated
 
 [Code]
 var
   DataRootPage: TInputDirWizardPage;
   ExistingDatabasePage: TInputFileWizardPage;
+  ConfigurationImportPage: TInputOptionWizardPage;
   ConfigurationRootPage: TInputDirWizardPage;
 
 function StateRoot: String;
@@ -106,11 +109,24 @@ begin
   ExistingDatabasePage.Add('Istniejąca baza:',
     'Bazy SQLite (*.sqlite;*.db)|*.sqlite;*.db|Wszystkie pliki|*.*', 'sqlite');
 
-  ConfigurationRootPage := CreateInputDirPage(ExistingDatabasePage.ID,
+  ConfigurationImportPage := CreateInputOptionPage(ExistingDatabasePage.ID,
+    'Import konfiguracji', 'Czy chcesz zaimportować konfigurację portable?',
+    'Pozostaw opcję niezaznaczoną, aby aplikacja użyła domyślnej konfiguracji.',
+    False, False);
+  ConfigurationImportPage.Add('Importuj konfigurację portable');
+  ConfigurationImportPage.Values[0] := False;
+
+  ConfigurationRootPage := CreateInputDirPage(ConfigurationImportPage.ID,
     'Import konfiguracji', 'Wybierz konfigurację portable do importu',
-    'To pole jest opcjonalne. Pominięcie nie nadpisuje konfiguracji domyślnymi plikami.',
+    'Wybierz katalog konfiguracji portable do importu.',
     False, '');
-  ConfigurationRootPage.Add('Katalog konfiguracji portable (opcjonalny):');
+  ConfigurationRootPage.Add('Katalog konfiguracji portable:');
+end;
+
+function ShouldSkipPage(PageID: Integer): Boolean;
+begin
+  Result := (PageID = ConfigurationRootPage.ID) and
+    (not ConfigurationImportPage.Values[0]);
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;
@@ -128,7 +144,7 @@ begin
       Result := False;
     end;
   end else if CurPageID = ConfigurationRootPage.ID then begin
-    if (ConfigurationRootPage.Values[0] <> '') and
+    if ConfigurationImportPage.Values[0] and
        (not DirExists(ConfigurationRootPage.Values[0])) then begin
       MsgBox('Wybrany katalog konfiguracji nie istnieje.', mbError, MB_OK);
       Result := False;
@@ -165,7 +181,7 @@ procedure ImportSelectedConfiguration;
 var
   RequestJson: String;
 begin
-  if ConfigurationRootPage.Values[0] = '' then
+  if not ConfigurationImportPage.Values[0] then
     exit;
   RequestJson := '{"source_config_root":"' + JsonEscape(ConfigurationRootPage.Values[0]) +
     '","destination_config_root":"' + JsonEscape(StateRoot + '\config') +

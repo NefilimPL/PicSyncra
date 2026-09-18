@@ -56,7 +56,11 @@ def test_inno_base_package_uses_the_setup_mutex_and_preserves_machine_data() -> 
 
     assert "SetupMutex=Global\\PicSyncra.Setup" in installer
     assert "CreateMutex(" not in installer
-    assert "{commonappdata}\\PicSyncra\\primary-installation\\config" in installer
+    assert "StateRoot + '\\config'" in installer
+    assert (
+        'Name: "{commonappdata}\\PicSyncra\\primary-installation\\config"'
+        not in installer
+    )
     assert "{commonappdata}\\PicSyncra\\primary-installation\\data" in installer
     assert "Flags: uninsneveruninstall" in installer
     assert 'Subkey: "SOFTWARE\\PicSyncra\\Installations\\primary-installation"' in installer
@@ -126,6 +130,27 @@ def test_inno_json_escaping_mutates_the_request_text_not_the_change_count() -> N
 
     assert "Result := StringChangeEx" not in installer
     assert "StringChangeEx(Result, '\\', '\\\\', True)" in installer
+
+
+def test_inno_installer_emits_a_named_package_and_makes_config_import_opt_in() -> None:
+    """Catches forced config imports or setup executables written outside build output."""
+
+    installer = (
+        Path(__file__).resolve().parents[1] / "installer" / "PicSyncra.iss"
+    ).read_text(encoding="utf-8")
+
+    assert "OutputDir={#BuildRoot}" in installer
+    assert "OutputBaseFilename=PicSyncra-Setup-{#ReleaseId}" in installer
+    assert "SetupIconFile={#BuildRoot}\\PicSyncra-Setup.ico" in installer
+    assert 'RunOnceId: "stop-controller"' in installer
+    assert 'RunOnceId: "delete-controller-task"' in installer
+    assert "ConfigurationImportPage := CreateInputOptionPage" in installer
+    assert "ConfigurationImportPage.Values[0] := False;" in installer
+    assert "not ConfigurationImportPage.Values[0]" in installer
+    assert (
+        'Name: "{commonappdata}\\PicSyncra\\primary-installation\\config"'
+        not in installer
+    )
 
 
 def test_import_config_cli_reads_secret_material_only_from_a_request_file(
