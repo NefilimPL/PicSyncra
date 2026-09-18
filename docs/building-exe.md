@@ -97,3 +97,37 @@ Zwykłe artefakty EXE mają retencję siedmiu dni. Release assets są wysyłane 
 9. Aby opublikować pliki przy wydaniu, utwórz i opublikuj release z tagiem, np. `v1.2.3`.
 
 Zależności builda są w `requirements-build.txt`. Zależności panelu webowego są w `requirements-web.txt`.
+
+## Pakiet instalowany dla Windows
+
+Oprócz dotychczasowych plików portable repozytorium zawiera podstawę
+instalowanego pakietu x64. Buduje ona samowystarczalne katalogi `onedir` dla
+WEB, Migratora i LOCAL oraz pomocnika instalatora, a następnie przekazuje je do
+Inno Setup:
+
+```powershell
+powershell -NoProfile -File installer/build_installer.ps1 -ReleaseId 1
+```
+
+W Windows można uruchomić ten sam build bez wpisywania polecenia PowerShell:
+
+```text
+Generator exe\BUILD_INSTALLER.bat 1
+```
+
+Skrypt domyślnie przygotowuje także pobierany później komponent OCR. Aby zbudować
+sam instalator podstawowy, użyj `Generator exe\BUILD_INSTALLER.bat 1 --without-ocr`.
+Gotowy plik instalatora trafia do katalogu `installer\Output`.
+
+Polecenie wymaga dostępnych w `PATH` interpretera Python i `ISCC.exe` z Inno
+Setup. LOCAL jest zawarty w artefakcie, ale pozostaje opcją instalatora;
+podstawowy pakiet nie zawiera OCR. Skrypt tworzy `active.json` dla wydania i
+kompiluje `installer/PicSyncra.iss`. Nie uruchamia się go na komputerze z
+produkcyjną instalacją deweloperską — instalację, naprawę i deinstalację należy
+sprawdzić w czystej maszynie wirtualnej bez Pythona.
+
+Instalator zapisuje kod w `Program Files`, a dane instalacji w
+`ProgramData\PicSyncra\primary-installation`. Deinstalacja usuwa rejestrację i
+pliki programu, ale celowo zachowuje konfigurację, bazę oraz kopie w
+`ProgramData`. Dane wejściowe dla pomocnika instalatora przekazywane są tylko
+przez plik żądania JSON; w argumentach procesu nie wolno umieszczać sekretów.

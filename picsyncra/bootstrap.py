@@ -56,6 +56,7 @@ def initialize_application_runtime(*, interactive=None):
             pass
     return {
         "base_dir": settings.AC,
+        "config_root": str(Path(settings.BASE_DIR_SETTINGS_PATH).parent),
         "config_path": config.CONFIG_PATH,
         "warning": settings.BASE_DIR_OVERRIDE_WARNING,
     }

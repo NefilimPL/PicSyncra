@@ -1,0 +1,63 @@
+name: Build signed installed packages
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release_id:
+        required: true
+        type: string
+      channel:
+        required: true
+        type: choice
+        options: [stable, dev]
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-publish:
+    runs-on: windows-latest
+    environment: installed-release-signing
+    if: github.event_name != 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Inject trusted public keys into installed build
+        shell: pwsh
+        env:
+          PICSYNCRA_RELEASE_PUBLIC_KEYS: ${{ vars.PICSYNCRA_RELEASE_PUBLIC_KEYS }}
+        run: python tools/write_trusted_release_keys.py --output picsyncra/installation/release_keys.py
+      - name: Build installed components
+        shell: pwsh
+        run: installer/build_installer.ps1 -ReleaseId ${{ github.event.release.id || inputs.release_id }} -BuildOcr
+      - name: Create signed release manifest
+        shell: pwsh
+        env:
+          PICSYNCRA_RELEASE_SIGNING_KEY: ${{ secrets.PICSYNCRA_RELEASE_SIGNING_KEY }}
+        run: |
+          $releaseId = '${{ github.event.release.id || inputs.release_id }}'
+          $channel = '${{ inputs.channel || (github.event.release.prerelease && 'dev' || 'stable') }}'
+          $branch = if ($channel -eq 'stable') { 'main' } else { '${{ github.event.release.target_commitish || github.ref_name }}' }
+          $pre = if ($channel -eq 'dev') { '--prerelease' } else { '' }
+          Compress-Archive -Path "dist/installed/versions/$releaseId/web/*" -DestinationPath dist/installed/web.zip
+          Compress-Archive -Path "dist/installed/versions/$releaseId/migrator/*" -DestinationPath dist/installed/migrator.zip
+          Compress-Archive -Path "dist/installed/versions/$releaseId/local/*" -DestinationPath dist/installed/local.zip
+          Compress-Archive -Path "dist/installed/PicSyncra-OCR/*" -DestinationPath dist/installed/ocr.zip
+          python tools/generate_installed_release_manifest.py --release-id $releaseId --tag '${{ github.event.release.tag_name || github.ref_name }}' --commit '${{ github.sha }}' --channel $channel --source-branch $branch $pre --component web:web-$releaseId:dist/installed/web.zip --component migrator:migrator-$releaseId:dist/installed/migrator.zip --component local:local-$releaseId:dist/installed/local.zip --component ocr:ocr-$releaseId:dist/installed/ocr.zip --output dist/installed/PicSyncra-installed-manifest.json
+          python tools/sign_installed_release_manifest.py --input dist/installed/PicSyncra-installed-manifest.json --output dist/installed/PicSyncra-installed-manifest.sig
+          Set-Content -NoNewline -Encoding ascii dist/installed/PicSyncra-installed-manifest.key-id 'release-1'
+      - name: Upload packages and manifest last
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/installed/*.zip
+            dist/installed/PicSyncra-installed-manifest.json
+            dist/installed/PicSyncra-installed-manifest.sig
+            dist/installed/PicSyncra-installed-manifest.key-id

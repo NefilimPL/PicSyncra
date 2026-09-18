@@ -8,6 +8,7 @@ from typing import Protocol
 
 from .ocr_progress import OcrProgressRegistry, OcrRunSnapshot
 from .ocr_resource_policy import OcrResourcePolicy, ResourceTelemetry
+from ..installation.maintenance import MaintenanceGate, MaintenanceLease
 
 
 class OcrWorker(Protocol):
@@ -44,13 +45,16 @@ class OcrExecutionService:
         settings: Callable[[], dict[str, object]],
         telemetry: Callable[[], ResourceTelemetry],
         on_worker_ready: Callable[[int], None] | None = None,
+        maintenance_gate: MaintenanceGate | None = None,
     ) -> None:
         self._worker = worker
         self._registry = registry
         self._settings = settings
         self._telemetry = telemetry
         self._on_worker_ready = on_worker_ready
+        self._maintenance_gate = maintenance_gate
         self._inflight_run_ids: set[str] = set()
+        self._maintenance_leases: dict[str, MaintenanceLease] = {}
 
     def start(self) -> None:
         self._worker.start()
@@ -108,8 +112,14 @@ class OcrExecutionService:
             self._registry.publish(run_id, "error", message="No OCR profile selected.")
             self._registry.finalize(run_id, state="error", error="No OCR profile selected.")
             return run_id
+        lease = self._maintenance_gate.try_admit("ocr") if self._maintenance_gate is not None else None
+        if self._maintenance_gate is not None and lease is None:
+            raise RuntimeError("Trwa konserwacja aplikacji; nowe zadania OCR są wstrzymane.")
         self._registry.publish(run_id, "queued", stage="waiting_for_worker")
         self._inflight_run_ids.add(run_id)
+        if lease is not None:
+            self._maintenance_leases[run_id] = lease
+            lease.set_cancel_callback(lambda: self.cancel(run_id))
         self._worker.submit(
             run_id=run_id,
             path=str(path),
@@ -141,11 +151,13 @@ class OcrExecutionService:
                 self._registry.publish(run_id, kind, **payload)
                 if kind == "result":
                     self._inflight_run_ids.discard(run_id)
+                    self._finish_maintenance_lease(run_id)
                     diagnostics = payload.get("diagnostics")
                     result = diagnostics if isinstance(diagnostics, dict) else {}
                     self._registry.finalize(run_id, state="completed", result=result)
                 elif kind == "error":
                     self._inflight_run_ids.discard(run_id)
+                    self._finish_maintenance_lease(run_id)
                     self._registry.finalize(
                         run_id, state="error", error=str(payload.get("message") or "OCR error")
                     )
@@ -194,3 +206,9 @@ class OcrExecutionService:
                 pass
             finally:
                 self._inflight_run_ids.discard(run_id)
+                self._finish_maintenance_lease(run_id)
+
+    def _finish_maintenance_lease(self, run_id: str) -> None:
+        lease = self._maintenance_leases.pop(run_id, None)
+        if lease is not None:
+            lease.finish()

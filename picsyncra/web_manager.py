@@ -39,6 +39,18 @@ class ActionResult:
     message: str
 
 
+def _installed_control_client():
+    """Return a controller client only for a resolver-verified installation."""
+
+    from .install_paths import resolve_install_context
+    from .installation.launcher import InstallationControlClient
+
+    context = resolve_install_context(Path(sys.executable))
+    if context is None:
+        return None
+    return InstallationControlClient(context.installation_id)
+
+
 def app_root() -> Path:
     """Return the directory used for local settings, pid files and logs."""
 
@@ -593,6 +605,15 @@ def remove_system_service() -> ActionResult:
 
 
 def set_system_service_enabled(enabled: bool) -> ActionResult:
+    installed_controller = _installed_control_client()
+    if installed_controller is not None:
+        try:
+            confirmed = installed_controller.set_autostart(enabled)
+        except Exception:
+            return ActionResult(False, "Kontroler instalacji nie potwierdzil zmiany autostartu.")
+        if confirmed is not enabled:
+            return ActionResult(False, "Kontroler instalacji zwrocil niezgodny stan autostartu.")
+        return ActionResult(True, "Autostart wlaczony." if enabled else "Autostart wylaczony.")
     if os.name != "nt":
         return ActionResult(False, "Autostart uslugi jest dostepny tylko na Windows.")
     if not task_exists():
@@ -721,6 +742,17 @@ def start_web(
     prefer_system_service: bool = True,
     progress: Callable[[str], None] | None = None,
 ) -> ActionResult:
+    installed_controller = _installed_control_client()
+    if installed_controller is not None:
+        if progress is not None:
+            progress("Uruchamiam backend przez kontroler instalacji...")
+        try:
+            installed_controller.start_backend()
+        except Exception:
+            return ActionResult(False, "Kontroler instalacji nie uruchomil backendu WWW.")
+        if wait_web_ready(port, progress=progress, expected_application=PACKAGE_NAME):
+            return ActionResult(True, "Panel webowy dziala jako usluga instalacji.")
+        return ActionResult(False, "Kontroler uruchomil backend, ale strona nie odpowiedziala w limicie czasu.")
     if progress is not None:
         progress("Sprawdzam port i poprzedni proces panelu WWW...")
     listeners = get_port_listeners(port)
@@ -865,6 +897,15 @@ def stop_legacy_web(port: int) -> ActionResult:
 
 
 def stop_web(port: int) -> ActionResult:
+    installed_controller = _installed_control_client()
+    if installed_controller is not None:
+        try:
+            stopped = installed_controller.stop_backend(force=False)
+        except Exception:
+            return ActionResult(False, "Kontroler instalacji nie potwierdzil zatrzymania backendu WWW.")
+        if stopped:
+            return ActionResult(True, "Zatrzymano backend przez kontroler instalacji.")
+        return ActionResult(False, "Kontroler instalacji nie zatrzymal backendu WWW.")
     stopped = False
     data = read_metadata()
     failures: list[str] = []
@@ -954,6 +995,13 @@ def read_active_clients(root: Path | None = None, *, max_age_seconds: int = 180)
 
 
 def current_status(port: int) -> dict[str, Any]:
+    installed_controller = _installed_control_client()
+    installed_snapshot: dict[str, bool] | None = None
+    if installed_controller is not None:
+        try:
+            installed_snapshot = installed_controller.snapshot()
+        except Exception:
+            installed_snapshot = {"backend_running": False, "autostart": False}
     listeners = get_port_listeners(port)
     health = check_http_health(port)
     web_listeners = [
@@ -974,16 +1022,24 @@ def current_status(port: int) -> dict[str, Any]:
             str(item.get("ProcessName") or ""),
         )
     ]
+    running = bool(web_listeners and health.get("ok"))
+    if installed_snapshot is not None:
+        running = bool(installed_snapshot.get("backend_running", False) and health.get("ok"))
+        task_present = True
+        task_is_enabled = bool(installed_snapshot.get("autostart", False))
+    else:
+        task_present = task_exists()
+        task_is_enabled = task_enabled()
     return {
         "port": port,
         "listeners": listeners,
         "web_listeners": web_listeners,
         "legacy_web_listeners": legacy_listeners,
         "health": health,
-        "running": bool(web_listeners and health.get("ok")),
+        "running": running,
         "urls": [local_url(port), *lan_urls(port)],
-        "task_exists": task_exists(),
-        "task_enabled": task_enabled(),
+        "task_exists": task_present,
+        "task_enabled": task_is_enabled,
         "admin": is_admin(),
         "metadata": read_metadata(),
         "clients": read_active_clients(),

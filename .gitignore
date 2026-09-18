@@ -34,6 +34,7 @@ _ZDJECIA PRZEROBIONE_/
 \__pycache__/
 .pytest_cache/
 .pytest-tmp/
+.test-tmp/
 .tmp-test/
 pytest-cache-files-*/
 pytest-temp/
@@ -48,7 +49,14 @@ picsyncra_web_uvicorn.*.log
 build/
 dist/
 *.spec
+!installer/installed.spec
+!installer/ocr.spec
 *.manifest
 Generator exe/.icons/
 Generator exe/*.exe
 Generator exe/Nowy folder/
+
+# Separately built OCR runtime.  Release packages are uploaded by CI; these
+# directories are local PyInstaller output and must never enter source control.
+.ocr-build-dist/
+.ocr-build-work/

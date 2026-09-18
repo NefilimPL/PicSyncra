@@ -31,6 +31,14 @@ const state = {
   moduleBuildStatus: null,
   moduleBuildStatusLoading: false,
   moduleBuildStatusError: "",
+  installationUpdates: null,
+  installationReleases: [],
+  installationUpdatesLoading: false,
+  installationUpdatesChecked: false,
+  installationUpdatesError: "",
+  installationOperation: null,
+  installationPresencePollerStarted: false,
+  installationMaintenanceState: "idle",
   history: null,
   historyDetailGroup: null,
   historyDetailPage: 1,
@@ -7191,6 +7199,7 @@ function createPoller(name, intervalMs, callback, options = {}) {
 }
 
 function startBackgroundPollers() {
+  startInstalledPresenceHeartbeat().catch(() => {});
   state.runtimeStatusPoller = new PicSyncra.RuntimeStatusPoller({
     fetchStatus: fetchRuntimeStatus,
     onVersionChanged: refreshRuntimeDetailForVersion,
@@ -14699,6 +14708,175 @@ function moduleBuildStatusUtilities() {
   return window.PicSyncra?.ModuleBuildStatus || null;
 }
 
+function installationUpdatesUtilities() {
+  return window.PicSyncra?.InstallationUpdates || null;
+}
+
+async function loadInstallationUpdates() {
+  const utilities = installationUpdatesUtilities();
+  if (!utilities) throw new Error("Nie zaladowano modulu aktualizacji instalacji.");
+  state.installationUpdatesLoading = true;
+  state.installationUpdatesChecked = true;
+  state.installationUpdatesError = "";
+  try {
+    const snapshot = utilities.normalizeSnapshot(await requestJson("/api/installation"));
+    state.installationUpdates = snapshot;
+    state.installationReleases = await utilities.loadReleases(snapshot.channel, requestJson);
+    return snapshot;
+  } catch (error) {
+    state.installationUpdates = null;
+    state.installationReleases = [];
+    state.installationUpdatesError = error.status === 404 ? "" : (error.message || "Nie udalo sie odczytac aktualizacji.");
+    throw error;
+  } finally {
+    state.installationUpdatesLoading = false;
+  }
+}
+
+function renderInstalledUpdateControls(panel) {
+  const utilities = installationUpdatesUtilities();
+  if (!utilities) return;
+  if (!state.installationUpdatesChecked) {
+    loadInstallationUpdates().catch(() => {}).finally(() => {
+      if (state.activeSettingsTab === "module-status") renderSettings();
+    });
+    return;
+  }
+  if (state.installationUpdatesLoading) {
+    const loading = document.createElement("p");
+    loading.className = "settings-note";
+    loading.textContent = "Sprawdzanie bezpiecznych wydań instalacji...";
+    panel.appendChild(loading);
+    return;
+  }
+  if (state.installationUpdatesError) {
+    const error = document.createElement("p");
+    error.className = "error-text";
+    error.textContent = state.installationUpdatesError;
+    panel.appendChild(error);
+    return;
+  }
+  const snapshot = state.installationUpdates;
+  if (!snapshot) return;
+
+  const section = document.createElement("section");
+  const heading = document.createElement("h3");
+  const summary = document.createElement("p");
+  const channel = document.createElement("select");
+  const releases = document.createElement("select");
+  const update = document.createElement("button");
+  const selected = document.createElement("button");
+  const ocr = document.createElement("button");
+  const restart = document.createElement("button");
+  const autostartLabel = document.createElement("label");
+  const autostart = document.createElement("input");
+  const operation = document.createElement("p");
+  const force = document.createElement("button");
+
+  section.className = "settings-block installation-updates";
+  heading.textContent = "Zainstalowana aplikacja";
+  summary.className = "settings-note";
+  summary.textContent = `Wydanie: ${snapshot.build || "brak danych"}. Backend: ${snapshot.backend_running ? "działa" : "zatrzymany"}. Stan: ${snapshot.maintenance.state}.`;
+  channel.append(new Option("Stable", "stable"), new Option("Dev", "dev"));
+  channel.value = snapshot.channel;
+  channel.setAttribute("aria-label", "Kanał wydań");
+  for (const release of state.installationReleases) {
+    const label = release.can_install ? release.tag : `${release.tag || release.release_id} (niedostępne: ${release.blocked_reason || "manifest"})`;
+    const option = new Option(label, String(release.release_id || ""));
+    option.disabled = !release.can_install || !release.release_id;
+    releases.appendChild(option);
+  }
+  releases.setAttribute("aria-label", "Wydanie do instalacji");
+
+  const submit = async (action, releaseId = null) => {
+    state.installationOperation = await utilities.submitOperation(
+      utilities.operationRequest(action, releaseId), requestJson
+    );
+    renderSettings();
+  };
+  update.type = selected.type = ocr.type = restart.type = force.type = "button";
+  update.className = "primary-button";
+  update.textContent = "Aktualizuj";
+  const currentReleaseId = Number(snapshot.build);
+  const updateTarget = utilities.selectUpdateTarget(state.installationReleases, currentReleaseId);
+  update.disabled = !updateTarget;
+  update.addEventListener("click", () => {
+    if (updateTarget) submit("update", updateTarget.release_id).catch((error) => { state.installationUpdatesError = error.message; renderSettings(); });
+  });
+  selected.className = ocr.className = restart.className = force.className = "secondary-button";
+  selected.textContent = "Zainstaluj wybraną wersję";
+  selected.disabled = !releases.value || Number(releases.value) === currentReleaseId;
+  selected.addEventListener("click", () => {
+    const releaseId = Number(releases.value);
+    const action = releaseId < Number(snapshot.build) ? "downgrade" : "update";
+    submit(action, releaseId).catch((error) => { state.installationUpdatesError = error.message; renderSettings(); });
+  });
+  ocr.textContent = "Pobierz i zainstaluj OCR";
+  ocr.addEventListener("click", () => submit("install_ocr").catch((error) => { state.installationUpdatesError = error.message; renderSettings(); }));
+  restart.textContent = "Uruchom ponownie backend";
+  restart.addEventListener("click", () => submit("restart").catch((error) => { state.installationUpdatesError = error.message; renderSettings(); }));
+  autostart.type = "checkbox";
+  autostart.checked = snapshot.autostart;
+  autostart.addEventListener("change", () => requestJson("/api/installation/autostart", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: autostart.checked }),
+  }).then(loadInstallationUpdates).catch((error) => { state.installationUpdatesError = error.message; renderSettings(); }));
+  autostartLabel.append(autostart, " Uruchamiaj backend po starcie Windows");
+  operation.className = "settings-note";
+  if (state.installationOperation) operation.textContent = `Ostatnia operacja: ${state.installationOperation.state || "przyjęta"}.`;
+  force.textContent = "Wymuś zakończenie zadań";
+  force.hidden = !snapshot.maintenance.force_allowed || !state.installationOperation?.operation_id;
+  force.addEventListener("click", () => requestJson(`/api/installation/operations/${encodeURIComponent(state.installationOperation.operation_id)}/force`, { method: "POST" })
+    .then((value) => { state.installationOperation = value; return loadInstallationUpdates(); })
+    .catch((error) => { state.installationUpdatesError = error.message; renderSettings(); }));
+  channel.addEventListener("change", () => requestJson("/api/installation/channel", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ channel: channel.value }),
+  }).then(loadInstallationUpdates).then(() => renderSettings()).catch((error) => { state.installationUpdatesError = error.message; renderSettings(); }));
+  section.append(heading, summary, channel, releases, update, selected, ocr, restart, autostartLabel, operation, force);
+  panel.appendChild(section);
+}
+
+async function startInstalledPresenceHeartbeat() {
+  if (state.installationPresencePollerStarted) return;
+  try {
+    await requestJson("/api/installation/public-status");
+  } catch (error) {
+    if (error.status !== 404) console.warn("Nie udalo sie sprawdzic stanu konserwacji instalacji.");
+    return;
+  }
+  state.installationPresencePollerStarted = true;
+  const heartbeat = async () => {
+    const payload = await requestJson(
+      `/api/installation/presence?session_id=${encodeURIComponent(activePresenceClientId())}`
+    );
+    renderInstallationMaintenanceNotice(payload);
+    return payload;
+  };
+  createPoller("installation-presence", 15000, heartbeat).schedule(0);
+}
+
+function renderInstallationMaintenanceNotice(payload) {
+  const source = payload && typeof payload === "object" ? payload : {};
+  const stateName = String(source.state || "idle");
+  state.installationMaintenanceState = stateName;
+  let notice = document.querySelector("#installationMaintenanceNotice");
+  if (!notice && stateName !== "idle") {
+    notice = document.createElement("div");
+    notice.id = "installationMaintenanceNotice";
+    notice.className = "settings-note";
+    notice.setAttribute("role", "status");
+    document.body.prepend(notice);
+  }
+  if (!notice) return;
+  notice.hidden = stateName === "idle";
+  if (stateName === "countdown") {
+    notice.textContent = "Trwa przygotowanie aktualizacji. Backend zostanie uruchomiony ponownie za około 2 minuty; zapisz bieżącą pracę.";
+  } else if (stateName === "draining") {
+    notice.textContent = "Trwa oczekiwanie na zakończenie zadań przed aktualizacją.";
+  } else {
+    notice.textContent = "Trwa konserwacja aplikacji. Zapisy są chwilowo wstrzymane.";
+  }
+}
+
 function moduleBuildStatusValue(value) {
   return String(value || "").trim() || "Brak danych";
 }
@@ -14950,6 +15128,7 @@ function renderSettingsModuleStatus() {
   }
 
   settingsOutput.appendChild(panel);
+  renderInstalledUpdateControls(panel);
   if (!state.moduleBuildStatus && !state.moduleBuildStatusLoading && !state.moduleBuildStatusError) {
     loadModuleBuildStatus()
       .catch(() => {})

@@ -1,5 +1,8 @@
 """Shared constants, imports and helper utilities for PicSyncra."""
 
+from pathlib import Path
+
+from .install_paths import resolve_config_root
 from .pimcore_config import PIMCORE_SETTINGS_KEY, default_pimcore_settings
 from .product_fields import PRODUCT_FIELDS_KEY, default_product_fields
 from .email_settings import EMAIL_SETTINGS_KEY, default_email_settings
@@ -586,6 +589,9 @@ def _decode_local_secret(value, fallback):
 def _resolve_settings_root_for_common():
     """Return the folder that should host ``local_settings.json``."""
 
+    installed_config_root = resolve_config_root(Path(sys.executable))
+    if installed_config_root is not None:
+        return str(installed_config_root)
     if getattr(sys, "frozen", False):
         base_path = A.path.dirname(sys.executable)
         return base_path or A.getcwd()

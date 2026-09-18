@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
-from .process_queue import OwnerQueueLimit, ProcessQueueFull
+from .process_queue import MaintenanceInProgress, OwnerQueueLimit, ProcessQueueFull
 
 
 @dataclass(frozen=True)
@@ -31,7 +31,7 @@ class ProcessApiDependencies:
 def _reserve_process_capacity(queue: Any, cache_scope: str) -> Any:
     try:
         return queue.reserve(cache_scope)
-    except (ProcessQueueFull, OwnerQueueLimit) as exc:
+    except (ProcessQueueFull, OwnerQueueLimit, MaintenanceInProgress) as exc:
         retry_after = getattr(exc, "retry_after_seconds", None)
         if retry_after is None:
             limits = getattr(queue, "limits", None)

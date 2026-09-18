@@ -61,6 +61,15 @@ from ..database import connect_db
 from ..github_status import github_repository_status
 from ..history_changes import history_change_set
 from ..image_utils import fit_image_to_content
+from ..install_paths import resolve_install_context
+from ..installation.ocr_runtime import create_installed_ocr_worker
+from ..installation.ocr_operation_factory import VerifiedOcrOperationFactory
+from ..installation.launcher import InstallationControlClient
+from ..installation.operation_service import InstalledOperationService
+from ..installation.release_client import list_installed_releases, read_installed_release_record
+from ..installation.release_operation_factory import VerifiedReleaseOperationFactory
+from ..installation.session_epoch import SessionEpochError, read_session_epoch
+from .maintenance_requests import MaintenanceRequestAdmission
 from ..services.image_dimensions import (
     ImageOcrDiagnostics,
     OcrDiagnosticCandidate,
@@ -127,6 +136,7 @@ from .process_models import (
     QueuedUploadFile as _QueuedUploadFile,
 )
 from .runtime_api import RuntimeApiDependencies, build_runtime_router
+from .installation_api import InstallationApiDependencies, build_installation_router
 from .process_queue import (
     ProcessQueueService,
     QueueReservation,
@@ -224,6 +234,7 @@ BROWSER_EXTENSION_DIR = Path(__file__).resolve().parents[1] / "browser_extension
 SESSION_COOKIE = "picsyncra_web_session"
 SESSION_MAX_AGE_SECONDS = 12 * 60 * 60
 BROWSER_EXTENSION_TOKEN_MAX_AGE_SECONDS = 30 * 24 * 60 * 60
+EXTENSION_PROTOCOL_VERSION = 1
 DEFAULT_ADMIN_USERNAME = "admin"
 DEFAULT_ADMIN_PASSWORD = "admin"
 ACTIVE_CLIENT_MAX_AGE_SECONDS = 180
@@ -244,6 +255,15 @@ OCR_FEATURE_ENABLED = os.getenv("PICSYNCRA_OCR_ENABLED", "1").strip().lower() no
     "no",
     "off",
 }
+
+
+def _create_ocr_execution_worker(ocr_settings: dict[str, object]) -> object | None:
+    """Choose the isolated installed OCR component, or the portable worker."""
+
+    context = resolve_install_context(Path(sys.executable))
+    if context is not None:
+        return create_installed_ocr_worker(context)
+    return OcrWorkerProcess(cpu_percent=int(ocr_settings.get("max_cpu_percent") or 35))
 
 
 def _require_ocr_feature() -> None:
@@ -667,7 +687,15 @@ def _validate_mutating_request(request: Request) -> None:
 def _make_session_token(user: Dict[str, Any]) -> str:
     session_version = int(user.get("session_version") or 0)
     user_id = str(user.get("id") or "")
-    payload = f"session-v2|{user_id}|{session_version}|{int(time.time())}|{secrets.token_hex(12)}"
+    context = resolve_install_context(Path(sys.executable))
+    if context is None:
+        payload = f"session-v2|{user_id}|{session_version}|{int(time.time())}|{secrets.token_hex(12)}"
+    else:
+        try:
+            epoch = read_session_epoch(context)
+        except SessionEpochError as exc:
+            raise RuntimeError("Nie mozna utworzyc sesji zainstalowanej aplikacji.") from exc
+        payload = f"session-v3|{user_id}|{session_version}|{epoch}|{int(time.time())}|{secrets.token_hex(12)}"
     token = f"{payload}|{_sign(payload)}"
     return base64.urlsafe_b64encode(token.encode("utf-8")).decode("ascii")
 
@@ -691,13 +719,21 @@ def _read_session_token(token: Optional[str]) -> Optional[str]:
     if not hmac.compare_digest(_sign(payload), signature):
         return None
     parts = payload.split("|")
-    if len(parts) != 5 or parts[0] != "session-v2":
-        return None
-    _marker, user_id, version_raw, issued_raw, _nonce = parts
+    context = resolve_install_context(Path(sys.executable))
+    if context is None:
+        if len(parts) != 5 or parts[0] != "session-v2":
+            return None
+        _marker, user_id, version_raw, issued_raw, _nonce = parts
+    else:
+        if len(parts) != 6 or parts[0] != "session-v3":
+            return None
+        _marker, user_id, version_raw, epoch_raw, issued_raw, _nonce = parts
     try:
         issued = int(issued_raw)
         session_version = int(version_raw)
-    except ValueError:
+        if context is not None and int(epoch_raw) != read_session_epoch(context):
+            return None
+    except (ValueError, SessionEpochError):
         return None
     if int(time.time()) - issued > SESSION_MAX_AGE_SECONDS:
         return None
@@ -829,6 +865,13 @@ def _require_browser_extension_user(request: Request) -> str:
     if not username:
         raise HTTPException(status_code=401, detail="Niepoprawny albo wygasly token rozszerzenia.")
     return username
+
+
+def _browser_extension_protocol_compatible(request: Request) -> bool:
+    """Keep legacy unpacked extensions working until their protocol is retired."""
+
+    protocol = str(request.headers.get("x-picsyncra-extension-protocol") or "")
+    return protocol in {"", str(EXTENSION_PROTOCOL_VERSION)}
 
 
 def _require_user(request: Request) -> str:
@@ -1849,15 +1892,19 @@ def _browser_extension_cors_headers(request: Request) -> Dict[str, str]:
     if origin.startswith(("chrome-extension://", "edge-extension://")):
         return {
             "Access-Control-Allow-Origin": origin,
-            "Access-Control-Allow-Headers": "authorization, content-type",
+            "Access-Control-Allow-Headers": "authorization, content-type, x-picsyncra-extension-protocol",
             "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
             "Vary": "Origin",
         }
     return {}
 
 
-def _browser_extension_json(request: Request, payload: Dict[str, Any]) -> JSONResponse:
-    return JSONResponse(payload, headers=_browser_extension_cors_headers(request))
+def _browser_extension_json(
+    request: Request, payload: Dict[str, Any], *, status_code: int = 200
+) -> JSONResponse:
+    return JSONResponse(
+        payload, status_code=status_code, headers=_browser_extension_cors_headers(request)
+    )
 
 
 def _browser_extension_defaults(request: Request, username: str) -> str:
@@ -5219,6 +5266,33 @@ def create_app() -> FastAPI:
     app.state.ocr_queue_thread = None
     app.state.ocr_execution_service = None
     app.state.ocr_execution_worker = None
+    installed_context = resolve_install_context(Path(sys.executable))
+    installation_service = (
+        InstalledOperationService(
+            installed_context,
+            InstallationControlClient(installed_context.installation_id),
+            release_executor_factory=VerifiedReleaseOperationFactory(
+                installed_context,
+                catalog=lambda channel: tuple(list_installed_releases(channel)),
+                release_record=read_installed_release_record,
+            ),
+            ocr_executor_factory=VerifiedOcrOperationFactory(
+                installed_context,
+                catalog=lambda channel: tuple(list_installed_releases(channel)),
+                release_record=read_installed_release_record,
+            ),
+        )
+        if installed_context is not None
+        else None
+    )
+    app.state.installation_service = installation_service
+    app.state.maintenance_request_admission = (
+        MaintenanceRequestAdmission(installation_service.maintenance_gate)
+        if installation_service is not None
+        else None
+    )
+    if installation_service is not None:
+        _PROCESS_QUEUE.set_maintenance_gate(installation_service.maintenance_gate)
 
     def _ocr_has_active_requests() -> bool:
         with app.state.ocr_activity_lock:
@@ -5369,6 +5443,22 @@ def create_app() -> FastAPI:
         return response
 
     @app.middleware("http")
+    async def _admit_installed_mutating_work(request: Request, call_next):
+        admission = app.state.maintenance_request_admission
+        if admission is None or not admission.requires_admission(request.method, request.url.path):
+            return await call_next(request)
+        lease = admission.admit(request.method, request.url.path)
+        if lease is None:
+            return JSONResponse(
+                status_code=503,
+                content={"detail": "Trwa konserwacja aplikacji. Nowe zmiany są chwilowo wstrzymane."},
+            )
+        try:
+            return await call_next(request)
+        finally:
+            lease.finish()
+
+    @app.middleware("http")
     async def _track_active_clients(request: Request, call_next):
         response = await call_next(request)
         _record_active_client(request, getattr(response, "status_code", 0))
@@ -5400,44 +5490,48 @@ def create_app() -> FastAPI:
         _ensure_active_client_registry()
         _RESOURCE_MONITOR.start()
         if OCR_FEATURE_ENABLED:
-            _clear_ocr_crop_queue_on_startup()
             ocr_settings = normalize_ocr_settings(config.CONFIG.get(OCR_SETTINGS_KEY, {}))
-            ocr_worker = OcrWorkerProcess(
-                cpu_percent=int(ocr_settings.get("max_cpu_percent") or 35)
-            )
-            execution_service = OcrExecutionService(
-                worker=ocr_worker,
-                registry=OcrProgressRegistry(),
-                settings=lambda: normalize_ocr_settings(
-                    config.CONFIG.get(OCR_SETTINGS_KEY, {})
-                ),
-                telemetry=_ocr_resource_telemetry,
-                on_worker_ready=(
-                    callback
-                    if callable(
-                        callback := getattr(
-                            _RESOURCE_MONITOR, "register_ocr_worker_pid", None
+            ocr_worker = _create_ocr_execution_worker(ocr_settings)
+            if ocr_worker is not None:
+                _clear_ocr_crop_queue_on_startup()
+                execution_service = OcrExecutionService(
+                    worker=ocr_worker,
+                    registry=OcrProgressRegistry(),
+                    settings=lambda: normalize_ocr_settings(
+                        config.CONFIG.get(OCR_SETTINGS_KEY, {})
+                    ),
+                    telemetry=_ocr_resource_telemetry,
+                    on_worker_ready=(
+                        callback
+                        if callable(
+                            callback := getattr(
+                                _RESOURCE_MONITOR, "register_ocr_worker_pid", None
+                            )
                         )
-                    )
-                    else None
-                ),
-            )
-            execution_service.start()
-            app.state.ocr_execution_worker = ocr_worker
-            app.state.ocr_execution_service = execution_service
-            _OCR_EXECUTION_SERVICE = execution_service
-            app.state.ocr_queue_stop.clear()
-            worker = OcrQueueWorker(
-                run_once=_run_ocr_queue_once,
-                poll_seconds=0.5,
-                stop_event=app.state.ocr_queue_stop,
-            )
-            app.state.ocr_queue_thread = threading.Thread(
-                target=worker.run,
-                name="picsyncra-ocr-queue",
-                daemon=True,
-            )
-            app.state.ocr_queue_thread.start()
+                        else None
+                    ),
+                    maintenance_gate=(
+                        installation_service.maintenance_gate
+                        if installation_service is not None
+                        else None
+                    ),
+                )
+                execution_service.start()
+                app.state.ocr_execution_worker = ocr_worker
+                app.state.ocr_execution_service = execution_service
+                _OCR_EXECUTION_SERVICE = execution_service
+                app.state.ocr_queue_stop.clear()
+                worker = OcrQueueWorker(
+                    run_once=_run_ocr_queue_once,
+                    poll_seconds=0.5,
+                    stop_event=app.state.ocr_queue_stop,
+                )
+                app.state.ocr_queue_thread = threading.Thread(
+                    target=worker.run,
+                    name="picsyncra-ocr-queue",
+                    daemon=True,
+                )
+                app.state.ocr_queue_thread.start()
         cleanup_web_ftp_cache(force=True)
         cleanup_web_upload_cache(force=True)
         try:
@@ -5488,6 +5582,29 @@ def create_app() -> FastAPI:
     )
     runtime_routes = {route.path: route for route in runtime_router.routes}
     app.routes.append(runtime_routes["/api/runtime-status"])
+
+    if installation_service is not None:
+        app.include_router(
+            build_installation_router(
+                InstallationApiDependencies(
+                    is_installed=lambda: True,
+                    require_admin=lambda request: _require_admin(request),
+                    require_user=lambda request: _require_user(request),
+                    require_csrf=lambda request: _validate_mutating_request(request),
+                    installation_status=installation_service.status,
+                    list_releases=lambda channel: [
+                        asdict(release) for release in list_installed_releases(channel)
+                    ],
+                    submit_operation=lambda request, actor_id: installation_service.submit(request, actor_id=actor_id),
+                    read_operation=installation_service.read_operation,
+                    force_operation=installation_service.force_operation,
+                    change_channel=installation_service.change_channel,
+                    set_autostart=installation_service.set_autostart,
+                    heartbeat=installation_service.heartbeat,
+                    public_status=installation_service.public_status,
+                )
+            )
+        )
 
     @app.post("/api/resource-monitor/simulate-safe")
     def resource_monitor_simulate_safe(request: Request) -> Dict[str, Any]:
@@ -6070,6 +6187,7 @@ def create_app() -> FastAPI:
     @app.get("/api/browser-extension/ping")
     def browser_extension_ping_api(request: Request) -> JSONResponse:
         username = _require_browser_extension_user(request)
+        compatible = _browser_extension_protocol_compatible(request)
         return _browser_extension_json(
             request,
             {
@@ -6077,6 +6195,9 @@ def create_app() -> FastAPI:
                 "username": username,
                 "version": get_display_version(),
                 "token_version": int((find_user(username) or {}).get("extension_token_version") or 0),
+                "extension_protocol": EXTENSION_PROTOCOL_VERSION,
+                "update_required": not compatible,
+                "extension_download": "/api/browser-extension/download" if not compatible else "",
             },
         )
 
@@ -6089,6 +6210,16 @@ def create_app() -> FastAPI:
     async def browser_extension_upload_cache_api(request: Request) -> JSONResponse:
         started = time.perf_counter()
         username = _require_browser_extension_user(request)
+        if not _browser_extension_protocol_compatible(request):
+            return _browser_extension_json(
+                request,
+                {
+                    "detail": "Wymagana aktualizacja rozszerzenia przeglądarki.",
+                    "update_required": True,
+                    "extension_download": "/api/browser-extension/download",
+                },
+                status_code=426,
+            )
         form = await request.form()
         upload = form.get("file")
         if not isinstance(upload, UploadFile) or not upload.filename:
