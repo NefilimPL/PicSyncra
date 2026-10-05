@@ -33,15 +33,19 @@ def plan_module_operation(active: ActiveModuleSet, releases: tuple[ModuleRelease
         if not selected:
             raise ValueError('Wybierz wersje modułów do cofnięcia.')
         available = {(module.module_id, module.version_id): module for release in sorted(releases, key=published, reverse=True) for module in release.modules}
-        dates = {release.release_id: published(release) for release in releases}
+        dates = {}
+        for release in sorted(releases, key=published):
+            for module in release.modules:
+                dates.setdefault((module.module_id, module.version_id), published(release))
         for module_id, version_id in selected.items():
             chosen = available.get((module_id, version_id))
             if chosen is None:
                 raise ValueError(f'Wybrana wersja modułu {module_id} jest niedostępna.')
             current = installed[module_id]
-            if chosen.source_release_id not in dates or current.source_release_id not in dates:
+            chosen_key, current_key = (module_id, chosen.version_id), (module_id, current.version_id)
+            if chosen_key not in dates or current_key not in dates:
                 raise ValueError('Brak zweryfikowanej chronologii wydania modułu.')
-            if dates[chosen.source_release_id] > dates[current.source_release_id]:
+            if dates[chosen_key] > dates[current_key]:
                 raise ValueError('Cofanie nie może wybierać nowszej wersji modułu.')
             target[module_id] = chosen
         pinned = pinned | frozenset(selected)

@@ -5037,3 +5037,10 @@ body[data-theme="dark"] .pimcore-runtime-conflict input {
     grid-template-columns: 1fr;
   }
 }
+.module-updates-rows { display: grid; gap: 12px; }
+.module-update-row { display: grid; grid-template-columns: minmax(110px, 1fr) minmax(170px, 2fr) minmax(140px, 1fr) auto; align-items: center; gap: 8px; padding: 10px 0; border-bottom: 1px solid var(--border-color, #465065); }
+.module-update-row .settings-note { grid-column: 1 / -1; }
+.module-updates-controls { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0; }
+.module-updates-conflicts { margin-top: 12px; }
+.module-updates-conflicts button { margin-right: 8px; }
+@media (max-width: 800px) { .module-update-row { grid-template-columns: 1fr; } }

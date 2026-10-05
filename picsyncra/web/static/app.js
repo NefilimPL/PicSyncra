@@ -11466,7 +11466,7 @@ async function loadInstallationUpdates() {
   try {
     const snapshot = utilities.normalizeSnapshot(await requestJson("/api/installation"));
     state.installationUpdates = snapshot;
-    state.installationReleases = await utilities.loadReleases(snapshot.channel, requestJson);
+    state.installationReleases = snapshot.module_mode ? [] : await utilities.loadReleases(snapshot.channel, requestJson);
     return snapshot;
   } catch (error) {
     state.installationUpdates = null;
@@ -11503,6 +11503,16 @@ function renderInstalledUpdateControls(panel) {
   }
   const snapshot = state.installationUpdates;
   if (!snapshot) return;
+  if (snapshot.module_mode && window.PicSyncra?.ModuleUpdatesPanel) {
+    if (!state.moduleUpdatesPanel) {
+      state.moduleUpdatesPanel = window.PicSyncra.ModuleUpdatesPanel.create({
+        requestJson, onChanged: () => loadInstallationUpdates().then(() => renderSettings()).catch(() => {}),
+      });
+      state.moduleUpdatesPanel.refresh();
+    }
+    panel.appendChild(state.moduleUpdatesPanel.element);
+    return;
+  }
 
   const section = document.createElement("section");
   const heading = document.createElement("h3");

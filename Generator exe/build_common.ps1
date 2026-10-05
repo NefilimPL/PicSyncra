@@ -100,6 +100,7 @@ function Get-WebStaticDataArguments {
         "settings-ui.js",
         "ocr-tester-ui.js",
         "installation-updates.js",
+        "module-updates-panel.js",
         "legacy-migration.js",
         "process-jobs.js",
         "runtime-status.js"

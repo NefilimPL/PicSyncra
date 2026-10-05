@@ -70,11 +70,16 @@ class ModuleService:
         latest = max(releases, key=lambda r: r.published_at, default=None)
         labels = {item.module_id: item.label for item in module_definitions()}
         rows = []
+        from datetime import datetime
+        def published(release): return datetime.fromisoformat(release.published_at.replace('Z', '+00:00'))
+        version_dates = {}
+        for release in sorted(releases, key=published):
+            for item in release.modules: version_dates.setdefault((item.module_id, item.version_id), published(release))
         for module in active.modules:
             versions = {}
             for release in sorted(releases, key=lambda r: r.published_at, reverse=True):
                 for item in release.modules:
-                    if item.module_id == module.module_id:
+                    if item.module_id == module.module_id and (module.module_id, module.version_id) in version_dates and version_dates[(item.module_id, item.version_id)] <= version_dates[(module.module_id, module.version_id)]:
                         versions.setdefault(item.version_id, dict(version_id=item.version_id, display_version=item.display_version,
                             release_id=item.source_release_id, release_url=release_link(item.source_tag), available=True))
             # Installed version stays visible, even before the first signed
@@ -85,7 +90,17 @@ class ModuleService:
             rows.append(dict(module_id=module.module_id, label=labels[module.module_id], current=module.display_version,
                              current_id=module.version_id, latest=newest.display_version if newest else None,
                              pinned=module.module_id in active.pinned, versions=list(versions.values())[:50]))
-        return dict(revision=active.revision, modules=rows, offline=self.source.offline,
+        backups = []
+        backup_root = safe_path(self.context.state_root, 'backups/operations')
+        if backup_root.exists():
+            for path in sorted(backup_root.iterdir(), reverse=True):
+                if path.name.startswith('.'): continue
+                try:
+                    _, schema = verified_backup(self.context, path.name)
+                    backups.append(dict(backup_id=path.name, schema_version=schema))
+                except (RuntimeError, OSError, ValueError): continue
+                if len(backups) >= 100: break
+        return dict(revision=active.revision, modules=rows, offline=self.source.offline, backups=backups,
                     ocr_installed=all(any(m.module_id == name for m in active.modules) for name in ('ocr_runtime', 'ocr_models')),
                     blocked_releases=[dict(release_id=e.release_id, tag=e.tag, reason=e.blocked_reason) for e in self.entries if e.blocked_reason][:50])
 

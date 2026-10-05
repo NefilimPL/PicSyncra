@@ -75,7 +75,7 @@ class InstalledOperationService:
 
     def status(self) -> dict[str, object]:
         controller = self._controller.snapshot()
-        return {
+        result = {
             "channel": self._channel(),
             "build": str(read_active_release(self._context)),
             "backend_running": bool(controller.get("backend_running", False)),
@@ -83,6 +83,9 @@ class InstalledOperationService:
             "session_epoch": read_session_epoch(self._context),
             "maintenance": self._maintenance.snapshot(),
         }
+        marker = json.loads((self._context.program_root / 'active.json').read_text(encoding='utf-8'))
+        if marker.get('schema') == 2: result['module_mode'] = True
+        return result
 
     def start_module_maintenance_watch(self):
         """Bridge protected controller requests to this process's write leases."""
@@ -197,6 +200,12 @@ class InstalledOperationService:
         return result
 
     def read_operation(self, operation_id: str) -> dict[str, object] | None:
+        import re
+        if re.fullmatch('[a-f0-9]{32}', operation_id) and hasattr(self._controller, 'module_operation'):
+            try:
+                result = self._controller.module_operation(operation_id)
+                if result is not None: return result
+            except (RuntimeError, ValueError): pass
         try:
             return asdict(self._journal.read(operation_id))
         except (KeyError, ValueError):

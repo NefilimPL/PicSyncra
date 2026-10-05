@@ -5606,6 +5606,7 @@ def create_app() -> FastAPI:
                     set_autostart=installation_service.set_autostart,
                     heartbeat=installation_service.heartbeat,
                     public_status=installation_service.public_status,
+                    module_client=InstallationControlClient(installed_context.installation_id),
                 )
             )
         )
