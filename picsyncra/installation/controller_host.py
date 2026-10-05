@@ -114,7 +114,7 @@ class _WindowsKillOnCloseJob:
             raise ControllerHostError("pywin32 job support is required for the controller.") from exc
         self._win32api = win32api
         self._win32job = win32job
-        self._handle = win32job.CreateJobObject(None, None)
+        self._handle = win32job.CreateJobObject(None, "")
         information = win32job.QueryInformationJobObject(
             self._handle, win32job.JobObjectExtendedLimitInformation
         )

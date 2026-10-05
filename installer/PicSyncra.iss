@@ -66,15 +66,14 @@ Name: "{autoprograms}\PicSyncra WEB"; Filename: "{app}\versions\{#ReleaseId}\web
 Name: "{autoprograms}\PicSyncra Migrator"; Filename: "{app}\versions\{#ReleaseId}\migrator\PicSyncra-Migrator.exe"; Components: migrator
 Name: "{autoprograms}\PicSyncra"; Filename: "{app}\versions\{#ReleaseId}\local\PicSyncra.exe"; Components: local
 
-[Run]
-Filename: "{sys}\schtasks.exe"; Parameters: "/Create /TN ""PicSyncra Controller primary-installation"" /SC ONSTART /RU SYSTEM /RL HIGHEST /TR """"""{app}\controller\PicSyncra-Controller.exe"" --installation-id primary-installation"""" /F"; Flags: runhidden waituntilterminated
-Filename: "{sys}\schtasks.exe"; Parameters: "/Run /TN ""PicSyncra Controller primary-installation"""; Flags: runhidden waituntilterminated
-
 [UninstallRun]
 Filename: "{sys}\schtasks.exe"; Parameters: "/End /TN ""PicSyncra Controller primary-installation"""; RunOnceId: "stop-controller"; Flags: runhidden waituntilterminated
 Filename: "{sys}\schtasks.exe"; Parameters: "/Delete /TN ""PicSyncra Controller primary-installation"" /F"; RunOnceId: "delete-controller-task"; Flags: runhidden waituntilterminated
 
 [Code]
+const
+  ControllerTaskParameters = '/Create /TN "PicSyncra Controller primary-installation" /SC ONSTART /RU SYSTEM /RL HIGHEST /TR "\"{app}\controller\PicSyncra-Controller.exe\" --installation-id primary-installation" /F';
+
 var
   DataRootPage: TInputDirWizardPage;
   ExistingDatabasePage: TInputFileWizardPage;
@@ -199,6 +198,17 @@ begin
   RunSetupHelper('inspect', RequestJson);
 end;
 
+procedure RunControllerTask(const Parameters, FailureMessage: String);
+var
+  ResultCode: Integer;
+begin
+  ResultCode := 0;
+  if (not Exec(ExpandConstant('{sys}\schtasks.exe'),
+    ExpandConstant(Parameters), '', SW_HIDE, ewWaitUntilTerminated, ResultCode)) or
+    (ResultCode <> 0) then
+    RaiseException(FailureMessage + ' (kod ' + IntToStr(ResultCode) + ').');
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   ResultCode: Integer;
@@ -213,5 +223,9 @@ begin
   if CurStep = ssPostInstall then begin
     InspectSelectedDatabase;
     ImportSelectedConfiguration;
+    RunControllerTask(ControllerTaskParameters,
+      'Nie można zarejestrować zadania kontrolera PicSyncra');
+    RunControllerTask('/Run /TN "PicSyncra Controller primary-installation"',
+      'Nie można uruchomić zadania kontrolera PicSyncra');
   end;
 end;

@@ -132,7 +132,9 @@ class NamedPipeControlServer:
             win32con.PROCESS_QUERY_LIMITED_INFORMATION, False, process_id
         )
         try:
-            token = win32security.OpenProcessToken(process, win32con.TOKEN_QUERY)
+            token = win32security.OpenProcessToken(
+                process, win32con.TOKEN_QUERY | win32con.TOKEN_DUPLICATE
+            )
             try:
                 sid, _attributes = win32security.GetTokenInformation(
                     token, win32security.TokenUser
@@ -145,8 +147,16 @@ class NamedPipeControlServer:
                     group = win32security.CreateWellKnownSid(
                         win32security.WinBuiltinAdministratorsSid, None
                     )
-                    if win32security.CheckTokenMembership(token, group):
-                        return administrators_sid
+                    # OpenProcessToken returns a primary token, but Windows
+                    # requires an impersonation token for CheckTokenMembership.
+                    impersonation = win32security.DuplicateToken(
+                        token, win32security.SecurityImpersonation
+                    )
+                    try:
+                        if win32security.CheckTokenMembership(impersonation, group):
+                            return administrators_sid
+                    finally:
+                        impersonation.Close()
                 return identity
             finally:
                 token.Close()

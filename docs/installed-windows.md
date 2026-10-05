@@ -26,6 +26,21 @@ Aktualizacje są dostępne wyłącznie w zainstalowanej aplikacji. Wybierz kana�
 wydanie z listy. Aplikacja akceptuje tylko pakiety z podpisanym manifestem
 GitHub Release. Portable nadal aktualizuje się ręcznie przez pobranie EXE.
 
+Workflow `.github/workflows/build-installer.yml` przygotowuje osobne archiwa
+`web.zip`, `migrator.zip`, `local.zip` i `ocr.zip` oraz podpisany manifest.
+Obecny aktualizator przełącza cały zestaw modułów wydania: pobiera WEB,
+Migrator i LOCAL, a także OCR, jeśli OCR był już zainstalowany. Nie pobiera
+instalatora EXE, ale nie pomija jeszcze niezmienionych modułów. Sam OCR można
+doinstalować osobno. Aktualizacja wyłącznie WEB lub wyłącznie Migratora nie
+jest obecnie osobną operacją.
+
+Publikowanie tych paczek wymaga aktywnego workflow w repozytorium oraz
+konfiguracji środowiska `installed-release-signing`: publicznych kluczy
+`PICSYNCRA_RELEASE_PUBLIC_KEYS` i prywatnego sekretu
+`PICSYNCRA_RELEASE_SIGNING_KEY`. Lokalny build bez wstrzykniętych publicznych
+kluczy nie akceptuje aktualizacji. Same pliki portable EXE w Release nie
+wystarczają do aktualizacji instalowanej aplikacji.
+
 Przed zmianą wydania powstaje kopia bazy i konfiguracji. Aplikacja zatrzymuje
 przyjmowanie nowych zadań, czeka na zakończenie aktualnych, a pozostałym
 użytkownikom wyświetla dwuminutowe ostrzeżenie. Administrator może wymusić
@@ -46,3 +61,9 @@ Lokalne okno zarządzania WEB może zatrzymywać lub uruchamiać backend po
 uruchomieniu jako administrator. Zwykły użytkownik nie ma dostępu do pipe’a
 kontrolera; zdalny restart pozostaje operacją administratora zalogowanego w
 WEB.
+
+Jeżeli menedżer zgłasza błąd kontrolera, uruchom go opcją **Uruchom jako
+administrator** i sprawdź zadanie `PicSyncra Controller primary-installation`
+w Harmonogramie zadań. Instalator sprawdza teraz wynik utworzenia i uruchomienia
+tego zadania; błąd rejestracji przerywa instalację z komunikatem zamiast
+pozostawiać instalację bez kontrolera.

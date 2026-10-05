@@ -3,14 +3,51 @@
 from __future__ import annotations
 
 import json
+import ctypes
+import re
+import sys
 from pathlib import Path
 import sqlite3
+
+import pytest
 
 from picsyncra.installation.setup_cli import (
     PRODUCT_APP_ID,
     build_installer_layout,
     main,
 )
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows command line parsing")
+def test_controller_task_command_preserves_a_program_files_executable_path() -> None:
+    """The task action must be one argument containing a quoted EXE path."""
+    installer = (Path(__file__).parents[1] / "installer" / "PicSyncra.iss").read_text(encoding="utf-8")
+    constant = re.search(r"ControllerTaskParameters\s*=\s*'([^']+)';", installer)
+    if constant:
+        parameters = constant.group(1)
+    else:
+        line = next(line for line in installer.splitlines() if "/Create /TN" in line)
+        parameters = line.split("Parameters: ", 1)[1].split("; Flags:", 1)[0][1:-1].replace('""', '"')
+    parameters = parameters.replace("{app}", r"C:\Program Files\PicSyncra")
+    shell = ctypes.WinDLL("shell32", use_last_error=True)
+    shell.CommandLineToArgvW.argtypes = [ctypes.c_wchar_p, ctypes.POINTER(ctypes.c_int)]
+    shell.CommandLineToArgvW.restype = ctypes.POINTER(ctypes.c_wchar_p)
+    count = ctypes.c_int()
+    pointer = shell.CommandLineToArgvW("schtasks.exe " + parameters, ctypes.byref(count))
+    assert pointer
+    try:
+        arguments = [pointer[index] for index in range(count.value)]
+    finally:
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.LocalFree.argtypes = [ctypes.c_void_p]
+        kernel.LocalFree.restype = ctypes.c_void_p
+        kernel.LocalFree(pointer)
+    assert arguments == [
+        "schtasks.exe", "/Create", "/TN", "PicSyncra Controller primary-installation",
+        "/SC", "ONSTART", "/RU", "SYSTEM", "/RL", "HIGHEST", "/TR",
+        '"C:\\Program Files\\PicSyncra\\controller\\PicSyncra-Controller.exe" --installation-id primary-installation',
+        "/F",
+    ]
 
 
 def test_base_installer_contains_required_apps_but_not_ocr_or_local() -> None:

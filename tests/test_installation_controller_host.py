@@ -1,8 +1,35 @@
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
 from picsyncra.installation.contracts import InstallContext, OperationRequest
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows Job Object lifecycle")
+def test_native_controller_job_terminates_its_owned_child_when_closed() -> None:
+    """A real pywin32 job must be creatable and own the spawned WEB process."""
+    from picsyncra.installation.controller_host import _default_job_factory
+
+    job = _default_job_factory()
+    process = None
+    try:
+        process = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        job.assign(process)
+        assert process.poll() is None
+        job.close()
+        # Job shutdown can use exit code zero; exiting before the child's
+        # 30-second sleep finishes is the observable ownership guarantee.
+        process.wait(timeout=10)
+    finally:
+        job.close()
+        if process is not None and process.poll() is None:
+            process.terminate()
+            process.wait(timeout=10)
 
 
 def _context(tmp_path: Path) -> InstallContext:

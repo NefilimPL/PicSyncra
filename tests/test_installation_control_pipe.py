@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 
 import win32api
@@ -86,10 +87,12 @@ def test_pipe_maps_an_elevated_administrator_to_the_authorized_group(
     class Con:
         PROCESS_QUERY_LIMITED_INFORMATION = 1
         TOKEN_QUERY = 2
+        TOKEN_DUPLICATE = 4
 
     class Security:
         TokenUser = 1
         WinBuiltinAdministratorsSid = 2
+        SecurityImpersonation = 2
 
         @staticmethod
         def OpenProcessToken(_process, _access):
@@ -106,6 +109,10 @@ def test_pipe_maps_an_elevated_administrator_to_the_authorized_group(
         @staticmethod
         def CreateWellKnownSid(_kind, _domain):
             return "administrators"
+
+        @staticmethod
+        def DuplicateToken(_token, _level):
+            return Handle()
 
         @staticmethod
         def CheckTokenMembership(_token, group):
@@ -129,3 +136,26 @@ def test_pipe_maps_an_elevated_administrator_to_the_authorized_group(
     server._handle = object()
 
     assert server._client_sid(Pipe) == "S-1-5-32-544"
+
+
+def test_pipe_checks_administrator_membership_using_a_real_windows_process_token() -> None:
+    """Process primary tokens must be duplicated before CheckTokenMembership."""
+
+    class CurrentProcessPipe:
+        @staticmethod
+        def GetNamedPipeClientProcessId(_handle):
+            return os.getpid()
+
+    server = NamedPipeControlServer(
+        dispatcher=object(), installation_id="native-token-test",
+        allowed_sids={"S-1-5-18", "S-1-5-32-544"},
+    )
+    administrators = win32security.CreateWellKnownSid(
+        win32security.WinBuiltinAdministratorsSid, None
+    )
+    expected = (
+        "S-1-5-32-544" if win32security.CheckTokenMembership(None, administrators)
+        else _current_user_sid()
+    )
+
+    assert server._client_sid(CurrentProcessPipe) == expected
