@@ -407,6 +407,12 @@ def run_controller(installation_id: str, *, stop_requested: Callable[[], bool] |
         raise ControllerHostError("The registered installation is unavailable.")
     supervisor = ActiveBackendSupervisor(context)
     controller = InstallationController(context, supervisor, backend_port=8010)
+    from .module_service import ModuleService
+    modules = ModuleService(context, controller)
+    recovered = modules.executor.recover()
+    if recovered == 'recovery_required':
+        # Keep the recovery pipe alive even if the selected application is bad.
+        supervisor.set_autostart(False)
     if supervisor.autostart_enabled():
         controller.start_backend()
         _complete_restart_handoff(context, controller, True)
@@ -417,6 +423,7 @@ def run_controller(installation_id: str, *, stop_requested: Callable[[], bool] |
         ),
         installation_id=context.installation_id,
         authorized_identities={"S-1-5-18", "S-1-5-32-544"},
+        module_service=modules,
     )
     try:
         ControllerPipeHost(

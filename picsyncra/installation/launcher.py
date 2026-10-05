@@ -7,7 +7,7 @@ import re
 from typing import Protocol
 
 from .control_pipe import NamedPipeControlClient
-from .control_protocol import PROTOCOL_VERSION
+from .control_protocol import PROTOCOL_VERSION, validate_module_payload
 
 
 _INSTALLATION_ID = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,62}[A-Za-z0-9])?")
@@ -75,7 +75,7 @@ class InstallationControlClient:
     def _request(
         self,
         command: str,
-        payload: dict[str, bool],
+        payload: dict[str, object],
         *,
         require_ok: bool = True,
     ) -> dict[str, object]:
@@ -93,8 +93,24 @@ class InstallationControlClient:
         if not isinstance(response, dict) or not isinstance(response.get("ok"), bool):
             raise LauncherError("The controller returned an invalid response.")
         if require_ok and not response["ok"]:
-            raise LauncherError("The controller could not perform the requested action.")
+            raise LauncherError(str(response.get('error') or "The controller could not perform the requested action."))
         return response
+
+    def module_catalog(self):
+        return self._module_request('module_catalog', {})
+
+    def module_plan(self, *, action, selected, excluded, restore_backup_id=None):
+        return self._module_request('module_plan', dict(action=action, selected=selected, excluded=excluded, restore_backup_id=restore_backup_id))
+
+    def module_execute(self, plan_id, *, restore_backup_id=None, acknowledge_data_loss=False):
+        return self._module_request('module_execute', dict(plan_id=plan_id, restore_backup_id=restore_backup_id, acknowledge_data_loss=acknowledge_data_loss))
+
+    def module_operation(self, operation_id):
+        return self._module_request('module_operation', dict(operation_id=operation_id))
+
+    def _module_request(self, command, payload):
+        validate_module_payload(command, payload)
+        return self._request(command, payload)['result']
 
 
 __all__ = ["InstallationControlClient", "LauncherError", "PipeClient"]

@@ -5484,6 +5484,8 @@ def create_app() -> FastAPI:
     @app.on_event("startup")
     def _startup() -> None:
         global _OCR_EXECUTION_SERVICE
+        if installation_service is not None:
+            installation_service.start_module_maintenance_watch()
         os.environ.setdefault("PICSYNCRA_HEADLESS", "1")
         runtime_info = initialize_application_runtime(interactive=False)
         app.state.runtime_info = runtime_info
@@ -5544,6 +5546,8 @@ def create_app() -> FastAPI:
     @app.on_event("shutdown")
     def _shutdown() -> None:
         global _OCR_EXECUTION_SERVICE
+        if installation_service is not None:
+            installation_service.stop_module_maintenance_watch()
         app.state.ocr_queue_stop.set()
         worker = app.state.ocr_execution_worker
         if worker is not None:

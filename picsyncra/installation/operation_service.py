@@ -61,6 +61,8 @@ class InstalledOperationService:
         self._presence = PresenceRegistry()
         self._maintenance_gate = MaintenanceGate()
         self._maintenance = MaintenanceCoordinator(self._maintenance_gate, self._presence)
+        self._module_maintenance_id = None
+        self._module_maintenance_stop = threading.Event()
         self._operation_threads: dict[str, threading.Thread] = {}
         self._pending_release_operations: dict[str, tuple[OperationRequest, object]] = {}
         self._operation_threads_lock = threading.Lock()
@@ -81,6 +83,35 @@ class InstalledOperationService:
             "session_epoch": read_session_epoch(self._context),
             "maintenance": self._maintenance.snapshot(),
         }
+
+    def start_module_maintenance_watch(self):
+        """Bridge protected controller requests to this process's write leases."""
+        from .module_filesystem import safe_path, atomic_json
+        request_path = safe_path(self._context.state_root, 'module-maintenance-request.json')
+        ack_path = safe_path(self._context.state_root, 'module-maintenance-ready.json')
+        def watch():
+            while not self._module_maintenance_stop.wait(0.2):
+                try:
+                    if request_path.exists():
+                        operation_id = json.loads(request_path.read_text(encoding='utf-8'))['operation_id']
+                        if self._module_maintenance_id is None:
+                            self._maintenance.begin(operation_id, initiator_id='module-controller')
+                            self._module_maintenance_id = operation_id
+                        if self._module_maintenance_id == operation_id:
+                            phase = self._maintenance.advance()
+                            atomic_json(ack_path, dict(operation_id=operation_id, ready=phase['state'] == 'ready'), replace=True)
+                    elif self._module_maintenance_id and self._maintenance_gate.wait_for_drain(timeout=0):
+                        self._maintenance_gate.complete(self._module_maintenance_id)
+                        self._maintenance = MaintenanceCoordinator(self._maintenance_gate, self._presence)
+                        self._module_maintenance_id = None
+                        ack_path.unlink(missing_ok=True)
+                except (OSError, ValueError, RuntimeError, KeyError):
+                    # Refuse to acknowledge an unsafe/competing request.
+                    continue
+        threading.Thread(target=watch, name='PicSyncraModuleDrain', daemon=True).start()
+
+    def stop_module_maintenance_watch(self):
+        self._module_maintenance_stop.set()
 
     def submit(self, request: OperationRequest, *, actor_id: str) -> dict[str, object]:
         if self._recovered_operation is not None:
