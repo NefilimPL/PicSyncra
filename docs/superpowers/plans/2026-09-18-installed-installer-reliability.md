@@ -90,7 +90,62 @@
 - Verify: .gitignore
 - Verify: focused installer tests
 
-- [ ] Step 1: Run python -m pytest tests/test_installer_layout.py tests/test_installed_build_script.py -q. Confirm all pass.
-- [ ] Step 2: After a prepared build, run ISCC.exe with /DBuildRoot=<absolute dist/installed> and /DReleaseId=1. Confirm no constant or UninstallRun warning and output dist/installed/PicSyncra-Setup-1.exe.
-- [ ] Step 3: Run .\Generator exe\BUILD_INSTALLER.bat 1 --without-ocr when resources permit. Confirm the setup EXE and _internal\picsyncra\web\static\index.html.
-- [ ] Step 4: Run git diff --check and git status --short. Confirm no whitespace errors and only planned files are changed.
+- [x] Step 1: Run python -m pytest tests/test_installer_layout.py tests/test_installed_build_script.py -q. Confirm all pass.
+- [x] Step 2: After a prepared build, run ISCC.exe with /DBuildRoot=<absolute dist/installed> and /DReleaseId=1. Confirm no constant or UninstallRun warning and output dist/installed/PicSyncra-Setup-1.exe.
+- [x] Step 3: Run .\Generator exe\BUILD_INSTALLER.bat 1 --without-ocr when resources permit. Confirm the setup EXE and _internal\picsyncra\web\static\index.html. Executed the canonical PowerShell entry point directly with the project virtual environment; see continuation below.
+- [x] Step 4: Run git diff --check and git status --short. Confirm no whitespace errors and only planned files are changed.
+
+## Continuation: 2026-10-05
+
+Tasks 1–3 were already implemented in commit `71b9275`; the historical RED
+steps above were not repeated. Verification resumed from Task 4 on the
+existing `dev2` checkout.
+
+Additional build failures reproduced and corrected during verification:
+
+- Icon generation embedded paths in Python source, failing with a
+  `SyntaxError` when the checkout contained an apostrophe. Paths are now
+  passed as arguments.
+- A clean checkout failed to copy the setup icon because `dist/installed`
+  did not exist. The build now creates that directory before writing assets.
+- Rebuilding the same release nested source folders inside the old component
+  folders and retained obsolete files. Each generated component destination
+  is now replaced after confirming it is within the output root and that
+  its ancestry within that root contains no junctions or symlinks.
+- Windows PowerShell 5.1 wrote a UTF-8 BOM in `active.json`, causing the
+  controller's plain UTF-8 JSON reader to reject the active release. The
+  producer now writes UTF-8 without a BOM.
+
+A behavioral regression runs the actual PowerShell script twice in a clean
+checkout containing spaces and an apostrophe. It performs real Pillow icon
+conversion, replaces only expensive external compiler/dependency operations,
+and checks the resulting directory layout, removal of obsolete files, and
+plain UTF-8 JSON readability. Each failure above was observed before its fix.
+
+Verification record:
+
+- Focused installer, controller host, and runtime-path tests: 50 passed.
+- Whole application suite: 1903 passed, 3 skipped, 66 subtests passed;
+  25 existing deprecation warnings.
+- Independent read-only review: no remaining critical or important findings.
+  Minor deferred: an additional regression for a junction at the build
+  destination would extend coverage of the cleanup guard.
+- Full PyInstaller + Inno build with release id 1 and without OCR: exit 0.
+  The sandbox initially prevented Tcl from reading its own library scripts;
+  the same Tcl initialization and the build succeeded outside the sandbox.
+- The BOM correction was made while PyInstaller was running. The final
+  packaging statements from the updated build script were subsequently run
+  against the compiled components to regenerate the marker and recompile
+  the installer, without repeating unchanged PyInstaller analysis. Final Inno
+  compilation: exit 0, no warnings; output
+  `dist/installed/PicSyncra-Setup-1.exe` (271,544,159 bytes).
+- Compiled helper: inspection of a synthetic SQLite database and import of
+  synthetic configuration both passed.
+- Compiled WEB in an isolated copy: `/api/health` and five static UI URLs
+  returned successfully. All eleven packaged static assets match source;
+  all four user-facing executables contain icon resources.
+- The production controller reader accepts the generated active marker and
+  resolves `versions/1/web/PicSyncra-WEB.exe`. No nested old component folders
+  remain. `git diff --check` passed.
+- Actual installation, repair, and uninstall in a disposable Windows VM
+  remain a separate acceptance check; this environment has no such VM.

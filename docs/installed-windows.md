@@ -6,10 +6,12 @@ instalacji bazowej: administrator pobiera go z zakładki **Wersje modułów**.
 
 ## Dane i konfiguracja
 
-Podczas instalacji można wskazać istniejącą bazę. Gdy instalator znajdzie bazę,
-pyta również o katalog konfiguracji. Wybrane pliki są kopiowane do katalogu
+Podczas instalacji można wskazać istniejącą bazę. Import konfiguracji portable
+jest osobną, domyślnie niezaznaczoną opcją. Po jej zaznaczeniu instalator prosi
+o istniejący katalog konfiguracji. Wybrane pliki są kopiowane do katalogu
 zarządzanego przez instalację, więc usunięcie starego folderu portable nie
 usuwa sekretów ani ustawień używanych przez zainstalowaną aplikację.
+Bez importu aplikacja korzysta z domyślnej konfiguracji w ProgramData.
 
 Lokalizacja zdjęć może nadal wskazywać udział sieciowy. Konto usługi musi mieć
 do niego dostęp; WEB instalowany przez kontroler działa jako `SYSTEM`. Użyj

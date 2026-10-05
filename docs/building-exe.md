@@ -117,7 +117,15 @@ Generator exe\BUILD_INSTALLER.bat 1
 
 Skrypt domyślnie przygotowuje także pobierany później komponent OCR. Aby zbudować
 sam instalator podstawowy, użyj `Generator exe\BUILD_INSTALLER.bat 1 --without-ocr`.
-Gotowy plik instalatora trafia do katalogu `installer\Output`.
+Gotowy plik instalatora to `dist\installed\PicSyncra-Setup-<release-id>.exe`,
+na przykład `dist\installed\PicSyncra-Setup-1.exe`. Ponowne budowanie tego samego
+wydania zastępuje przygotowane katalogi komponentów, usuwając stare pliki.
+
+Aby użyć konkretnego interpretera, na przykład środowiska wirtualnego projektu:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File installer/build_installer.ps1 -ReleaseId 1 -Python .venv/Scripts/python.exe
+```
 
 Polecenie wymaga dostępnych w `PATH` interpretera Python i `ISCC.exe` z Inno
 Setup. LOCAL jest zawarty w artefakcie, ale pozostaje opcją instalatora;

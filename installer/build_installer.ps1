@@ -13,12 +13,13 @@ $workRoot = Join-Path $repoRoot 'build\installed'
 
 Push-Location $repoRoot
 try {
+    New-Item -ItemType Directory -Path $distRoot -Force | Out-Null
     & $Python -m pip install -r requirements-build.txt -r requirements-web.txt -r requirements-installed.txt
     if ($LASTEXITCODE -ne 0) { throw 'Nie udalo sie zainstalowac zaleznosci builda.' }
 
     function New-BuildIcon([string]$SourcePath, [string]$IconPath) {
         New-Item -ItemType Directory -Path (Split-Path -Parent $IconPath) -Force | Out-Null
-        & $Python -c "from PIL import Image; Image.open(r'$SourcePath').save(r'$IconPath', sizes=[(256,256),(128,128),(64,64),(48,48),(32,32),(16,16)])"
+        & $Python -c 'from PIL import Image; import sys; Image.open(sys.argv[1]).save(sys.argv[2], sizes=[(256,256),(128,128),(64,64),(48,48),(32,32),(16,16)])' $SourcePath $IconPath
         if ($LASTEXITCODE -ne 0) { throw "Nie udalo sie utworzyc ikony: $IconPath" }
     }
 
@@ -88,17 +89,47 @@ try {
 
     $versionRoot = Join-Path $distRoot "versions\$ReleaseId"
     New-Item -ItemType Directory -Path $versionRoot -Force | Out-Null
-    Copy-Item (Join-Path $distRoot 'PicSyncra-WEB') (Join-Path $versionRoot 'web') -Recurse -Force
-    Copy-Item (Join-Path $distRoot 'PicSyncra-Migrator') (Join-Path $versionRoot 'migrator') -Recurse -Force
-    Copy-Item (Join-Path $distRoot 'PicSyncra') (Join-Path $versionRoot 'local') -Recurse -Force
+
+    function Copy-BuildDirectory([string]$SourcePath, [string]$DestinationPath) {
+        $outputRoot = [IO.Path]::GetFullPath($distRoot).TrimEnd('\', '/')
+        $destination = [IO.Path]::GetFullPath($DestinationPath)
+        if (-not $destination.StartsWith($outputRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Katalog docelowy musi znajdowac sie wewnatrz dist\installed: $destination"
+        }
+        if (-not (Test-Path -LiteralPath $SourcePath -PathType Container)) {
+            throw "Brakuje zbudowanego komponentu: $SourcePath"
+        }
+        # Do not follow a junction or symlink while removing previous build output.
+        $current = $destination
+        while ($current.Length -ge $outputRoot.Length) {
+            if (Test-Path -LiteralPath $current) {
+                $item = Get-Item -LiteralPath $current -Force
+                if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                    throw "Katalog builda nie moze byc dowiazaniem: $current"
+                }
+            }
+            $current = Split-Path -Parent $current
+        }
+        if (Test-Path -LiteralPath $destination) {
+            Remove-Item -LiteralPath $destination -Recurse -Force
+        }
+        Copy-Item -LiteralPath $SourcePath -Destination $destination -Recurse -Force
+    }
+
+    Copy-BuildDirectory (Join-Path $distRoot 'PicSyncra-WEB') (Join-Path $versionRoot 'web')
+    Copy-BuildDirectory (Join-Path $distRoot 'PicSyncra-Migrator') (Join-Path $versionRoot 'migrator')
+    Copy-BuildDirectory (Join-Path $distRoot 'PicSyncra') (Join-Path $versionRoot 'local')
     # The controller lives outside a release bundle so it can start the newly
     # active WEB executable after an update changes active.json.
-    Copy-Item (Join-Path $distRoot 'PicSyncra-SetupHelper') (Join-Path $distRoot 'helper') -Recurse -Force
-    [ordered]@{
+    Copy-BuildDirectory (Join-Path $distRoot 'PicSyncra-SetupHelper') (Join-Path $distRoot 'helper')
+    $activeReleaseJson = [ordered]@{
         schema = 1
         installation_id = 'primary-installation'
         release_id = [int]$ReleaseId
-    } | ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $distRoot 'active.json') -Encoding utf8 -NoNewline
+    } | ConvertTo-Json -Compress
+    # Windows PowerShell 5.1's Set-Content -Encoding utf8 adds a BOM, which
+    # prevents the controller from reading this JSON with Python's utf-8 codec.
+    [IO.File]::WriteAllText((Join-Path $distRoot 'active.json'), $activeReleaseJson, [Text.UTF8Encoding]::new($false))
 
     $iscc = Get-Command ISCC.exe -ErrorAction Stop
     & $iscc.Source "/DBuildRoot=$distRoot" "/DReleaseId=$ReleaseId" (Join-Path $PSScriptRoot 'PicSyncra.iss')
