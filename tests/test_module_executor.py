@@ -84,3 +84,14 @@ def test_restart_after_power_loss_restores_database_config_and_marker(context):
     assert db.execute('SELECT value FROM app_config_values').fetchone() == ('before',)
     db.close()
     assert (context.config_root / 'config.json').read_text() == '{"value":1}'
+
+
+def test_drain_failure_never_stops_a_busy_backend(context):
+    active,store,plan=prepare(context)
+    class Busy(Controller):
+        def stop_backend(self,force=False): raise AssertionError('Busy backend must remain alive')
+    def blocked(op): raise RuntimeError('Writers are still busy')
+    executor=ModuleExecutor(context,Busy(),content=store,quiesce=blocked,healthy=lambda:True)
+    result=executor.execute(plan)
+    assert result['state']=='rolled_back'
+    assert read_module_set(context)==active

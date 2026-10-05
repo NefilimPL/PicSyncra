@@ -243,3 +243,19 @@ class FakeController:
 
     def snapshot(self) -> dict[str, bool]:
         return {"backend_running": True, "autostart": True}
+def test_active_backend_uses_verified_schema_two_set(tmp_path):
+    from picsyncra.installation.controller_host import active_web_executable
+    from picsyncra.installation.module_content import ModuleContentStore
+    from picsyncra.installation.module_state import make_module_set, activate_module_set, module_set_root
+    from picsyncra.installation.module_manifest import parse_module_manifest
+    from tests.module_fixtures import module_payload, release_payload
+    from picsyncra.installation.contracts import InstallContext
+    program=tmp_path/'program'; program.mkdir()
+    state=tmp_path/'state'; state.mkdir()
+    context=InstallContext('test',program,state,state/'config',state/'db.sqlite')
+    release=parse_module_manifest(release_payload(5,[module_payload('core','apps/web/PicSyncra-WEB.exe'),
+        module_payload('migrator','apps/migrator/PicSyncra-Migrator.exe')]))
+    selected=make_module_set(1,5,release.modules)
+    store=ModuleContentStore(context); store.import_bytes(b'code'); store.assemble(selected)
+    activate_module_set(context,selected,expected_revision=0)
+    assert active_web_executable(context)==module_set_root(context,selected)/'apps/web/PicSyncra-WEB.exe'

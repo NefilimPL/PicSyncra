@@ -140,7 +140,9 @@ def test_installed_build_keeps_pyinstaller_specs_as_versioned_source_files() -> 
     assert "!installer/installed.spec" in ignored
     assert "!installer/ocr.spec" in ignored
     assert "installer/installed.spec" in build_script
-    assert "installer/ocr.spec" in build_script
+    assert (root / 'installer/module-host.spec').is_file()
+    assert '!installer/module-host.spec' in ignored
+    assert 'installer/module-host.spec' in build_script
 
 
 def test_inno_collects_database_and_optional_config_through_protected_requests() -> None:

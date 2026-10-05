@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-05-module-updates-and-rollback-design.md`, zatwierdzona przez użytkownika 2026-10-05.
 
-Status: plan do przeglądu; implementacja poniższych zadań nie została rozpoczęta.
+Status: zatwierdzony; zadania 1–11 wdrożone na dev2, zadanie 12 w odbiorze i przeglądzie.
 
 ## Global Constraints
 

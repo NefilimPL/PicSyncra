@@ -1,6 +1,6 @@
 # Aktualizacje modułów i zbiorcze cofanie wersji
 
-Status: projekt do przeglądu użytkownika; brak implementacji opisanego rozszerzenia.
+Status: zatwierdzony przez użytkownika; implementacja i odbiór na gałęzi dev2.
 Data: 2026-10-05.
 
 Dokument rozszerza projekt instalowanych aktualizacji z 2026-09-15. Zastępuje

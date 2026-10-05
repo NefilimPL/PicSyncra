@@ -79,6 +79,7 @@ def active_web_executable(context: InstallContext) -> Path:
         program_root = Path(context.program_root).resolve(strict=True)
         release_id = read_active_release(context)
         bundle = program_root / "versions" / str(release_id)
+        bundle_parent = program_root / 'versions'
         executable = bundle / "web" / "PicSyncra-WEB.exe"
         marker = json.loads((program_root / 'active.json').read_text(encoding='utf-8'))
         if marker.get('schema') == 2:
@@ -86,7 +87,14 @@ def active_web_executable(context: InstallContext) -> Path:
             from .module_filesystem import safe_path
             selected = read_module_set(context)
             bundle = module_set_root(context, selected)
+            bundle_parent = program_root / 'sets'
             executable = safe_path(bundle, 'apps/web/PicSyncra-WEB.exe')
+            import hashlib
+            descriptor = next((f for m in selected.modules for f in m.files if f.path == 'apps/web/PicSyncra-WEB.exe'), None)
+            if descriptor is None: raise ControllerHostError('Brak hosta WEB w aktywnym zestawie.')
+            with executable.open('rb') as handle:
+                if executable.stat().st_size != descriptor.size or hashlib.file_digest(handle, 'sha256').hexdigest() != descriptor.sha256:
+                    raise ControllerHostError('Host WEB ma niezgodną sumę kontrolną.')
         resolved_bundle = bundle.resolve(strict=True)
         resolved_executable = executable.resolve(strict=True)
     except (ActiveReleaseError, OSError, RuntimeError) as exc:
@@ -97,7 +105,7 @@ def active_web_executable(context: InstallContext) -> Path:
         or executable.is_symlink()
         or not resolved_bundle.is_dir()
         or not resolved_executable.is_file()
-        or not _within(resolved_bundle, program_root / "versions")
+        or not _within(resolved_bundle, bundle_parent)
         or not _within(resolved_executable, resolved_bundle)
         or resolved_executable.name.lower() != "picsyncra-web.exe"
     ):

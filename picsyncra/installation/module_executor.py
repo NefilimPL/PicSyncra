@@ -175,6 +175,15 @@ class ModuleExecutor:
     def _rollback(self, record, error):
         try:
             self._write(record, 'rolling_back', error=error)
+            marker_path = safe_path(self.context.program_root, 'active.json')
+            current_marker = json.loads(marker_path.read_text(encoding='utf-8'))
+            if not record['data_changed'] and current_marker == record['previous_marker']:
+                # A download or drain failure has not touched application state.
+                # Do not terminate a backend whose writers could still be busy.
+                if record['backend_was_running'] and not self.controller.snapshot()['backend_running']:
+                    self.controller.start_backend()
+                self._write(record, 'rolled_back')
+                return
             if not self.controller.stop_backend(force=False): raise ModuleExecutionError('Nie można zatrzymać backendu do odzyskania.')
             previous = parse_module_set(record['previous'])
             marker = record['previous_marker']

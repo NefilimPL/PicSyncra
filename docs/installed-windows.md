@@ -3,7 +3,7 @@
 Wersja instalowana działa jako zwykły program Windows. WEB i Migrator są
 instalowane zawsze, a komponent LOCAL jest opcjonalny. OCR nie jest częścią
 instalacji bazowej: administrator pobiera go z zakładki **Wersje modułów**.
-Przycisk **Pobierz i zainstaluj OCR** pobiera podpisany pakiet silnika i modeli
+Przycisk **Pobierz OCR** w WEB lub launcherze pobiera silnik i modele
 z Release odpowiadającego aktywnemu wydaniu aplikacji. Wymaga opublikowanego
 pakietu OCR oraz publicznego klucza podpisu wbudowanego w instalowaną aplikację.
 Samo lokalne wygenerowanie EXE nie zapewnia źródła tego pakietu.
@@ -25,24 +25,43 @@ w sesji osoby instalującej nie są widoczne dla usługi.
 
 ## Aktualizacje
 
-Aktualizacje są dostępne wyłącznie w zainstalowanej aplikacji. Wybierz kanał
-**stable** albo **dev**, a następnie użyj **Aktualizuj** lub wybierz konkretne
-wydanie z listy. Aplikacja akceptuje tylko pakiety z podpisanym manifestem
-GitHub Release. Portable nadal aktualizuje się ręcznie przez pobranie EXE.
+Aktualizacje modułów są dostępne w zainstalowanej aplikacji, w zakładce
+**Wersje modułów** oraz w niezależnym launcherze. Każdy wiersz pokazuje wersję
+obecną, najnowszą i listę wersji do cofnięcia. Link **Wydanie na GitHub**
+wskazuje Release będący źródłem wybranej wersji. Portable nadal aktualizuje
+się ręcznie przez pobranie nowego EXE.
 
-Workflow `.github/workflows/build-installer.yml` przygotowuje osobne archiwa
-`web.zip`, `migrator.zip`, `local.zip` i `ocr.zip` oraz podpisany manifest.
-Obecny aktualizator przełącza cały zestaw modułów wydania: pobiera WEB,
-Migrator i LOCAL, a także OCR, jeśli OCR był już zainstalowany. Nie pobiera
-instalatora EXE, ale nie pomija jeszcze niezmienionych modułów. Sam OCR można
-doinstalować osobno. Aktualizacja wyłącznie WEB lub wyłącznie Migratora nie
-jest obecnie osobną operacją.
+Samo wybranie wersji niczego nie instaluje ani nie pobiera. Przygotowany
+wiersz jest pomijany przez **Aktualizuj moduły**, ale dotychczasowy kod nadal
+działa. Jeden przycisk **Cofnij wersję modułu** przygotowuje plan wszystkich
+wybranych cofnięć. Po kontroli zgodności i zatwierdzeniu całość jest
+instalowana jako jeden zestaw. Cofnięte moduły pozostają wyłączone z kolejnych
+zwykłych aktualizacji, także po restarcie i w drugim interfejsie.
 
-Tabela **Wersje modułów** porównuje obecnie commity kodu z gałęzią GitHub.
-Wpisy takie jak FTP, SQL i Pimcore są częściami aplikacji, a nie osobnymi
-paczkami do pobrania. Tabela nie zastępuje katalogu podpisanych wydań.
-Pomijanie niezmienionych plików oraz wybór wersji pojedynczego modułu w WEB
-i w lokalnym launcherze wymagają rozszerzenia aktualizatora.
+Kontroler sprawdza zależności API między modułami, schemat bazy, format
+konfiguracji, ABI runtime oraz wersje kontrolera i launchera. Przy konflikcie
+pokazuje wersje i wymagania. **Nie aktualizuj** zachowuje wybory i instalację.
+**Aktualizuj wszystko** przygotowuje nowy, ponownie sprawdzany plan; blokady
+są usuwane dopiero po jego pomyślnym wykonaniu. Nie omija to kontroli bazy.
+
+Aktualizacja przechodzi bezpośrednio do docelowego wydania. Każdy plik ma
+właściciela, rozmiar i SHA256; zweryfikowane pliki są ponownie używane z
+lokalnego cache. Pobierane są tylko brakujące bajty, jako zakresy HTTP z
+podpisanych paczek zawartości. Brak obsługi zakresów zatrzymuje operację,
+zamiast powodować pobranie całej paczki. Modele OCR i biblioteki nie są
+pobierane ponownie, jeżeli ich zawartość się nie zmieniła.
+
+Workflow `.github/workflows/build-installer.yml` buduje rzeczywiste moduły
+FTP, SQL, Pimcore, Sloty, Ustawienia, WEB, OCR i pozostałe składniki. Publikuje
+`content-<SHA256>.bin`, bazowy `PicSyncra-Setup-<ID>.exe`, a na końcu
+`PicSyncra-modules-manifest.json`, podpis `.sig` i `.key-id`. Manifest opisuje
+niezależne wersje; liczba paczek nie odpowiada liczbie modułów. Przy ręcznym
+uruchomieniu Actions kod pochodzi z taga wskazanego Release.
+
+Stara instalacja z manifestem całego wydania wymaga jednorazowego przejścia
+przez pełny nowy instalator. Nie można bezpiecznie mieszać jej modułów bez
+deklaracji zgodności. Naprawa istniejącej instalacji modułowej zachowuje jej
+aktywny zestaw i blokady.
 
 Publikowanie tych paczek wymaga aktywnego workflow w repozytorium oraz
 konfiguracji środowiska `installed-release-signing`: publicznych kluczy
@@ -53,12 +72,26 @@ wystarczają do aktualizacji instalowanej aplikacji.
 
 Przed zmianą wydania powstaje kopia bazy i konfiguracji. Aplikacja zatrzymuje
 przyjmowanie nowych zadań, czeka na zakończenie aktualnych, a pozostałym
-użytkownikom wyświetla dwuminutowe ostrzeżenie. Administrator może wymusić
-anulowanie znanych zadań, gdy zadanie nie kończy się samodzielnie.
+użytkownikom wyświetla dwuminutowe ostrzeżenie. Zajęte zadania blokują zmianę
+kodu; po przekroczeniu czasu oczekiwania operacja jest zatrzymywana.
 
-Jeżeli OCR był już doinstalowany, aktualizacja programu pobiera również
-podpisany komponent OCR zgodny z nowym wydaniem i przełącza go w tej samej
-transakcji. Instalacja bez OCR nie pobiera modeli automatycznie.
+Awaryjne cofnięcie można wykonać z launchera również przy niedziałającym
+WEB. Bez Internetu wymagany jest lokalny, ponownie zweryfikowany podpisany
+katalog oraz wszystkie pliki docelowych modułów. Brakujące pliki wymagają
+połączenia. Niepodpisane i niekompletne wydania nie są wybierane do instalacji.
+
+Przy cofnięciu nie następuje automatyczne odtworzenie starej bazy. Jeżeli
+potrzebna jest wcześniejsza baza, wybierz zweryfikowaną kopię w polu
+**Awaryjne odtworzenie bazy**. Plan sprawdza zgodność także z tą kopią, a przed
+wykonaniem wymaga osobnego potwierdzenia utraty nowszych danych. Nieudana
+operacja i przerwanie zasilania uruchamiają odzyskanie poprzedniego zestawu,
+blokad oraz zmienionych danych z obowiązkowej kopii sprzed operacji.
+
+Jeżeli OCR był już doinstalowany, aktualizacja uwzględnia jego zgodność,
+pobierając wyłącznie zmienione pliki runtime lub modeli. Instalacja bez OCR
+nie pobiera silnika ani modeli automatycznie. Obecne deklaracje zgodności
+znajdują się w `installer/module-compatibility.json`; zmiana schematu wymaga
+podpisanej, jawnie zarejestrowanej migracji wykonywanej w osobnym hoście.
 
 Restart backendu i autostart są dostępne z WEB wyłącznie dla administratora.
 Instalator rejestruje zadanie `PicSyncra Controller primary-installation`,
