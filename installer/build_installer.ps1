@@ -38,6 +38,9 @@ try {
             'module-build-status.js',
             'ocr-diagnostics.js',
             'process-jobs.js',
+            'slot-ui.js',
+            'settings-ui.js',
+            'ocr-tester-ui.js',
             'runtime-status.js'
         )
         $arguments = @()

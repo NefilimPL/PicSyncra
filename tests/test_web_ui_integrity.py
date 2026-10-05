@@ -5,6 +5,7 @@ from __future__ import annotations
 from html.parser import HTMLParser
 import json
 from pathlib import Path
+from tests.frontend_source import read_frontend_source
 import re
 import subprocess
 import unittest
@@ -62,7 +63,7 @@ def _parse(path: Path) -> _HtmlCollector:
 
 class WebUiIntegrityTests(unittest.TestCase):
     def test_photo_loading_overlay_does_not_interpret_status_as_html(self) -> None:
-        js_source = APP_JS.read_text(encoding="utf-8")
+        js_source = read_frontend_source(APP_JS)
         renderer_start = js_source.index("function createSlotNode")
         renderer_end = js_source.index("function renderSlot(prefix)", renderer_start)
         renderer = js_source[renderer_start:renderer_end]
@@ -72,7 +73,7 @@ class WebUiIntegrityTests(unittest.TestCase):
 
     def test_pimcore_editor_exposes_a_compact_live_ocr_sidebar(self) -> None:
         html = _parse(INDEX_HTML)
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         css = APP_CSS.read_text(encoding="utf-8")
 
         self.assertEqual(html.ids.get("pimcoreCreateOcrPanel"), "aside")
@@ -83,7 +84,7 @@ class WebUiIntegrityTests(unittest.TestCase):
         self.assertIn("pimcore-ocr-sidebar", css)
 
     def test_cached_or_moved_slot_image_is_activated_for_ocr_in_its_destination(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         web_item = source[
             source.index("function webImageCacheItem") : source.index(
                 "async function cacheWebImageForSlot",
@@ -123,7 +124,7 @@ class WebUiIntegrityTests(unittest.TestCase):
 
     def test_settings_ui_contains_module_status_tab_and_refresh_contract(self) -> None:
         html = INDEX_HTML.read_text(encoding="utf-8")
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
 
         self.assertIn('data-settings-tab="module-status"', html)
         self.assertIn('src="/static/module-build-status.js', html)
@@ -137,7 +138,7 @@ class WebUiIntegrityTests(unittest.TestCase):
 
     def test_ocr_background_queue_renders_safe_rows_in_workspace_position(self) -> None:
         html = INDEX_HTML.read_text(encoding="utf-8")
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         renderer = source[
             source.index("function renderOcrBackgroundQueue") : source.index(
                 "function renderSettingsOcr", source.index("function renderOcrBackgroundQueue")
@@ -199,7 +200,7 @@ console.log(JSON.stringify({{ emptyText: ocrBackgroundQueueList.textContent }}))
         self.assertLess(html.index('id="ocrBackgroundQueuePanel"'), html.index('id="slotsTitle"'))
 
     def test_clearing_slot_reports_its_removed_file_token_to_ocr(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         clear_assignment = source[
             source.index("function clearSlotAssignment") : source.index(
                 "function setSlotFile", source.index("function clearSlotAssignment")
@@ -238,7 +239,7 @@ console.log(JSON.stringify(calls));
         )
 
     def test_ocr_slot_polling_keeps_queue_and_refinement_states_live(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         state_helpers = source[
             source.index("function isOcrSlotStateInProgress") : source.index(
                 "function updateSlotPreview", source.index("function isOcrSlotStateInProgress")
@@ -265,7 +266,7 @@ console.log(JSON.stringify(calls));
 
     def test_settings_ocr_tab_has_diagnostic_controls_and_overlay_contract(self) -> None:
         html = _parse(INDEX_HTML)
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         css = APP_CSS.read_text(encoding="utf-8")
 
         self.assertTrue(html.has_tag("button", **{"data-settings-tab": "ocr"}))
@@ -365,14 +366,14 @@ console.log(JSON.stringify(calls));
         self.assertNotIn("min-height: auto;", css)
 
     def test_slot_settings_collect_similar_file_detection_configuration(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
 
         self.assertIn('"similar_file_detection"', source)
         self.assertIn('"Wykrywaj pliki z podobnych produktow"', source)
         self.assertIn("similar_file_slot_prefixes", source)
 
     def test_similar_candidate_requires_explicit_acceptance_and_has_source_button(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
 
         self.assertIn("function acceptSimilarCandidate(prefix)", source)
         self.assertIn('acceptButton.textContent = "✓";', source)
@@ -383,7 +384,7 @@ console.log(JSON.stringify(calls));
     def test_sql_badge_selects_text_copy_preview_and_only_opens_http_urls(self) -> None:
         """SQL must be a visible copyable source state, never a blind file opener."""
 
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         badge_start = source.index("function renderSlotBadges")
         badge_end = source.index("function isPhotoSourceLoading", badge_start)
         badges = source[badge_start:badge_end]
@@ -429,7 +430,7 @@ console.log(JSON.stringify({{
     def test_slot_open_state_tracks_ready_local_ftp_and_sql_sources(self) -> None:
         """A source change must update opening readiness without reloading the EAN."""
 
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         node = Path(r"C:\Program Files\nodejs\node.exe")
         if not node.exists():
             self.skipTest("Node.js is required for the slot opening readiness contract test")
@@ -476,7 +477,7 @@ console.log(JSON.stringify(results));
     def test_slot_open_button_keeps_the_original_preview_overlay(self) -> None:
         """All slot actions keep their established preview overlay positions."""
 
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         css = APP_CSS.read_text(encoding="utf-8")
         renderer_start = source.index("function createSlotNode")
         renderer_end = source.index("function renderSlot(", renderer_start)
@@ -497,7 +498,7 @@ console.log(JSON.stringify(results));
     def test_active_ftp_source_refreshes_stale_preview_before_opening(self) -> None:
         """A stale FTP cache token must never be opened without a refresh request."""
 
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         loader_start = source.index("async function loadFtpPreview")
         loader_end = source.index("function nextBackgroundFtpPreviewCandidate", loader_start)
         loader = source[loader_start:loader_end]
@@ -523,7 +524,7 @@ console.log(JSON.stringify(results));
     def test_ftp_refresh_does_not_change_newer_slot_state_or_open_it(self) -> None:
         """A completed old FTP request must not override another entry or source selection."""
 
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         loader_start = source.index("async function loadFtpPreview")
         loader_end = source.index("function nextBackgroundFtpPreviewCandidate", loader_start)
         loader = source[loader_start:loader_end]
@@ -542,7 +543,7 @@ console.log(JSON.stringify(results));
     def test_unaccepted_similar_candidate_is_the_current_preview_source(self) -> None:
         """The candidate shown by default must be openable as the active POD source."""
 
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         start = source.index("function selectedSlotSource")
         end = source.index("function similarCandidateForSlot", start)
         selected_source = source[start:end]
@@ -566,7 +567,7 @@ console.log(selectedSlotSource('07', null));
         self.assertEqual(completed.stdout.strip(), "similar")
 
     def test_filling_an_existing_product_replaces_old_similar_lookup_with_a_fresh_one(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         start = source.index("function fillForm")
         end = source.index("async function refreshData", start)
         body = source[start:end]
@@ -651,7 +652,7 @@ const startSimilarFileLookup = (options) => scans.push({{
     def test_filling_without_photos_invalidates_an_old_photo_lookup(self) -> None:
         """A completed old photo load must not search for a newly filled entry."""
 
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         start = source.index("function fillForm")
         end = source.index("async function refreshData", start)
         body = source[start:end]
@@ -726,7 +727,7 @@ const startSimilarFileLookup = (options) => scans.push({{
     def test_request_json_composes_external_abort_with_timeout(self) -> None:
         """An external cancellation signal must not disable the transport deadline."""
 
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         request_json = source[
             source.index("async function requestJson") : source.index(
                 "function clientFailureFingerprint"
@@ -794,7 +795,7 @@ function fetch(_path, options) {{
     def test_manual_product_search_starts_similar_scan_before_entries_finish(self) -> None:
         """A slow or failed entries lookup must not hold back the forced similar scan."""
 
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         search = source[
             source.index("async function searchByProduct") : source.index(
                 "let autoSearchTimer", source.index("async function searchByProduct")
@@ -836,7 +837,7 @@ const startSimilarFileLookup = (options) => {{ if (options?.immediate) scans += 
         self.assertEqual(result["error"], "entries unavailable")
 
     def test_accepted_similar_image_keeps_the_similar_preview_marker(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         start = source.index("function createSlotNode")
         end = source.index("function renderSlot(", start)
         renderer = source[start:end]
@@ -854,7 +855,7 @@ const startSimilarFileLookup = (options) => {{ if (options?.immediate) scans += 
         )
 
     def test_updating_an_accepted_similar_image_restores_the_preview_marker(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         start = source.index("function updateSlotPreview")
         end = source.index("function renderSlot(", start)
         updater = source[start:end]
@@ -875,7 +876,7 @@ const startSimilarFileLookup = (options) => {{ if (options?.immediate) scans += 
         )
 
     def test_accepting_and_dismissing_a_similar_candidate_preserves_source_semantics(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         accept_start = source.index("function acceptSimilarCandidate")
         accept_end = source.index("function selectedPhotoToken", accept_start)
         accept_body = source[accept_start:accept_end]
@@ -892,7 +893,7 @@ const startSimilarFileLookup = (options) => {{ if (options?.immediate) scans += 
     def test_similar_lookup_requires_acceptance_before_its_token_is_serialized(self) -> None:
         """Catches lookup candidates being submitted without explicit acceptance."""
 
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         helpers = source[
             source.index("function slotFileItem") : source.index(
                 "function slotUploadProgress"
@@ -1000,7 +1001,7 @@ async function requestJson(_url, options) {{
     def test_similar_lookup_reserves_occupied_slots_and_reports_current_errors(self) -> None:
         """Catches a lookup that overwrites occupied slots or hides its current error."""
 
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         lookup_helpers = source[
             source.index("function similarFileIdentityKey") : source.index(
                 "function scheduleSimilarFileLookup", source.index("function similarFileIdentityKey")
@@ -1063,7 +1064,7 @@ async function requestJson(_url, options) {{
     def test_similar_lookup_uses_abort_signal_and_ignores_abort_error(self) -> None:
         """A superseded transport must be cancellable without surfacing a user error."""
 
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         start = source.index("async function lookupSimilarFiles")
         end = source.index("function scheduleSimilarFileLookup", start)
         lookup = source[start:end]
@@ -1075,7 +1076,7 @@ async function requestJson(_url, options) {{
     def test_photo_load_does_not_schedule_similar_lookup(self) -> None:
         """Photo-source completion must not launch a second similar-file request."""
 
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         start = source.index("async function loadPhotosForEntry")
         end = source.index("function fillForm", start)
 
@@ -1084,7 +1085,7 @@ async function requestJson(_url, options) {{
     def test_empty_slot_has_search_feedback_and_reduced_motion_css(self) -> None:
         """Only a free slot exposes accessible lookup progress with safe motion fallback."""
 
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         css = APP_CSS.read_text(encoding="utf-8")
 
         self.assertIn("Automatyczne wyszukiwanie podobnych plikow...", source)
@@ -1111,7 +1112,7 @@ async function requestJson(_url, options) {{
     def test_late_similar_response_cannot_replace_new_lookup_results(self) -> None:
         """An aborted predecessor resolving late cannot render over the current lookup."""
 
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         lookup_helpers = source[
             source.index("function similarFileIdentityKey") : source.index(
                 "function scheduleSimilarFileLookup", source.index("function similarFileIdentityKey")
@@ -1183,7 +1184,7 @@ function requestJson(_url, options) {{
     def test_invalid_similar_identity_retains_accepted_pdf_preview_metadata(self) -> None:
         """Clearing an ineligible lookup must remove pending candidates, not an accepted PDF."""
 
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         lookup_helpers = source[
             source.index("function similarFileIdentityKey") : source.index(
                 "function scheduleSimilarFileLookup", source.index("function similarFileIdentityKey")
@@ -1255,7 +1256,7 @@ const requestJson = () => {{ requests += 1; throw new Error("request must not st
     def test_similar_candidate_image_preview_uses_its_signed_thumbnail(self) -> None:
         """Catches a pending candidate deriving its thumbnail from an inactive slot source."""
 
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         renderer = source[
             source.index("function renderSimilarCandidatePreview") : source.index(
                 "function clearSlotAssignment", source.index("function renderSimilarCandidatePreview")
@@ -1291,7 +1292,7 @@ console.log(JSON.stringify({{ src: previewImage.src }}));
     def test_manual_slot_file_starts_immediate_similar_lookup_with_new_occupied_slot(self) -> None:
         """Manual assignment must reallocate candidates immediately using the new occupancy."""
 
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         set_slot_file = source[
             source.index("function setSlotFile") : source.index("function getSlotAssignment", source.index("function setSlotFile"))
         ]
@@ -1340,7 +1341,7 @@ console.log(JSON.stringify({{ immediateRefreshes, debouncedRefreshes, occupiedAt
         self.assertEqual(result["occupiedAtRefresh"], ["01"])
 
     def test_similar_controls_are_compact_and_slot_local(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         settings_start = source.index("function renderSettingsSlots")
         settings_end = source.index("function renderSettingsUsers", settings_start)
         settings = source[settings_start:settings_end]
@@ -1373,7 +1374,7 @@ console.log(JSON.stringify({{ immediateRefreshes, debouncedRefreshes, occupiedAt
     def test_pending_similar_candidate_renders_its_thumbnail_without_selecting_pod(self) -> None:
         """Catches an empty slot hiding a suggestion until the POD badge is clicked."""
 
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         update_start = source.index("function updateSlotPreview")
         update_end = source.index("function createSlotNode", update_start)
         update_slot_preview = source[update_start:update_end]
@@ -1480,7 +1481,7 @@ console.log(JSON.stringify({{
     def test_decision_modal_accept_and_reject_resolve_only_chosen_slots(self) -> None:
         """Catches modal controls that do not apply the existing per-slot decision paths."""
 
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         self.assertIn("function pendingSimilarCandidatePrefixes()", source)
         self.assertIn("function renderSimilarDecisionModal()", source)
         helpers = source[
@@ -1573,7 +1574,7 @@ console.log(JSON.stringify({{
     def test_pending_similar_candidates_block_submit_until_all_are_decided(self) -> None:
         """A pending suggestion must open the decision modal before any submit work starts."""
 
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         self.assertIn("async function submitProductForm()", source)
         handler_start = source.index('productForm.addEventListener("submit",')
         handler_end = source.index("function resetCurrentDraft", handler_start)
@@ -1616,7 +1617,7 @@ const handleProductSubmitError = () => {{ throw new Error("unexpected submit fai
     def test_reject_all_enables_continue_without_submitting_similar_token(self) -> None:
         """Bulk rejection leaves candidates out of files, then continues through the normal submit path."""
 
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         wiring_start = source.index("similarDecisionRejectAllButton?.addEventListener")
         wiring_end = source.index(
             'document.querySelectorAll("[data-close-similar-decision]")', wiring_start
@@ -1677,7 +1678,7 @@ const handleProductSubmitError = () => {{ throw new Error("unexpected submit fai
     def test_submit_rechecks_candidates_added_while_lists_are_prepared(self) -> None:
         """Catches a late lookup candidate being serialized without a decision."""
 
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         submit_start = source.index("async function submitProductForm()")
         submit_end = source.index('productForm.addEventListener("submit",', submit_start)
         submit_product = source[submit_start:submit_end]
@@ -1715,7 +1716,7 @@ const recordOcrActivity = () => {{}};
     def test_similar_decision_modal_inerts_background_and_focuses_close_control(self) -> None:
         """Catches an aria-modal dialog that still permits background slot actions."""
 
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         self.assertIn("function setSimilarDecisionBackgroundInert()", source)
         self.assertIn("function restoreSimilarDecisionBackground()", source)
         self.assertIn("similarDecisionCloseButton?.focus()", source)
@@ -1723,7 +1724,7 @@ const recordOcrActivity = () => {{}};
     def test_selected_similar_slot_uses_its_edited_id_when_settings_are_saved(self) -> None:
         """Catches an enabled per-slot checkbox retaining the ID it had at render time."""
 
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         start = source.find("function selectedSimilarSlotPrefixes")
         self.assertNotEqual(start, -1, "settings need a row-aware selected-prefix helper")
         end = source.find("function renderSettingsSlots", start)
@@ -1752,7 +1753,7 @@ console.log(JSON.stringify(selectedSimilarSlotPrefixes(rows)));
         self.assertEqual(json.loads(completed.stdout), ["15"])
 
     def test_list_usage_modal_opens_the_selected_blocking_product(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         start = source.index("function renderListUsageModal")
         end = source.index("const trackedProductFields", start)
         renderer = source[start:end]
@@ -1768,7 +1769,7 @@ console.log(JSON.stringify(selectedSimilarSlotPrefixes(rows)));
         css = (ROOT / "picsyncra" / "web" / "static" / "app.css").read_text(
             encoding="utf-8"
         )
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
 
         stack_start = markup.index('class="header-status-stack"')
         location_start = markup.index('class="header-location"')
@@ -1789,7 +1790,7 @@ console.log(JSON.stringify(selectedSimilarSlotPrefixes(rows)));
         )
 
     def test_web_ui_uses_the_central_panel_timestamp_formatter(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
 
         self.assertIn("function selectedPanelTimeZone", source)
         self.assertIn("function coercePanelDate", source)
@@ -1800,7 +1801,7 @@ console.log(JSON.stringify(selectedSimilarSlotPrefixes(rows)));
         self.assertNotIn("new Date(Number(item.started_at) * 1000).toLocaleString()", source)
 
     def test_panel_timestamp_formatter_runtime_contract(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         formatter = source[
             source.index("function selectedPanelTimeZone") : source.index(
                 "const SQLITE_BACKUP_DAYS"
@@ -1855,7 +1856,7 @@ console.log(JSON.stringify({{
         self.assertRegex(result["historySeconds"], r"12:00:00.*UTC")
 
     def test_time_zone_rerender_preserves_offline_health_status_and_reformats_details(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         formatter = source[
             source.index("function selectedPanelTimeZone") : source.index(
                 "const SQLITE_BACKUP_DAYS"
@@ -1969,7 +1970,7 @@ async function requestJson() {{
         self.assertRegex(result["detailText"], r"13:00:00.*CET")
 
     def test_all_visible_panel_timestamps_use_the_central_formatter(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         compact_source = re.sub(r"\s+", " ", source)
 
         iso_calls = [
@@ -2051,7 +2052,7 @@ async function requestJson() {{
             )
 
     def test_global_time_zone_field_uses_the_server_catalog_and_rerenders(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
 
         self.assertIn('requestJson("/api/settings/time-zones")', source)
         self.assertIn('input.type = "search"', source)
@@ -2083,7 +2084,7 @@ async function requestJson() {{
 
     def test_mail_settings_tab_has_safe_secrets_and_responsive_channel_cards(self) -> None:
         html = _parse(INDEX_HTML)
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         css = (
             ROOT / "picsyncra" / "web" / "static" / "app.css"
         ).read_text(encoding="utf-8")
@@ -2119,7 +2120,7 @@ async function requestJson() {{
         self.assertNotIn("animation", css[css.index(".mail-test-status"):responsive_start])
 
     def test_user_settings_forms_send_optional_email_fields(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         css = (
             ROOT / "picsyncra" / "web" / "static" / "app.css"
         ).read_text(encoding="utf-8")
@@ -2141,7 +2142,7 @@ async function requestJson() {{
 
     def test_backend_health_indicator_is_accessible_safe_and_visibility_aware(self) -> None:
         html_source = INDEX_HTML.read_text(encoding="utf-8")
-        js_source = APP_JS.read_text(encoding="utf-8")
+        js_source = read_frontend_source(APP_JS)
         css_source = (
             ROOT / "picsyncra" / "web" / "static" / "app.css"
         ).read_text(encoding="utf-8")
@@ -2208,7 +2209,7 @@ async function requestJson() {{
 
     def test_resource_indicator_has_compact_and_accessible_detail_contract(self) -> None:
         html_source = INDEX_HTML.read_text(encoding="utf-8")
-        js_source = APP_JS.read_text(encoding="utf-8")
+        js_source = read_frontend_source(APP_JS)
         css_source = (
             ROOT / "picsyncra" / "web" / "static" / "app.css"
         ).read_text(encoding="utf-8")
@@ -2235,7 +2236,7 @@ async function requestJson() {{
         self.assertIn(".resource-status", css_source)
 
     def test_resource_visibility_settings_tests_and_ftp_cache_use_safe_state_paths(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         resource_start = source.index("function renderResourceStatus")
         resource_end = source.index("function healthLevel", resource_start)
         resource_source = source[resource_start:resource_end]
@@ -2295,7 +2296,7 @@ async function requestJson() {{
 
     def test_logs_use_tabs_live_stream_and_cursor_loading(self) -> None:
         html_source = INDEX_HTML.read_text(encoding="utf-8")
-        js_source = APP_JS.read_text(encoding="utf-8")
+        js_source = read_frontend_source(APP_JS)
         css_source = (
             ROOT / "picsyncra" / "web" / "static" / "app.css"
         ).read_text(encoding="utf-8")
@@ -2334,7 +2335,7 @@ async function requestJson() {{
         self.assertIn("textContent", logs_renderer)
 
     def test_incident_cards_render_safe_delivery_status_details(self) -> None:
-        js_source = APP_JS.read_text(encoding="utf-8")
+        js_source = read_frontend_source(APP_JS)
         css_source = (
             ROOT / "picsyncra" / "web" / "static" / "app.css"
         ).read_text(encoding="utf-8")
@@ -2366,7 +2367,7 @@ async function requestJson() {{
         self.assertNotIn("var(--success)", delivery_styles)
 
     def test_incident_context_is_loaded_lazily_and_problem_is_cursor_paginated(self) -> None:
-        js_source = APP_JS.read_text(encoding="utf-8")
+        js_source = read_frontend_source(APP_JS)
         incident_renderer = js_source[
             js_source.index("function renderIncidentCard") : js_source.index(
                 "function renderJobCard"
@@ -2381,7 +2382,7 @@ async function requestJson() {{
         self.assertIn('addEventListener("toggle"', js_source)
 
     def test_live_archive_load_more_keeps_fixed_seed_boundary_and_deduplicates(self) -> None:
-        js_source = APP_JS.read_text(encoding="utf-8")
+        js_source = read_frontend_source(APP_JS)
 
         self.assertIn("archiveSince", js_source)
         self.assertIn("payload.archive_since", js_source)
@@ -2400,7 +2401,7 @@ async function requestJson() {{
 
     def test_app_js_static_id_selectors_exist_in_index_html(self) -> None:
         html = _parse(INDEX_HTML)
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         selector_ids = set(
             re.findall(
                 r"document\.querySelector(?:All)?\([\"']#([A-Za-z][A-Za-z0-9_-]*)[\"']\)",
@@ -2473,7 +2474,7 @@ async function requestJson() {{
         self.assertEqual(canonical - labels, set())
 
     def test_web_settings_builds_vertical_product_field_rows(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         css = (
             ROOT / "picsyncra" / "web" / "static" / "app.css"
         ).read_text(encoding="utf-8")
@@ -2529,7 +2530,7 @@ async function requestJson() {{
         self.assertIn("@keyframes github-status-pulse", css)
 
     def test_app_js_renders_active_user_presence(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         css = (
             ROOT / "picsyncra" / "web" / "static" / "app.css"
         ).read_text(encoding="utf-8")
@@ -2544,7 +2545,7 @@ async function requestJson() {{
         self.assertIn(".presence-more-button", css)
 
     def test_app_js_loads_and_renders_github_status(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
 
         self.assertIn('const githubStatusButton = document.querySelector("#githubStatusButton")', source)
         self.assertIn('const githubStatusModal = document.querySelector("#githubStatusModal")', source)
@@ -2556,7 +2557,7 @@ async function requestJson() {{
         self.assertIn('document.querySelectorAll("[data-close-github-status]")', source)
 
     def test_app_js_marks_presence_client_and_leaves_on_pagehide(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
 
         self.assertIn('CLIENT_ID_HEADER = "X-PicSyncra-Client-Id"', source)
         self.assertIn("function activePresenceClientId", source)
@@ -2688,7 +2689,7 @@ async function requestJson() {{
         self.assertIn("pimcoreTemplateOcrValidation", html.ids)
 
     def test_app_js_persists_and_previews_pimcore_mapping_templates(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
 
         self.assertIn("function openPimcoreTemplateBuilder", source)
         self.assertIn("function previewPimcoreTemplate", source)
@@ -2717,7 +2718,7 @@ async function requestJson() {{
         self.assertIn("slot_tokens: pimcoreSlotTokens()", source)
 
     def test_runtime_pimcore_forms_load_samples_and_recalculate_saved_templates(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
 
         self.assertIn("function populatePimcoreRuntimeForm", source)
         self.assertIn("async function loadPimcoreTestSample", source)
@@ -2731,7 +2732,7 @@ async function requestJson() {{
     def test_typing_in_an_ocr_validated_runtime_field_requests_validation(self) -> None:
         """Catches manual fields that wait for blur instead of checking OCR."""
 
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         populate = source[
             source.index("function populatePimcoreRuntimeForm") : source.index(
                 "function pimcoreRuntimeWarnings",
@@ -2817,7 +2818,7 @@ console.log(JSON.stringify(calls));
     def test_global_runtime_recalculation_validates_manual_ocr_fields(self) -> None:
         """Catches global recalculation that validates only template-backed fields."""
 
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         validation = source[
             source.index("async function validatePimcoreOcrFields") : source.index(
                 "function pimcoreRuntimeRecalculateStatus",
@@ -2893,7 +2894,7 @@ console.log(JSON.stringify(calls.filter((call) => call.url === "/api/ocr/validat
     def test_ocr_validation_activates_template_ui_and_field_recalculation(self) -> None:
         """An OCR-only mapping remains manually editable but gets its runtime controls."""
 
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         template_controls = source[
             source.index("function pimcoreTemplateBuilderButton") : source.index(
                 "function pimcoreSlotTokens", source.index("function pimcoreTemplateBuilderButton")
@@ -2968,7 +2969,7 @@ console.log(JSON.stringify({{
     def test_ocr_completion_revalidates_open_pimcore_forms(self) -> None:
         """A completed scan must compare the current form values without editing them."""
 
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         state_helpers = source[
             source.index("function isOcrSlotStateInProgress") : source.index(
                 "function updateSlotPreview", source.index("function isOcrSlotStateInProgress")
@@ -3012,7 +3013,7 @@ console.log(JSON.stringify({{ state: state.files.get("20").ocr_state, revalidati
     def test_applying_a_calculated_value_revalidates_it_against_ocr(self) -> None:
         """Manual input wins until the user explicitly accepts the calculated value."""
 
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         calculated_state = source[
             source.index("function updatePimcoreRuntimeCalculatedState") : source.index(
                 "function clearPimcoreOcrMismatch",
@@ -3084,7 +3085,7 @@ console.log(JSON.stringify({{ value: input.value, validationSource }}));
     def test_runtime_pimcore_create_modal_recalculates_and_reopens_for_missing_product(
         self,
     ) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         status_start = source.index("async function checkPimcoreProductStatus")
         status_end = source.index("function openPimcoreCreateModal", status_start)
         status_body = source[status_start:status_end]
@@ -3109,7 +3110,7 @@ console.log(JSON.stringify({{ value: input.value, validationSource }}));
         )
 
     def test_sql_profile_ui_and_pimcore_sql_mapping_controls_exist(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         css = (ROOT / "picsyncra" / "web" / "static" / "app.css").read_text(
             encoding="utf-8"
         )
@@ -3136,7 +3137,7 @@ console.log(JSON.stringify({{ value: input.value, validationSource }}));
         self.assertIn(".sql-profile-card + .sql-profile-card", css)
 
     def test_pimcore_mapping_layout_controls_and_runtime_sections_exist(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         css = (ROOT / "picsyncra" / "web" / "static" / "app.css").read_text(
             encoding="utf-8"
         )
@@ -3157,7 +3158,7 @@ console.log(JSON.stringify({{ value: input.value, validationSource }}));
         self.assertIn("border-left: 4px solid var(--accent)", css)
 
     def test_pimcore_runtime_difference_ui_preserves_manual_values(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
 
         self.assertIn("function updatePimcoreRuntimeCalculatedState", source)
         self.assertIn("function updatePimcoreRuntimeFieldChangeState", source)
@@ -3169,7 +3170,7 @@ console.log(JSON.stringify({{ value: input.value, validationSource }}));
         self.assertIn("if (!input.value)", source)
 
     def test_pimcore_runtime_difference_actions_are_compact_icon_buttons(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         css = (ROOT / "picsyncra" / "web" / "static" / "app.css").read_text(
             encoding="utf-8"
         )
@@ -3210,7 +3211,7 @@ console.log(JSON.stringify({{ value: input.value, validationSource }}));
         self.assertIn("padding: 0;", action_button_block)
 
     def test_pimcore_edit_recalculation_blocks_submit_until_resolved(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         css = (ROOT / "picsyncra" / "web" / "static" / "app.css").read_text(
             encoding="utf-8"
         )
@@ -3228,7 +3229,7 @@ console.log(JSON.stringify({{ value: input.value, validationSource }}));
         self.assertIn("@keyframes pimcore-runtime-pulse", css)
 
     def test_pimcore_runtime_forwards_latest_render_integration_context(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
 
         self.assertIn("pimcoreCreateIntegrations", source)
         self.assertIn("pimcoreEditIntegrations", source)
@@ -3247,7 +3248,7 @@ console.log(JSON.stringify({{ value: input.value, validationSource }}));
         self.assertIn("object_id:", source)
 
     def test_pimcore_history_has_submission_export_actions(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         html = INDEX_HTML.read_text(encoding="utf-8")
 
         self.assertIn("exportPimcoreSubmissions", source)
@@ -3258,7 +3259,7 @@ console.log(JSON.stringify({{ value: input.value, validationSource }}));
         self.assertIn("pimcoreHistoryExportXlsxButton", html)
 
     def test_pimcore_settings_has_modal_submission_export_action(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         html = INDEX_HTML.read_text(encoding="utf-8")
 
         self.assertIn("function pimcoreSettingsExportButton", source)
@@ -3275,7 +3276,7 @@ console.log(JSON.stringify({{ value: input.value, validationSource }}));
         self.assertIn("pimcoreSettingsExportButton()", source)
 
     def test_pimcore_settings_has_saved_import_export_layout_editor(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         html = INDEX_HTML.read_text(encoding="utf-8")
 
         self.assertIn("pimcoreExportLayoutModal", html)
@@ -3286,7 +3287,7 @@ console.log(JSON.stringify({{ value: input.value, validationSource }}));
         self.assertIn("export_columns", source)
 
     def test_pimcore_export_layout_supports_between_slots_insert_and_selection(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         css = APP_CSS.read_text(encoding="utf-8")
 
         self.assertIn("insertPimcoreExportBlankColumn", source)
@@ -3304,7 +3305,7 @@ console.log(JSON.stringify({{ value: input.value, validationSource }}));
         self.assertNotIn('moveUp.textContent = "↑"', source)
 
     def test_pimcore_edit_modal_opens_before_remote_object_load(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         start = source.index("async function openPimcoreEditModal")
         end = source.index("function closePimcoreEditModal", start)
         body = source[start:end]
@@ -3318,7 +3319,7 @@ console.log(JSON.stringify({{ value: input.value, validationSource }}));
         )
 
     def test_pimcore_edit_click_resolves_current_ean_before_giving_up(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         start = source.index("async function openPimcoreEditModal")
         end = source.index("function closePimcoreEditModal", start)
         body = source[start:end]
@@ -3329,7 +3330,7 @@ console.log(JSON.stringify({{ value: input.value, validationSource }}));
         self.assertIn("objectId = Number(state.pimcoreExistingObject?.id || 0);", body)
 
     def test_pimcore_status_enables_edit_only_for_positive_object_id(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         start = source.index("async function checkPimcoreProductStatus")
         end = source.index("function openPimcoreCreateModal", start)
         body = source[start:end]
@@ -3339,7 +3340,7 @@ console.log(JSON.stringify({{ value: input.value, validationSource }}));
         self.assertIn("pimcoreEditButton.disabled = false", body)
 
     def test_pimcore_ean_input_clears_cached_lookup_before_rechecking(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         start = source.index("function handlePimcoreEanInput")
         end = source.index("function schedulePimcoreStatusLookup", start)
         body = source[start:end]
@@ -3348,7 +3349,7 @@ console.log(JSON.stringify({{ value: input.value, validationSource }}));
         self.assertIn("schedulePimcoreStatusLookup();", body)
 
     def test_pimcore_metadata_refresh_replaces_current_settings_form(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         start = source.index("async function refreshCompactPimcoreMetadata")
         end = source.index("function pimcoreCsvImportButton", start)
         body = source[start:end]
@@ -3357,7 +3358,7 @@ console.log(JSON.stringify({{ value: input.value, validationSource }}));
         self.assertNotIn("renderSettingsPimcore();", body)
 
     def test_loading_existing_entry_triggers_pimcore_status_lookup(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         start = source.index("function fillForm")
         end = source.index("async function refreshData", start)
         body = source[start:end]
@@ -3366,7 +3367,7 @@ console.log(JSON.stringify({{ value: input.value, validationSource }}));
         self.assertIn("handlePimcoreEanInput();", body)
 
     def test_pimcore_ui_uses_example_placeholder_without_private_default(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         html_source = INDEX_HTML.read_text(encoding="utf-8")
         css = (ROOT / "picsyncra" / "web" / "static" / "app.css").read_text(
             encoding="utf-8"
@@ -3392,7 +3393,7 @@ console.log(JSON.stringify({{ value: input.value, validationSource }}));
         )
 
     def test_app_js_treats_additional_image_formats_as_uploads(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
 
         for extension in (
             ".jfif",
@@ -3423,7 +3424,7 @@ console.log(JSON.stringify({{ value: input.value, validationSource }}));
         self.assertIn('sourceExt === "apng"', source)
 
     def test_app_js_swaps_two_occupied_slots_on_slot_drop(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
 
         self.assertIn("const target = getSlotAssignment(targetPrefix);", source)
         self.assertIn("Zamieniono slot", source)
@@ -3433,14 +3434,14 @@ console.log(JSON.stringify({{ value: input.value, validationSource }}));
         )
 
     def test_app_js_displays_web_image_scan_errors_inside_modal(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
 
         self.assertIn("renderWebImagesError", source)
         self.assertIn("Cloudflare/challenge 403", source)
         self.assertIn("Importer nie dostaje wtedy HTML-a produktu", source)
 
     def test_app_js_receives_browser_extension_imports(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
 
         self.assertIn("/api/browser-extension/imports", source)
         self.assertIn("/api/browser-extension/download", source)
@@ -3454,7 +3455,7 @@ console.log(JSON.stringify({{ value: input.value, validationSource }}));
         self.assertIn("Odbierz z rozszerzenia", source)
 
     def test_app_js_uses_cached_preview_for_browser_extension_imports(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
 
         self.assertIn("preview_url: cache.thumb_url || cache.url || item?.source_url || \"\"", source)
         self.assertIn("img.src = image.preview_url || image.thumb_url || image.url;", source)
@@ -3502,7 +3503,7 @@ console.log(JSON.stringify({{ value: input.value, validationSource }}));
         self.assertIn("nested-modal", modal_classes["backupDiffModal"])
 
     def test_history_ui_uses_abortable_summary_and_lazy_detail_requests(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         history_start = source.index("async function loadHistory")
         history_end = source.index("function showHistoryLoadError", history_start)
         history_source = source[history_start:history_end]
@@ -3531,7 +3532,7 @@ console.log(JSON.stringify({{ value: input.value, validationSource }}));
         self.assertIn("closeHistoryDetail();", source[close_modals_start:close_modals_end])
 
     def test_history_detail_ui_pages_and_aborts_stale_requests(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         html = INDEX_HTML.read_text(encoding="utf-8")
 
         self.assertIn('id="historyDetailPrevButton"', html)
@@ -3550,7 +3551,7 @@ console.log(JSON.stringify({{ value: input.value, validationSource }}));
         )
 
     def test_history_detail_loading_replaces_stale_pagination_context(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         load_start = source.index("async function loadHistoryDetails")
         load_end = source.index("async function loadHistory(", load_start)
         load_source = source[load_start:load_end]
@@ -3569,7 +3570,7 @@ console.log(JSON.stringify({{ value: input.value, validationSource }}));
     def test_history_changes_modal_is_safe_detailed_and_responsive(self) -> None:
         html = _parse(INDEX_HTML)
         html_source = INDEX_HTML.read_text(encoding="utf-8")
-        js_source = APP_JS.read_text(encoding="utf-8")
+        js_source = read_frontend_source(APP_JS)
         css_source = (
             ROOT / "picsyncra" / "web" / "static" / "app.css"
         ).read_text(encoding="utf-8")
@@ -3627,7 +3628,7 @@ console.log(JSON.stringify({{ value: input.value, validationSource }}));
         self.assertIn("@media (max-width: 700px)", css_source)
 
     def test_live_log_renderer_uses_compact_summary_and_expandable_details(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         renderer_start = source.index("function renderLogEvent")
         renderer_end = source.index("function incidentValue", renderer_start)
         renderer = source[renderer_start:renderer_end]
@@ -3650,7 +3651,7 @@ console.log(JSON.stringify({{ value: input.value, validationSource }}));
         self.assertIn("text-overflow: ellipsis", css_source)
 
     def test_history_changes_formats_structured_values_and_unknown_durations(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         css_source = (
             ROOT / "picsyncra" / "web" / "static" / "app.css"
         ).read_text(encoding="utf-8")
@@ -3675,7 +3676,7 @@ console.log(JSON.stringify({{ value: input.value, validationSource }}));
         self.assertIn("white-space: pre-wrap", css_source[style_start:style_end])
 
     def test_history_changes_resolves_pimcore_operation_identifier(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
         self.assertIn("function historyChangeJobId", source)
         resolver_start = source.index("function historyChangeJobId")
         resolver_end = source.index("function historyFileOperationLabel", resolver_start)
@@ -3688,7 +3689,7 @@ console.log(JSON.stringify({{ value: input.value, validationSource }}));
         self.assertIn("historyChangeJobId(details, changeSet)", source)
 
     def test_history_changes_modal_isolates_background_and_traps_focus(self) -> None:
-        source = APP_JS.read_text(encoding="utf-8")
+        source = read_frontend_source(APP_JS)
 
         self.assertIn("historyChangesBackgroundState", source)
         self.assertIn('"#historyView.active, #historyDetailModal.active, #historyTimingModal.active"', source)

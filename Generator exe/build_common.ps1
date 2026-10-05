@@ -96,6 +96,11 @@ function Get-WebStaticDataArguments {
         "login.js",
         "module-build-status.js",
         "ocr-diagnostics.js",
+        "slot-ui.js",
+        "settings-ui.js",
+        "ocr-tester-ui.js",
+        "installation-updates.js",
+        "legacy-migration.js",
         "process-jobs.js",
         "runtime-status.js"
     )

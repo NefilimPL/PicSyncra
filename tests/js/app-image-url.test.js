@@ -5,7 +5,7 @@ const assert = require("node:assert/strict");
 const vm = require("node:vm");
 
 function loadSafeOcrDiagnosticImageUrl() {
-  const appPath = path.resolve(__dirname, "../..", "picsyncra/web/static/app.js");
+  const appPath = path.resolve(__dirname, "../..", "picsyncra/web/static/ocr-tester-ui.js");
   const appSource = fs.readFileSync(appPath, "utf8");
   const start = appSource.indexOf("function safeOcrDiagnosticImageUrl(value) {");
   const renderer = /\r?\n\r?\nfunction renderOcrDiagnosticView/.exec(appSource.slice(start));
