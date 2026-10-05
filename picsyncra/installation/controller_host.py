@@ -80,6 +80,13 @@ def active_web_executable(context: InstallContext) -> Path:
         release_id = read_active_release(context)
         bundle = program_root / "versions" / str(release_id)
         executable = bundle / "web" / "PicSyncra-WEB.exe"
+        marker = json.loads((program_root / 'active.json').read_text(encoding='utf-8'))
+        if marker.get('schema') == 2:
+            from .module_state import read_module_set, module_set_root
+            from .module_filesystem import safe_path
+            selected = read_module_set(context)
+            bundle = module_set_root(context, selected)
+            executable = safe_path(bundle, 'apps/web/PicSyncra-WEB.exe')
         resolved_bundle = bundle.resolve(strict=True)
         resolved_executable = executable.resolve(strict=True)
     except (ActiveReleaseError, OSError, RuntimeError) as exc:
