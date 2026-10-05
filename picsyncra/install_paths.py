@@ -105,9 +105,14 @@ def _load_active_release(program_root: Path, installation_id: str) -> int | None
         return None
     if not isinstance(payload, dict):
         return None
-    if set(payload) != {"schema", "installation_id", "release_id"}:
-        return None
-    if payload.get("schema") != 1:
+    expected = {"schema", "installation_id", "release_id"}
+    if payload.get("schema") == 2:
+        expected |= {"set_id", "revision"}
+        if not isinstance(payload.get("set_id"), str) or not re.fullmatch(r"[a-f0-9]{64}", payload["set_id"]):
+            return None
+        if type(payload.get("revision")) is not int or payload["revision"] < 1:
+            return None
+    if set(payload) != expected or type(payload.get("schema")) is not int or payload["schema"] not in {1, 2}:
         return None
     if payload.get("installation_id") != installation_id:
         return None
@@ -117,6 +122,14 @@ def _load_active_release(program_root: Path, installation_id: str) -> int | None
     if release_id <= 0:
         return None
     return release_id
+
+
+def _active_bundle(program_root: Path, installation_id: str) -> Path:
+    payload = json.loads((program_root / "active.json").read_text(encoding="utf-8"))
+    if payload.get("schema") == 2:
+        from .installation.module_filesystem import safe_path
+        return safe_path(program_root, "sets/" + payload["set_id"])
+    return program_root / "versions" / str(_load_active_release(program_root, installation_id))
 
 
 def _registered_context(registration: Mapping[str, object]) -> InstallContext | None:
@@ -138,7 +151,7 @@ def _registered_context(registration: Mapping[str, object]) -> InstallContext | 
     release_id = _load_active_release(canonical_program_root, installation_id)
     if release_id is None:
         return None
-    active_bundle = canonical_program_root / "versions" / str(release_id)
+    active_bundle = _active_bundle(canonical_program_root, installation_id)
     try:
         canonical_active_bundle = active_bundle.resolve(strict=True)
     except (OSError, RuntimeError):
@@ -165,11 +178,7 @@ def _context_for_registration(
         return None
     try:
         canonical_executable = executable.resolve(strict=True)
-        active_bundle = (
-            context.program_root
-            / "versions"
-            / str(_load_active_release(context.program_root, context.installation_id))
-        ).resolve(strict=True)
+        active_bundle = _active_bundle(context.program_root, context.installation_id).resolve(strict=True)
     except (OSError, RuntimeError):
         return None
     if (

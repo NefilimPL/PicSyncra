@@ -76,6 +76,9 @@ def _active_release(context: InstallContext) -> int:
     except (OSError, ValueError, TypeError) as exc:
         raise BackupError("The active installed release is unavailable.") from exc
     if not isinstance(payload, dict) or set(payload) != {"schema", "installation_id", "release_id"}:
+        if isinstance(payload, dict) and payload.get("schema") == 2:
+            from .module_state import read_module_set
+            return read_module_set(context).release_id
         raise BackupError("The active installed release is invalid.")
     release_id = payload.get("release_id")
     if (
@@ -136,6 +139,12 @@ def create_operation_backup(context: InstallContext, operation_id: str) -> Backu
             verified=snapshot.integrity_ok,
         )
         _write_receipt(temporary, receipt)
+        marker = json.loads((context.program_root / "active.json").read_text(encoding="utf-8"))
+        if marker.get("schema") == 2:
+            from .module_state import read_module_set, module_set_payload
+            from .module_filesystem import atomic_json
+            atomic_json(temporary / "module-set.json", module_set_payload(read_module_set(context)))
+            atomic_json(temporary / "active-marker.json", marker)
         os.replace(temporary, final_root)
         return receipt
     except (OSError, DatabaseSnapshotError) as exc:
