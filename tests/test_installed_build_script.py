@@ -1,5 +1,6 @@
 from pathlib import Path
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -46,6 +47,14 @@ function Invoke-BuildPython {
     Set-Content -LiteralPath (Join-Path $output "$name.exe") -Value 'compiled application'
     New-Item -ItemType Directory -Path (Join-Path $output '_internal') -Force | Out-Null
     Set-Content -LiteralPath (Join-Path $output '_internal\runtime.dll') -Value 'runtime'
+    for ($index = 0; $index -lt $arguments.Count; $index++) {
+        if ($arguments[$index] -eq '--add-data') {
+            $source, $relativeDestination = $arguments[$index + 1].Split(';', 2)
+            $destination = Join-Path (Join-Path $output '_internal') $relativeDestination
+            New-Item -ItemType Directory -Path $destination -Force | Out-Null
+            Copy-Item -LiteralPath $source -Destination $destination
+        }
+    }
     $global:LASTEXITCODE = 0
 }
 function Get-Command {
@@ -71,6 +80,13 @@ function Invoke-TestIscc {
 
     run_build()
     output = checkout / "dist" / "installed"
+    static = output / "versions" / "1" / "web" / "_internal" / "picsyncra" / "web" / "static"
+    for template in ("index.html", "login.html"):
+        html = (static / template).read_text(encoding="utf-8")
+        referenced_assets = re.findall(r'(?:src|href)="/static/([^"?]+)', html)
+        assert referenced_assets
+        missing = [asset for asset in referenced_assets if not (static / asset).is_file()]
+        assert not missing, f"{template} references missing packaged assets: {missing}"
     assert (output / "PicSyncra-Setup.ico").is_file()
     assert json.loads((output / "active.json").read_text(encoding="utf-8")) == {
         "schema": 1, "installation_id": "primary-installation", "release_id": 1,

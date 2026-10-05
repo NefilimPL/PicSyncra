@@ -26,8 +26,8 @@ WEB in an isolated build directory. It verifies the health endpoint and
 static UI. Its test pipe permits the current test user only; it does not
 create a scheduled task or HKLM registration. Administrator token membership
 and Windows task-command parsing are covered by separate native regressions.
-Full installation under SYSTEM in the user's Windows Sandbox still requires
-retesting the rebuilt installer.
+The user subsequently confirmed that the corrected installer starts the panel
+in Windows Sandbox on the other computer.
 
 Verification results:
 
@@ -54,3 +54,23 @@ Publication status checked through the public GitHub API on 2026-10-05:
   only changed WEB/Migrator/LOCAL modules are not implemented.
 - The local trusted-public-key mapping is empty, so a local unsigned build
   deliberately cannot accept remote updates.
+
+## Missing OCR/update controls in the installed WEB panel
+
+The installed WEB HTML referenced `installation-updates.js` and
+`legacy-migration.js`, but the builder's static-asset list omitted both. The
+shipped directory confirmed their absence. Without `InstallationUpdates`,
+the renderer returns before creating the installed-update controls, including
+the OCR download button. This affects local builds and Actions builds alike.
+
+Both scripts are now packaged. The existing build harness now checks that all
+static assets referenced by the packaged main and login pages are present.
+It failed on those two missing scripts before the fix and passed afterward.
+Verification: 25 focused Python tests and 4 JavaScript updater tests passed;
+the real controller/frozen-WEB smoke served both scripts with the expected
+contents. Inno Setup compiled the replacement installer successfully.
+
+Artifact: `dist/installer-updates-fixed/PicSyncra-Setup-1-updates-fixed.exe`.
+SHA256: `CAAE731E63739A2B342871E1A4EC7CDB5708D8726124338578ACBE469BE9AA6E`.
+The button alone does not provide an OCR download source: signed installed
+release assets and compiled trusted public keys are still required.

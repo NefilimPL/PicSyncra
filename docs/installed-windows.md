@@ -3,6 +3,10 @@
 Wersja instalowana działa jako zwykły program Windows. WEB i Migrator są
 instalowane zawsze, a komponent LOCAL jest opcjonalny. OCR nie jest częścią
 instalacji bazowej: administrator pobiera go z zakładki **Wersje modułów**.
+Przycisk **Pobierz i zainstaluj OCR** pobiera podpisany pakiet silnika i modeli
+z Release odpowiadającego aktywnemu wydaniu aplikacji. Wymaga opublikowanego
+pakietu OCR oraz publicznego klucza podpisu wbudowanego w instalowaną aplikację.
+Samo lokalne wygenerowanie EXE nie zapewnia źródła tego pakietu.
 
 ## Dane i konfiguracja
 
@@ -33,6 +37,12 @@ Migrator i LOCAL, a także OCR, jeśli OCR był już zainstalowany. Nie pobiera
 instalatora EXE, ale nie pomija jeszcze niezmienionych modułów. Sam OCR można
 doinstalować osobno. Aktualizacja wyłącznie WEB lub wyłącznie Migratora nie
 jest obecnie osobną operacją.
+
+Tabela **Wersje modułów** porównuje obecnie commity kodu z gałęzią GitHub.
+Wpisy takie jak FTP, SQL i Pimcore są częściami aplikacji, a nie osobnymi
+paczkami do pobrania. Tabela nie zastępuje katalogu podpisanych wydań.
+Pomijanie niezmienionych plików oraz wybór wersji pojedynczego modułu w WEB
+i w lokalnym launcherze wymagają rozszerzenia aktualizatora.
 
 Publikowanie tych paczek wymaga aktywnego workflow w repozytorium oraz
 konfiguracji środowiska `installed-release-signing`: publicznych kluczy
