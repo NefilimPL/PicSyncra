@@ -271,6 +271,8 @@ def main(argv: list[str] | None = None, *, registry: RegistryWriter | None = Non
     subparsers = parser.add_subparsers(dest="command", required=True)
     inspect_parser = subparsers.add_parser("inspect")
     inspect_parser.add_argument("--request", type=Path, required=True)
+    module_parser = subparsers.add_parser('initialize-modules')
+    module_parser.add_argument('--request', type=Path, required=True)
     import_parser = subparsers.add_parser("import-config")
     import_parser.add_argument("--request", type=Path, required=True)
     register_parser = subparsers.add_parser("register")
@@ -283,6 +285,10 @@ def main(argv: list[str] | None = None, *, registry: RegistryWriter | None = Non
     try:
         if args.command == "inspect":
             response = _inspect_database_request(args.request)
+        elif args.command == 'initialize-modules':
+            from .module_setup import initialize_module_layout
+            initialize_module_layout(json.loads(args.request.read_text(encoding='utf-8')))
+            response = {'ok': True}
         elif args.command == "import-config":
             _import_config(args.request)
             response = {"ok": True}

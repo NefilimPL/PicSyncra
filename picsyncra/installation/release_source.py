@@ -6,7 +6,7 @@ from collections.abc import Callable, Mapping
 from typing import Literal
 from urllib.parse import urlparse
 
-from ..brand import GITHUB_REPOSITORY
+from .repository import GITHUB_REPOSITORY
 from .contracts import ReleaseChoice
 from .release_catalog import catalog_releases
 

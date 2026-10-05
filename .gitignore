@@ -49,6 +49,7 @@ picsyncra_web_uvicorn.*.log
 build/
 dist/
 *.spec
+!installer/module-host.spec
 !installer/installed.spec
 !installer/ocr.spec
 *.manifest

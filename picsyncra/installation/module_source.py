@@ -3,8 +3,7 @@ from __future__ import annotations
 import base64
 import json
 from urllib.request import Request, build_opener, HTTPSHandler
-from ..github_status import _github_fetch_json
-from ..brand import GITHUB_REPOSITORY
+from .repository import fetch_release_json, GITHUB_REPOSITORY
 from .downloads import _TrustedGithubRedirect, _trusted_url
 from .module_catalog import catalog_module_releases
 from .module_filesystem import safe_path, atomic_json
@@ -23,7 +22,7 @@ def fetch_manifest_asset(url, limit=64 * 1024 * 1024):
 
 
 class ModuleReleaseSource:
-    def __init__(self, context, *, keys=None, fetch_json=_github_fetch_json, fetch_asset=fetch_manifest_asset):
+    def __init__(self, context, *, keys=None, fetch_json=fetch_release_json, fetch_asset=fetch_manifest_asset):
         self.context = context
         self.keys = trusted_release_keys() if keys is None else keys
         self.fetch_json, self.fetch_asset = fetch_json, fetch_asset

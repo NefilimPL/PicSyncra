@@ -6,7 +6,10 @@ def test_installed_release_workflow_keeps_signing_secret_out_of_pull_requests() 
     assert "PICSYNCRA_RELEASE_SIGNING_KEY: ${{ secrets.PICSYNCRA_RELEASE_SIGNING_KEY }}" in source
     assert "if: github.event_name != 'pull_request'" in source
     assert "write_trusted_release_keys.py" in source
-    assert "PicSyncra-installed-manifest.sig" in source
-    assert 'dist/installed/ocr.zip' in source
-    assert '--component ocr:ocr-$releaseId:dist/installed/ocr.zip' in source
-    assert "github.event.release.target_commitish || github.ref_name" in source
+    assert 'PicSyncra-modules-manifest.json.sig' in source
+    assert 'module-assets/content-*.bin' in source
+    assert 'PicSyncra-Setup-*.exe' in source
+    assert 'refs/tags/${{ steps.release.outputs.tag }}' in source
+    assert source.index('Upload complete content') < source.index('Upload signed manifest last')
+    assert 'Release channel mismatch' in source
+    assert 'git merge-base --is-ancestor HEAD' in source

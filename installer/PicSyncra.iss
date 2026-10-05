@@ -48,12 +48,12 @@ Name: "{commonappdata}\PicSyncra\primary-installation\control"; Flags: uninsneve
 Name: "{commonappdata}\PicSyncra\primary-installation\staging"; Flags: uninsneveruninstall
 
 [Files]
-Source: "{#BuildRoot}\versions\{#ReleaseId}\web\*"; DestDir: "{app}\versions\{#ReleaseId}\web"; Components: web; Flags: recursesubdirs createallsubdirs ignoreversion
-Source: "{#BuildRoot}\versions\{#ReleaseId}\migrator\*"; DestDir: "{app}\versions\{#ReleaseId}\migrator"; Components: migrator; Flags: recursesubdirs createallsubdirs ignoreversion
-Source: "{#BuildRoot}\versions\{#ReleaseId}\local\*"; DestDir: "{app}\versions\{#ReleaseId}\local"; Components: local; Flags: recursesubdirs createallsubdirs ignoreversion
+Source: "{#BuildRoot}\module-sets\{#BaseSetId}\*"; DestDir: "{app}\sets\{#BaseSetId}"; Check: not WizardIsComponentSelected('local'); Flags: recursesubdirs createallsubdirs ignoreversion
+Source: "{#BuildRoot}\module-sets\{#LocalSetId}\*"; DestDir: "{app}\sets\{#LocalSetId}"; Components: local; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "{#BuildRoot}\PicSyncra-Controller\*"; DestDir: "{app}\controller"; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "{#BuildRoot}\helper\*"; DestDir: "{app}\controller\helper"; Flags: recursesubdirs createallsubdirs ignoreversion
-Source: "{#BuildRoot}\active.json"; DestDir: "{app}"; Flags: onlyifdoesntexist ignoreversion
+Source: "{#BuildRoot}\module-initial-layout.json"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#BuildRoot}\PicSyncra-Launcher\*"; DestDir: "{app}\launcher"; Flags: recursesubdirs createallsubdirs ignoreversion
 
 [Registry]
 Root: HKLM64; Subkey: "SOFTWARE\PicSyncra\Installations\primary-installation"; ValueType: string; ValueName: "InstallationId"; ValueData: "primary-installation"
@@ -62,9 +62,9 @@ Root: HKLM64; Subkey: "SOFTWARE\PicSyncra\Installations\primary-installation"; V
 Root: HKLM64; Subkey: "SOFTWARE\PicSyncra\Installations\primary-installation"; ValueType: string; ValueName: "DatabasePath"; ValueData: "{code:SelectedDatabasePath}"; Flags: uninsdeletekey
 
 [Icons]
-Name: "{autoprograms}\PicSyncra WEB"; Filename: "{app}\versions\{#ReleaseId}\web\PicSyncra-WEB.exe"; Components: web
-Name: "{autoprograms}\PicSyncra Migrator"; Filename: "{app}\versions\{#ReleaseId}\migrator\PicSyncra-Migrator.exe"; Components: migrator
-Name: "{autoprograms}\PicSyncra"; Filename: "{app}\versions\{#ReleaseId}\local\PicSyncra.exe"; Components: local
+Name: "{autoprograms}\PicSyncra WEB"; Filename: "{app}\launcher\PicSyncra-Launcher.exe"; Parameters: "--app web"; Components: web
+Name: "{autoprograms}\PicSyncra Migrator"; Filename: "{app}\launcher\PicSyncra-Launcher.exe"; Parameters: "--app migrator"; Components: migrator
+Name: "{autoprograms}\PicSyncra"; Filename: "{app}\launcher\PicSyncra-Launcher.exe"; Parameters: "--app local"; Components: local
 
 [UninstallRun]
 Filename: "{sys}\schtasks.exe"; Parameters: "/End /TN ""PicSyncra Controller primary-installation"""; RunOnceId: "stop-controller"; Flags: runhidden waituntilterminated
@@ -223,6 +223,10 @@ begin
   if CurStep = ssPostInstall then begin
     InspectSelectedDatabase;
     ImportSelectedConfiguration;
+    if WizardIsComponentSelected('local') then
+      RunSetupHelper('initialize-modules', '{"installation_id":"primary-installation","program_root":"' + JsonEscape(ExpandConstant('{app}')) + '","state_root":"' + JsonEscape(StateRoot) + '","database_path":"' + JsonEscape(SelectedDatabasePath('')) + '","include_local":true}')
+    else
+      RunSetupHelper('initialize-modules', '{"installation_id":"primary-installation","program_root":"' + JsonEscape(ExpandConstant('{app}')) + '","state_root":"' + JsonEscape(StateRoot) + '","database_path":"' + JsonEscape(SelectedDatabasePath('')) + '","include_local":false}');
     RunControllerTask(ControllerTaskParameters,
       'Nie można zarejestrować zadania kontrolera PicSyncra');
     RunControllerTask('/Run /TN "PicSyncra Controller primary-installation"',

@@ -9,7 +9,7 @@ from urllib.parse import quote
 from .controller_version import CONTROLLER_VERSION
 from .database import inspect_database
 from .module_content import ModuleContentStore
-from .module_contracts import ModuleEnvironment, ModulePlan
+from .module_contracts import ModuleEnvironment, ModulePlan, MigrationStep
 from .module_definition import module_definitions
 from .module_compatibility import check_module_compatibility
 from .module_executor import ModuleExecutor, ModuleExecutionError, verified_backup
@@ -38,7 +38,7 @@ class ModuleService:
         self.entries = ()
         self.executor = ModuleExecutor(context, controller, content=self.content,
                                        quiesce=quiesce or self._quiesce, healthy=healthy or self._healthy,
-                                       revalidate=self._revalidate)
+                                       revalidate=self._revalidate, migrate=self._migrate)
 
     @staticmethod
     def _defer(work):
@@ -114,16 +114,21 @@ class ModuleService:
         environment = self._environment(restore_backup_id)
         plan = plan_module_operation(active, releases, environment, action=action,
                                       selected=selected, excluded=frozenset(excluded), available_hashes=self.content.available_hashes())
+        migrations=[]
         if plan.migration_ids:
-            # No untested migration entrypoint may be enabled by metadata alone.
-            # Future releases must add a stable, reviewed migration runner.
-            from .module_contracts import ModuleConflict
-            plan = replace(plan, conflicts=plan.conflicts + (ModuleConflict('migration_runner_unavailable', 'core', '', None, None,
-                'Ta zmiana schematu wymaga instalatora z obsługą wskazanej migracji.'),))
+            source=next(r for r in releases if r.release_id==plan.target.release_id)
+            by_id={s.migration_id:s for s in source.migrations}
+            migrations=[asdict(by_id[identifier]) for identifier in plan.migration_ids]
+            owners={m.module_id:m.version_id for m in source.modules}
+            chosen={m.module_id:m.version_id for m in plan.target.modules}
+            if any(owners[s['module_id']] != chosen.get(s['module_id']) for s in migrations):
+                from .module_contracts import ModuleConflict
+                plan=replace(plan,conflicts=plan.conflicts+(ModuleConflict('migration_module_incompatible','core','',None,None,
+                    'Migracja wymaga wersji modułu z docelowego wydania; wybrana blokada ją uniemożliwia.'),))
         payload = dict(plan_id=plan.plan_id, action=plan.action, expected_revision=plan.expected_revision,
                        target=module_set_payload(plan.target), conflicts=[asdict(c) for c in plan.conflicts],
                        download_bytes=plan.download_bytes, migration_ids=list(plan.migration_ids), environment=asdict(environment),
-                       restore_backup_id=restore_backup_id)
+                       restore_backup_id=restore_backup_id, migrations=migrations)
         atomic_json(safe_path(self.context.state_root, 'module-plans/' + plan.plan_id + '.json'), payload)
         old = {m.module_id: m for m in active.modules}
         return dict(plan_id=plan.plan_id, action=plan.action, expected_revision=plan.expected_revision,
@@ -141,15 +146,29 @@ class ModuleService:
     def _revalidate(self, plan, restore_backup_id):
         payload = self._load_plan(plan.plan_id)
         environment = self._environment(restore_backup_id)
-        if asdict(environment) != payload['environment'] or check_module_compatibility(plan.target, environment):
+        steps=tuple(MigrationStep(**s) for s in payload['migrations'])
+        checked=replace(environment,database_schema=steps[-1].to_schema) if steps else environment
+        if asdict(environment) != payload['environment'] or check_module_compatibility(plan.target, checked):
             raise ModuleExecutionError('Zgodność bazy lub konfiguracji zmieniła się. Przygotuj nowy plan.')
         # Reverify signatures, provenance and target identities before execution,
         # including offline. Plans are never a substitute for signed catalogs.
         releases = self._catalog()
+        if steps:
+            source=next((r for r in releases if r.release_id==plan.target.release_id),None)
+            if source is None or any(step not in source.migrations for step in steps):
+                raise ModuleExecutionError('Migracja nie jest dostępna w podpisanym katalogu.')
         allowed = {(m.module_id, m.version_id) for r in releases for m in r.modules}
         current = {(m.module_id, m.version_id) for m in read_module_set(self.context).modules}
         if any((m.module_id, m.version_id) not in allowed | current for m in plan.target.modules):
             raise ModuleExecutionError('Wersja modułu nie jest dostępna w zweryfikowanym katalogu.')
+
+    def _migrate(self,plan):
+        import subprocess
+        from .module_state import module_set_root
+        host=safe_path(module_set_root(self.context,plan.target),'apps/web/PicSyncra-WEB.exe')
+        result=subprocess.run([str(host),'--module-migrate',plan.plan_id,'--installation-id',self.context.installation_id],
+                              cwd=host.parent,timeout=600,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+        if result.returncode: raise ModuleExecutionError('Migracja nie przeszła kontroli; przywracanie danych z kopii.')
 
     def execute(self, plan_id, *, restore_backup_id=None, acknowledge_data_loss=False):
         payload = self._load_plan(plan_id)

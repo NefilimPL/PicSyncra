@@ -24,7 +24,11 @@ def test_installed_build_from_clean_directory_and_repeated_release(tmp_path: Pat
     (checkout / "installer").mkdir(parents=True)
     shutil.copy2(ROOT / "installer" / "build_installer.ps1", checkout / "installer")
     shutil.copytree(ROOT / "pic", checkout / "pic")
-    shutil.copytree(ROOT / "picsyncra" / "web" / "static", checkout / "picsyncra" / "web" / "static")
+    shutil.copytree(ROOT / 'picsyncra', checkout / 'picsyncra', ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+    (checkout / 'tools').mkdir()
+    shutil.copy2(ROOT / 'tools/build_installed_modules.py', checkout / 'tools')
+    shutil.copy2(ROOT / 'installer/module-compatibility.json', checkout / 'installer')
+    shutil.copy2(ROOT / 'PicSyncra.pyw', checkout)
     harness = tmp_path / "build-harness.ps1"
     harness.write_text(
         r"""param([string]$Checkout, [string]$TestPython)
@@ -36,11 +40,17 @@ function Invoke-BuildPython {
         $global:LASTEXITCODE = $LASTEXITCODE
         return
     }
+    if ($arguments[0] -eq 'tools/build_installed_modules.py') {
+        & $TestPython @arguments
+        $global:LASTEXITCODE = $LASTEXITCODE
+        return
+    }
     if ($arguments[0] -ne '-m') { throw 'Unexpected Python invocation' }
     if ($arguments[1] -eq 'pip') { $global:LASTEXITCODE = 0; return }
     if ($arguments[1] -ne 'PyInstaller') { throw 'Unexpected build module' }
     $nameIndex = [Array]::IndexOf($arguments, '--name')
     $name = if ($nameIndex -ge 0) { $arguments[$nameIndex + 1] } else { 'PicSyncra-SetupHelper' }
+    if ($arguments -contains 'installer/module-host.spec') { $name = $env:PICSYNCRA_HOST_NAME }
     $distIndex = [Array]::IndexOf($arguments, '--distpath')
     $output = Join-Path $arguments[$distIndex + 1] $name
     New-Item -ItemType Directory -Path $output -Force | Out-Null
@@ -65,7 +75,7 @@ function Get-Command {
 function Invoke-TestIscc {
     $global:LASTEXITCODE = 0
 }
-& (Join-Path $Checkout 'installer\build_installer.ps1') -ReleaseId 1 -Python Invoke-BuildPython
+& (Join-Path $Checkout 'installer\build_installer.ps1') -ReleaseId 1 -ReleaseCommit ('a' * 40) -Python Invoke-BuildPython
 """,
         encoding="utf-8",
     )
@@ -80,7 +90,10 @@ function Invoke-TestIscc {
 
     run_build()
     output = checkout / "dist" / "installed"
-    static = output / "versions" / "1" / "web" / "_internal" / "picsyncra" / "web" / "static"
+    layout = json.loads((output / 'module-initial-layout.json').read_text())
+    base = output / 'module-sets' / layout['base']
+    local = output / 'module-sets' / layout['local']
+    static = base / 'picsyncra/web/static'
     for template in ("index.html", "login.html"):
         html = (static / template).read_text(encoding="utf-8")
         referenced_assets = re.findall(r'(?:src|href)="/static/([^"?]+)', html)
@@ -88,22 +101,21 @@ function Invoke-TestIscc {
         missing = [asset for asset in referenced_assets if not (static / asset).is_file()]
         assert not missing, f"{template} references missing packaged assets: {missing}"
     assert (output / "PicSyncra-Setup.ico").is_file()
-    assert json.loads((output / "active.json").read_text(encoding="utf-8")) == {
-        "schema": 1, "installation_id": "primary-installation", "release_id": 1,
-    }
+    assert json.loads((base / 'module-set.json').read_text())['pinned'] == []
+    assert not (base / 'apps/local').exists()
     for directory, executable in (
-        ("versions/1/web", "PicSyncra-WEB"),
-        ("versions/1/migrator", "PicSyncra-Migrator"),
-        ("versions/1/local", "PicSyncra"),
+        (f"module-sets/{layout['base']}/apps/web", "PicSyncra-WEB"),
+        (f"module-sets/{layout['base']}/apps/migrator", "PicSyncra-Migrator"),
+        (f"module-sets/{layout['local']}/apps/local", "PicSyncra"),
         ("helper", "PicSyncra-SetupHelper"),
     ):
         assert (output / directory / f"{executable}.exe").is_file()
         (output / directory / "obsolete.dll").write_text("old release", encoding="utf-8")
     run_build()
     for directory, executable in (
-        ("versions/1/web", "PicSyncra-WEB"),
-        ("versions/1/migrator", "PicSyncra-Migrator"),
-        ("versions/1/local", "PicSyncra"),
+        (f"module-sets/{layout['base']}/apps/web", "PicSyncra-WEB"),
+        (f"module-sets/{layout['base']}/apps/migrator", "PicSyncra-Migrator"),
+        (f"module-sets/{layout['local']}/apps/local", "PicSyncra"),
         ("helper", "PicSyncra-SetupHelper"),
     ):
         bundle = output / directory
@@ -118,7 +130,7 @@ def test_installed_build_installs_web_and_optional_ocr_dependencies_before_packa
 
     assert "-r requirements-web.txt" in source
     assert "-r requirements-vision.txt" in source
-    assert source.index("requirements-vision.txt") < source.index("installer/ocr.spec")
+    assert source.index("requirements-vision.txt") < source.index("Build-Onedir 'PicSyncra-OCR'")
     assert "PADDLE_PDX_CACHE_HOME" in source
     assert "available_ocr_profiles" in source
 

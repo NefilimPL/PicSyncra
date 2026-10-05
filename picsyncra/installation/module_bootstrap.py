@@ -63,12 +63,12 @@ class SelectedModuleFinder(importlib.abc.MetaPathFinder):
         raise ImportError(f'Brak {fullname} w wybranym zestawie; wymagane odzyskanie instalacji.')
 
 
-def bootstrap_installed_modules(context=None):
+def bootstrap_installed_modules(context=None, *, selected=None):
     if context is None:
         from ..install_paths import resolve_install_context
         context = resolve_install_context(Path(sys.executable))
     if context is None: raise RuntimeError('Host modułów wymaga zarejestrowanej instalacji.')
-    selected = read_module_set(context)
+    selected = selected or read_module_set(context)
     verify_module_set_files(context, selected)
     if any(name.startswith('picsyncra.') and not _stable(name) for name in sys.modules):
         raise ImportError('Kod aplikacji załadowano przed wyborem zestawu modułów.')

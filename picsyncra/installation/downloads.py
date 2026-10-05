@@ -16,7 +16,7 @@ from typing import Protocol
 from urllib.parse import urlparse
 from urllib.request import HTTPSHandler, HTTPRedirectHandler, Request, build_opener
 
-from ..brand import GITHUB_OWNER, GITHUB_REPOSITORY
+from .repository import GITHUB_OWNER, GITHUB_REPOSITORY
 from .contracts import ComponentRef, ReleaseChoice
 
 

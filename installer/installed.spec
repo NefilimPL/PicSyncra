@@ -9,7 +9,7 @@ from PyInstaller.utils.hooks import collect_all
 from pathlib import Path
 
 
-datas, binaries, hiddenimports = collect_all("picsyncra")
+datas, binaries, hiddenimports = [], [], []
 certifi_datas, certifi_binaries, certifi_hiddenimports = collect_all("certifi")
 datas += certifi_datas
 binaries += certifi_binaries
