@@ -122,6 +122,10 @@ class ModuleExecutor:
         record.update(changes, state=state)
         atomic_json(self.path, record, replace=True)
 
+    def clear_maintenance(self):
+        for name in ('module-maintenance-request.json', 'module-maintenance-ready.json'):
+            safe_path(self.context.state_root, name).unlink(missing_ok=True)
+
     def execute(self, plan, *, restore_backup_id=None, acknowledge_data_loss=False):
         if plan.conflicts:
             raise ModuleExecutionError('Plan zawiera konflikty zgodności.')
@@ -138,12 +142,15 @@ class ModuleExecutor:
             if plan.migration_ids and self.migrate is None:
                 raise ModuleExecutionError('Brak zweryfikowanego wykonawcy migracji bazy.')
             if restore_backup_id: verified_backup(self.context, restore_backup_id)
+            from .module_preflight import check_operation_preflight
+            check_operation_preflight(self.context, plan.target, active, self.content)
             marker = json.loads(safe_path(self.context.program_root, 'active.json').read_text(encoding='utf-8'))
             record = dict(operation_id=plan.plan_id, action=plan.action, previous=module_set_payload(active),
                           previous_marker=marker, target=module_set_payload(plan.target), backup_id=None,
                           data_changed=False, backend_was_running=bool(self.controller.snapshot()['backend_running']), error=None)
             self._write(record, 'downloading')
             try:
+                self.content.seed(active, allow_incomplete=True)
                 self.content.assemble(plan.target)
                 self._write(record, 'draining')
                 self.quiesce(plan.plan_id)
@@ -152,6 +159,7 @@ class ModuleExecutor:
                 _assert_database_idle(self.context.database_path)
                 # Schema may have changed while downloading/draining.
                 if self.revalidate: self.revalidate(plan, restore_backup_id)
+                check_operation_preflight(self.context, plan.target, active, self.content)
                 self._write(record, 'backing_up')
                 receipt = create_operation_backup(self.context, plan.plan_id)
                 self._write(record, 'installing', backup_id=receipt.backup_id)
@@ -168,6 +176,7 @@ class ModuleExecutor:
                 self.controller.start_backend()
                 if not self.healthy(): raise ModuleExecutionError('Nowy backend nie przeszedł kontroli działania.')
                 self._write(record, 'committed')
+                self.clear_maintenance()
             except Exception as exc:
                 self._rollback(record, str(exc))
             return {k: record[k] for k in ('operation_id', 'state', 'action', 'error')}
@@ -180,6 +189,7 @@ class ModuleExecutor:
             if not record['data_changed'] and current_marker == record['previous_marker']:
                 # A download or drain failure has not touched application state.
                 # Do not terminate a backend whose writers could still be busy.
+                self.clear_maintenance()
                 if record['backend_was_running'] and not self.controller.snapshot()['backend_running']:
                     self.controller.start_backend()
                 self._write(record, 'rolled_back')
@@ -193,15 +203,34 @@ class ModuleExecutor:
             if record['data_changed']:
                 if not record['backup_id']: raise ModuleExecutionError('Brak kopii do odzyskania danych.')
                 restore_backup(self.context, record['backup_id'])
+            self.content.assemble(previous)
             atomic_json(safe_path(self.context.program_root, 'active.json'), marker, replace=True)
-            if record['backend_was_running']: self.controller.start_backend()
+            self.clear_maintenance()
+            if record['backend_was_running']:
+                self.controller.start_backend()
+                if not self.healthy(): raise ModuleExecutionError('Poprzedni backend nie przeszedł kontroli po odzyskaniu danych.')
             self._write(record, 'rolled_back')
         except Exception as exc:
+            if record['data_changed']:
+                try:
+                    # Failed validation must not leave unvalidated selected code
+                    # serving users. The controller can terminate only its job.
+                    self.controller.stop_backend(force=True)
+                except Exception as stop_error:
+                    exc = ModuleExecutionError(f'{exc}; zatrzymanie niezdatnego backendu: {stop_error}')
             self._write(record, 'recovery_required', error=f'{error}; odzyskiwanie: {exc}')
 
     def recover(self):
+        record = self.status()
+        if not record or record['state'] in {'committed', 'rolled_back', 'failed'}:
+            # A healthy standalone app may hold the lifetime lease. There is no
+            # transaction to recover, and autostart preferences must survive.
+            self.clear_maintenance()
+            return None
         with installation_lock(self.context):
             record = self.status()
-            if not record or record['state'] in {'committed', 'rolled_back', 'failed'}: return None
+            if not record or record['state'] in {'committed', 'rolled_back', 'failed'}:
+                self.clear_maintenance()
+                return None
             self._rollback(record, 'Operacja została przerwana; przywracanie poprzedniego zestawu.')
             return record['state']

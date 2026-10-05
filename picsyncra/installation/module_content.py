@@ -56,16 +56,32 @@ class ModuleContentStore:
             temporary.unlink(missing_ok=True)
         return digest
 
-    def seed(self, selected: ActiveModuleSet) -> None:
+    def local_hashes(self, selected: ActiveModuleSet) -> frozenset[str]:
+        root = module_set_root(self.context, selected)
+        verified = set()
+        for module in selected.modules:
+            for file in module.files:
+                try:
+                    source = safe_path(root, file.path)
+                    if source.is_file() and source.stat().st_size == file.size and _digest(source) == file.sha256:
+                        verified.add(file.sha256)
+                except (OSError, ValueError): continue
+        return frozenset(verified)
+
+    def seed(self, selected: ActiveModuleSet, *, allow_incomplete=False) -> None:
         """Import an installed set without fetching historical releases."""
         root = module_set_root(self.context, selected)
         for module in selected.modules:
             for file in module.files:
-                source = safe_path(root, file.path)
+                try:
+                    source = safe_path(root, file.path)
+                    valid = source.is_file() and source.stat().st_size == file.size and _digest(source) == file.sha256
+                except (OSError, ValueError): valid = False
                 destination = safe_path(self.root, file.sha256)
                 if destination.is_file() and destination.stat().st_size == file.size and _digest(destination) == file.sha256:
                     continue
-                if source.stat().st_size != file.size or _digest(source) != file.sha256:
+                if not valid:
+                    if allow_incomplete: continue
                     raise ModuleContentError('Lokalny plik modułu został zmieniony.')
                 temporary = safe_path(self.root, uuid4().hex + '.part')
                 try:

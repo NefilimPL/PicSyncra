@@ -87,7 +87,12 @@ def read_module_set(context: InstallContext) -> ActiveModuleSet:
             raise ModuleStateError('This installation requires the complete module-enabled installer upgrade.')
         if not isinstance(marker['set_id'], str) or not re.fullmatch('[a-f0-9]{64}', marker['set_id']):
             raise ModuleStateError('Invalid module set marker.')
-        selected = parse_module_set(_read(safe_path(context.program_root, f"sets/{marker['set_id']}/module-set.json")))
+        metadata = safe_path(context.program_root, f"sets/{marker['set_id']}/module-set.json")
+        if not metadata.exists():
+            # Recovery metadata is protected separately from application payloads.
+            # Corrupt existing metadata is rejected rather than bypassed.
+            metadata = safe_path(context.state_root, f"module-set-metadata/{marker['set_id']}.json")
+        selected = parse_module_set(_read(metadata))
         if selected.set_id != marker['set_id'] or selected.release_id != marker['release_id'] or type(marker['revision']) is not int or selected.revision != marker['revision']:
             raise ModuleStateError('Installed module marker does not match its set.')
         return selected
@@ -137,6 +142,12 @@ def activate_module_set(context: InstallContext, target: ActiveModuleSet, *, exp
         if parse_module_set(_read(metadata)) != target:
             raise ModuleStateError('Selected module metadata changed.')
         verify_module_set_files(context, target)
+        recovery_metadata = safe_path(context.state_root, f'module-set-metadata/{target.set_id}.json')
+        if recovery_metadata.exists():
+            if parse_module_set(_read(recovery_metadata)) != target:
+                raise ModuleStateError('Recovery module metadata changed.')
+        else:
+            atomic_json(recovery_metadata, module_set_payload(target))
         atomic_json(safe_path(context.program_root, 'active.json'),
                     dict(schema=2, installation_id=context.installation_id, release_id=target.release_id,
                          set_id=target.set_id, revision=target.revision), replace=True)

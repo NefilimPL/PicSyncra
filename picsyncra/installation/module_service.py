@@ -9,6 +9,7 @@ from urllib.parse import quote
 from .controller_version import CONTROLLER_VERSION
 from .database import inspect_database
 from .module_content import ModuleContentStore
+from .module_configuration import inspect_configuration
 from .module_contracts import ModuleEnvironment, ModulePlan, MigrationStep
 from .module_definition import module_definitions
 from .module_compatibility import check_module_compatibility
@@ -53,12 +54,41 @@ class ModuleService:
             if value in {'stable', 'dev'}: return value
         return 'stable'
 
+    def backend_start_allowed(self):
+        try:
+            status = self.executor.status()
+            return not self.busy and (not status or status['state'] in {'committed', 'rolled_back', 'failed'})
+        except (OSError, ValueError, KeyError):
+            return False
+
+    def recover(self):
+        with self._lock:
+            if self.busy: raise ModuleExecutionError('Inna operacja modułów jest w toku.')
+            status = self.executor.status()
+            if not status or status['state'] in {'committed', 'rolled_back', 'failed'}:
+                raise ModuleExecutionError('Brak przerwanej operacji do odzyskania.')
+            operation_id = status['operation_id']
+            self._load_plan(operation_id)
+            self.busy = True
+        def work():
+            try:
+                self.executor.recover()
+            finally:
+                with self._lock: self.busy = False
+        self.schedule(work)
+        return dict(operation_id=operation_id, state='accepted', action='recover', error=None)
+
     def _environment(self, restore_backup_id=None):
         inspection = inspect_database(self.context.database_path)
         if not inspection.integrity_ok or not inspection.is_picsyncra:
             raise ModuleExecutionError('Baza PicSyncra nie przeszła sprawdzania spójności.')
-        schema = verified_backup(self.context, restore_backup_id)[1] if restore_backup_id else inspection.schema_version
-        return ModuleEnvironment(schema, 1, RUNTIME_ABI, CONTROLLER_VERSION, LAUNCHER_VERSION)
+        if restore_backup_id:
+            backup, schema = verified_backup(self.context, restore_backup_id)
+            config_schema = inspect_configuration(safe_path(backup, 'config'))
+        else:
+            schema = inspection.schema_version
+            config_schema = inspect_configuration(self.context.config_root)
+        return ModuleEnvironment(schema, config_schema, RUNTIME_ABI, CONTROLLER_VERSION, LAUNCHER_VERSION)
 
     def _catalog(self):
         self.entries = self.source.load(self._channel())
@@ -106,14 +136,14 @@ class ModuleService:
 
     def prepare(self, *, action, selected, excluded, restore_backup_id=None):
         active = read_module_set(self.context)
-        # Bootstrap the cache from the existing installation. A broken current
-        # file must not prevent recovery from other verified cached content.
-        try: self.content.seed(active)
-        except (OSError, RuntimeError): pass
         releases = self._catalog()
         environment = self._environment(restore_backup_id)
         plan = plan_module_operation(active, releases, environment, action=action,
-                                      selected=selected, excluded=frozenset(excluded), available_hashes=self.content.available_hashes())
+                                      selected=selected, excluded=frozenset(excluded),
+                                      available_hashes=self.content.available_hashes() | self.content.local_hashes(active))
+        if not plan.conflicts:
+            from .module_preflight import check_operation_preflight
+            check_operation_preflight(self.context, plan.target, active, self.content)
         migrations=[]
         if plan.migration_ids:
             source=next(r for r in releases if r.release_id==plan.target.release_id)
@@ -193,7 +223,9 @@ class ModuleService:
             except Exception as exc:
                 result = dict(operation_id=plan_id, state='failed', action=plan.action, error=str(exc))
             finally:
-                safe_path(self.context.state_root, 'module-maintenance-request.json').unlink(missing_ok=True)
+                status = self.executor.status()
+                if not status or status['state'] in {'committed', 'rolled_back', 'failed'}:
+                    self.executor.clear_maintenance()
                 with self._lock: self.busy = False
             atomic_json(operation_path, result, replace=True)
         self.schedule(work)

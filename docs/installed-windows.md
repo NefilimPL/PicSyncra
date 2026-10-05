@@ -44,6 +44,13 @@ pokazuje wersje i wymagania. **Nie aktualizuj** zachowuje wybory i instalację.
 **Aktualizuj wszystko** przygotowuje nowy, ponownie sprawdzany plan; blokady
 są usuwane dopiero po jego pomyślnym wykonaniu. Nie omija to kontroli bazy.
 
+Przed pobieraniem sprawdzane jest miejsce na pliki, kopię danych i
+odzyskiwanie oraz możliwość zapisu we wszystkich lokalizacjach instalacji.
+LOCAL i Migrator blokują zmianę modułów przez cały czas działania — zamknij
+te aplikacje przed aktualizacją lub cofaniem. Wyświetlony błąd zachowuje
+przygotowane wybory. Potwierdzenie **Aktualizuj wszystko** wymienia również
+moduły, dla których usuwa blokady lub pomija przygotowane wybory cofnięcia.
+
 Aktualizacja przechodzi bezpośrednio do docelowego wydania. Każdy plik ma
 właściciela, rozmiar i SHA256; zweryfikowane pliki są ponownie używane z
 lokalnego cache. Pobierane są tylko brakujące bajty, jako zakresy HTTP z
@@ -86,6 +93,18 @@ potrzebna jest wcześniejsza baza, wybierz zweryfikowaną kopię w polu
 wykonaniem wymaga osobnego potwierdzenia utraty nowszych danych. Nieudana
 operacja i przerwanie zasilania uruchamiają odzyskanie poprzedniego zestawu,
 blokad oraz zmienionych danych z obowiązkowej kopii sprzed operacji.
+
+Po nieudanym odzyskiwaniu uruchamianie backendu pozostaje zablokowane.
+Przycisk **Ponów odzyskiwanie** w launcherze ponawia tę operację przez
+kontroler. Kontroler działa także wtedy, gdy pliki WEB są uszkodzone lub
+brakuje aktywnego katalogu zestawu. Chroniona kopia metadanych umożliwia
+odtworzenie zestawu z kompletnego zweryfikowanego cache; brakujące bajty
+wymagają dostępu do ich Release. Niepodpisane pliki nie zastępują cache.
+
+Historyczna konfiguracja JSON ma format 1. Kontroler sprawdza poprawność
+zarządzanych dokumentów JSON, a jawna zmiana formatu jest opisana przez
+`config/module-config-schema.json` z polem `schema`. Weryfikacja wybranej
+kopii odczytuje format z tej kopii, nie z aktualnej konfiguracji.
 
 Jeżeli OCR był już doinstalowany, aktualizacja uwzględnia jego zgodność,
 pobierając wyłącznie zmienione pliki runtime lub modeli. Instalacja bez OCR

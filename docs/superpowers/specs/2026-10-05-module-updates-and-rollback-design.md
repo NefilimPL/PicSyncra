@@ -1,6 +1,6 @@
 # Aktualizacje modułów i zbiorcze cofanie wersji
 
-Status: zatwierdzony przez użytkownika; implementacja i odbiór na gałęzi dev2.
+Status: zatwierdzony przez użytkownika; implementacja i lokalny odbiór zakończone na dev2. Publikacja podpisanego wydania jest osobnym krokiem.
 Data: 2026-10-05.
 
 Dokument rozszerza projekt instalowanych aktualizacji z 2026-09-15. Zastępuje

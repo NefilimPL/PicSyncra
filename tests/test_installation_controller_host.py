@@ -259,3 +259,25 @@ def test_active_backend_uses_verified_schema_two_set(tmp_path):
     store=ModuleContentStore(context); store.import_bytes(b'code'); store.assemble(selected)
     activate_module_set(context,selected,expected_revision=0)
     assert active_web_executable(context)==module_set_root(context,selected)/'apps/web/PicSyncra-WEB.exe'
+
+
+def test_broken_autostart_web_keeps_recovery_pipe_available(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from picsyncra.installation import controller_host, module_service
+    value = _context(tmp_path)
+    served = []
+    class BrokenSupervisor:
+        def __init__(self, context): pass
+        def autostart_enabled(self): return True
+        def listener_owner(self, port): return None
+        def start_backend(self): raise controller_host.ControllerHostError('Missing selected WEB executable')
+        def shutdown(self): served.append('shutdown')
+    class RecoveryPipe:
+        def __init__(self, **kwargs): pass
+        def serve_forever(self): served.append('pipe')
+    monkeypatch.setattr(controller_host, 'load_registered_install_context', lambda identifier: value)
+    monkeypatch.setattr(controller_host, 'ActiveBackendSupervisor', BrokenSupervisor)
+    monkeypatch.setattr(controller_host, 'ControllerPipeHost', RecoveryPipe)
+    monkeypatch.setattr(module_service, 'ModuleService', lambda *args: SimpleNamespace(executor=SimpleNamespace(recover=lambda: None)))
+    assert controller_host.run_controller(value.installation_id) == 0
+    assert served == ['pipe', 'shutdown']

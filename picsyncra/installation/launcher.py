@@ -99,6 +99,9 @@ class InstallationControlClient:
     def module_catalog(self):
         return self._module_request('module_catalog', {})
 
+    def module_recover(self):
+        return self._module_request('module_recover', {})
+
     def module_plan(self, *, action, selected, excluded, restore_backup_id=None):
         return self._module_request('module_plan', dict(action=action, selected=selected, excluded=excluded, restore_backup_id=restore_backup_id))
 

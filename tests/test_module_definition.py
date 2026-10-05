@@ -15,6 +15,12 @@ def test_independent_service_ownership():
     assert module_owner('picsyncra/web/static/ocr-diagnostics.js') == 'ocr_tester'
     assert module_owner('picsyncra/web/static/app.js') == 'web_ui'
     assert module_owner('picsyncra/data_store.py') == 'core'
+    assert module_owner('picsyncra/offline_migrator_gui.py') == 'migrator'
+    assert module_owner('picsyncra/offline_legacy_sqlite_migrator.py') == 'migrator'
+    assert module_owner('picsyncra/offline_legacy_profile_migrator.py') == 'migrator'
+    assert module_owner('picsyncra/offline_migrator_processes.py') == 'migrator'
+    assert module_owner('picsyncra/app.py') == 'local'
+    assert module_owner('picsyncra/desktop_data_loader.py') == 'local'
 
 
 def test_stable_infrastructure_and_generators_are_not_payload():

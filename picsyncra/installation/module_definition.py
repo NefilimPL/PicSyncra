@@ -55,6 +55,10 @@ def module_owner(relative_path: str) -> str:
         return {'slot-ui.js': 'slots', 'settings-ui.js': 'settings',
                 'ocr-diagnostics.js': 'ocr_tester', 'ocr-tester-ui.js': 'ocr_tester'}.get(PurePosixPath(value).name, 'web_ui')
     name = PurePosixPath(value).name
+    if value.startswith(('picsyncra/offline_migrator_', 'picsyncra/offline_legacy_')):
+        return 'migrator'
+    if value in {'picsyncra/app.py', 'picsyncra/desktop_data_loader.py'}:
+        return 'local'
     if value in {'picsyncra/settings.py', 'picsyncra/storage_settings.py'}:
         return 'settings'
     if name.startswith('pimcore_') and value.startswith(('picsyncra/services/', 'picsyncra/pimcore_')):

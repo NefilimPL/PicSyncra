@@ -78,6 +78,15 @@ def test_controller_can_resolve_exact_registered_context_without_a_bundle_execut
     )
 
 
+def test_recovery_registration_survives_missing_modular_payload_directory(tmp_path, monkeypatch):
+    registration, executable, program, state, database = _registered_layout(tmp_path)
+    (program / 'active.json').write_text(json.dumps(dict(schema=2, installation_id='primary',
+        release_id=42, set_id='a'*64, revision=1)))
+    monkeypatch.setattr(install_paths, '_read_hklm_registrations', lambda: (registration,))
+    assert install_paths.load_registered_install_context('primary') is not None
+    assert install_paths.resolve_install_context(executable) is None
+
+
 def test_missing_registration_keeps_portable_or_development_mode(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

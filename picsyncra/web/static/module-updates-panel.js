@@ -23,7 +23,7 @@
     const controls = node('div', undefined, 'module-updates-controls');
     const conflicts = node('div', undefined, 'module-updates-conflicts');
     const selected = new Map(), rows = new Map();
-    let busy = false, timer = null, operationId = null, restoreBackupId = null;
+    let busy = false, timer = null, operationId = null, restoreBackupId = null, terminalMessage = null;
     function button(label, action) {
       const item = node('button', label); item.type = 'button';
       item.addEventListener('click', () => action()); return item;
@@ -89,8 +89,8 @@
         }
         backups.value = restoreBackupId || '';
         ocr.hidden = snapshot.ocr_installed === true;
-        if (!operationId) status.textContent = snapshot.offline ? 'Katalog lokalny: Internet niedostępny. Brakujące pliki wymagają połączenia.' :
-          snapshot.blocked_releases?.length && !snapshot.modules.some(m => m.latest) ? 'Brak kompletnego podpisanego wydania modułów w Release.' : '';
+        if (!operationId) status.textContent = terminalMessage || (snapshot.offline ? 'Katalog lokalny: Internet niedostępny. Brakujące pliki wymagają połączenia.' :
+          snapshot.blocked_releases?.length && !snapshot.modules.some(m => m.latest) ? 'Brak kompletnego podpisanego wydania modułów w Release.' : '');
         synchronize();
       } catch (error) { status.textContent = error.message; }
     }
@@ -109,7 +109,11 @@
           selected: action === 'rollback_modules' ? Object.fromEntries(selected) : {},
           excluded: action === 'update' ? [...selected.keys()] : [], restore_backup_id:restoreBackupId});
         if (plan.conflicts.length) { conflictDialog(plan); return plan; }
-        const changes = (plan.changes || []).map(item => `${item.module_id}: ${item.current || 'brak'} → ${item.target}`).join('\n');
+        let changes = (plan.changes || []).map(item => `${item.module_id}: ${item.current || 'brak'} → ${item.target}`).join('\n');
+        if (action === 'update_all') {
+          const overridden = new Set([...selected.keys(), ...[...rows.values()].filter(row => row.module.pinned).map(row => row.module.module_id)]);
+          if (overridden.size) changes += `\nAktualizacje zostaną włączone, a wybory cofnięcia pominięte dla: ${[...overridden].sort().join(', ')}.`;
+        }
         if (!await confirm(`${changes || 'Zgodny zestaw modułów.'}\nDo pobrania: ${plan.download_bytes.toLocaleString('pl-PL')} bajtów.\nZatwierdzić operację?`)) return plan;
         let acknowledged = false;
         if (restoreBackupId) {
@@ -119,6 +123,7 @@
         const operation = await post(`/api/installation/module-plans/${plan.plan_id}/execute`,
           {restore_backup_id:restoreBackupId, acknowledge_data_loss:acknowledged});
         operationId = operation.operation_id;
+        terminalMessage = null;
         try { window.sessionStorage?.setItem('picsyncra-module-operation', operationId); } catch (_) {}
         poll(); return plan;
       } catch (error) { status.textContent = error.message; }
@@ -130,6 +135,7 @@
         const operation = await requestJson(`/api/installation/operations/${operationId}`);
         status.textContent = `Operacja: ${operation.state}${operation.error ? ` — ${operation.error}` : ''}`;
         if (['committed','rolled_back','failed','recovery_required'].includes(operation.state)) {
+          terminalMessage = status.textContent;
           if (operation.state === 'committed') { selected.clear(); restoreBackupId = null; }
           operationId = null; busy = false;
           try { window.sessionStorage?.removeItem('picsyncra-module-operation'); } catch (_) {}

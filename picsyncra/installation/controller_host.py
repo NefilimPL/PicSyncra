@@ -24,7 +24,7 @@ from ..install_paths import load_registered_install_context
 from .contracts import InstallContext
 from .control_pipe import NamedPipeControlServer
 from .control_protocol import ControlDispatcher
-from .controller import InstallationController
+from .controller import InstallationController, InstallationControllerError
 from .journal import OperationJournal
 from .restart_handoff import (
     RestartHandoffError,
@@ -424,13 +424,22 @@ def run_controller(installation_id: str, *, stop_requested: Callable[[], bool] |
     controller = InstallationController(context, supervisor, backend_port=8010)
     from .module_service import ModuleService
     modules = ModuleService(context, controller)
-    recovered = modules.executor.recover()
+    try:
+        recovered = modules.executor.recover()
+    except (RuntimeError, OSError, ValueError):
+        recovered = 'recovery_required'
     if recovered == 'recovery_required':
         # Keep the recovery pipe alive even if the selected application is bad.
         supervisor.set_autostart(False)
     if supervisor.autostart_enabled():
-        controller.start_backend()
-        _complete_restart_handoff(context, controller, True)
+        try:
+            controller.start_backend()
+        except (ControllerHostError, InstallationControllerError, OSError, ValueError):
+            # The stable recovery endpoint must survive a missing/corrupt WEB
+            # payload or an occupied port. Explicit starts still report failure.
+            pass
+        else:
+            _complete_restart_handoff(context, controller, True)
     dispatcher = ControlDispatcher(
         DeferredRestartController(
             controller,

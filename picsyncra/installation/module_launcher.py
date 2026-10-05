@@ -58,18 +58,24 @@ class ModuleLauncherWindow:
         self.callbacks = queue.Queue()
         self.busy = False
         self.operation_id = None
+        self.terminal_message = None
         self.app = app
         root.title('PicSyncra — launcher i odzyskiwanie modułów')
         root.geometry('1060x740')
         ttk.Label(root, text='Wybór wersji przygotowuje cofnięcie. Zatwierdza je jeden wspólny przycisk.', wraplength=1000).pack(padx=12, pady=12)
         toolbar = ttk.Frame(root); toolbar.pack(fill='x', padx=12)
         self.buttons=[]
-        for label, action in [('Uruchom panel', self.open_panel), ('Uruchom Migrator', lambda: self.open_app('migrator')),
+        actions = [('Uruchom panel', self.open_panel), ('Uruchom Migrator', lambda: self.open_app('migrator')),
                               ('Uruchom LOCAL', lambda: self.open_app('local')), ('Sprawdź wersje', self.refresh),
                               ('Aktualizuj moduły', lambda: self.prepare('update')),
                               ('Aktualizuj wszystko', lambda: self.prepare('update_all')),
-                              ('Cofnij wersję modułu', lambda: self.prepare('rollback_modules')), ('Pobierz OCR', lambda: self.prepare('install_ocr'))]:
-            button=ttk.Button(toolbar,text=label,command=action); button.pack(side='left',padx=3); self.buttons.append(button)
+                              ('Cofnij wersję modułu', lambda: self.prepare('rollback_modules')), ('Pobierz OCR', lambda: self.prepare('install_ocr')),
+                              ('Ponów odzyskiwanie', lambda: self._run(self.model.client.module_recover, self.accepted))]
+        for index, (label, action) in enumerate(actions):
+            button=ttk.Button(toolbar,text=label,command=action)
+            button.grid(row=index//3,column=index%3,padx=3,pady=3,sticky='ew'); self.buttons.append(button)
+            if label == 'Cofnij wersję modułu': self.rollback_button = button
+        for column in range(3): toolbar.columnconfigure(column,weight=1)
         self.status=tk.StringVar(value='Odczyt kontrolera…')
         ttk.Label(root,textvariable=self.status,wraplength=1000).pack(fill='x',padx=12,pady=10)
         canvas=tk.Canvas(root,highlightthickness=0)
@@ -121,6 +127,7 @@ class ModuleLauncherWindow:
             if isinstance(widget,self.ttk.Combobox): widget.configure(state='readonly')
         self.backup.configure(state='readonly')
         callback(result)
+        self.rollback_button.configure(state='disabled' if self.busy or self.operation_id or not self.model.selected else 'normal')
 
     def refresh(self): self._run(self.model.refresh,self.render)
 
@@ -130,6 +137,7 @@ class ModuleLauncherWindow:
             self.ttk.Label(self.rows,text=module['label']).grid(row=index,column=0,padx=5,pady=10,sticky='w')
             text=f"Obecna: {module['current']}  Dostępna: {module['latest'] or 'brak podpisanego wydania'}"
             if module['pinned']: text+='  [wyłączony z aktualizacji]'
+            if module['module_id'] in self.model.selected: text+='  [wybrany do cofnięcia; pomijany w aktualizacji]'
             self.ttk.Label(self.rows,text=text,wraplength=350).grid(row=index,column=1,sticky='w',padx=5)
             values={'Bez zmiany':None}
             links={}
@@ -141,7 +149,7 @@ class ModuleLauncherWindow:
             chosen=self.model.selected.get(module['module_id'])
             combo.set(next((key for key,value in values.items() if value==chosen),'Bez zmiany'))
             combo.grid(row=index,column=2,padx=5)
-            combo.bind('<<ComboboxSelected>>',lambda event,mid=module['module_id'],box=combo,options=values: self.model.select(mid,options[box.get()]))
+            combo.bind('<<ComboboxSelected>>',lambda event,mid=module['module_id'],box=combo,options=values: self.select_version(mid,options[box.get()]))
             current_link=next((v['release_url'] for v in module['versions'] if v['version_id']==module['current_id']),'')
             self.ttk.Button(self.rows,text='Wydanie na GitHub',command=lambda box=combo,urls=links,current=current_link: self.open_release(urls.get(box.get(),current))).grid(row=index,column=3,padx=5)
         self.backup_ids={'Zachowaj obecną bazę':None}
@@ -150,7 +158,12 @@ class ModuleLauncherWindow:
         self.backup.configure(values=list(self.backup_ids))
         if self.backup.get() not in self.backup_ids: self.backup.current(0)
         if not self.operation_id:
-            self.status.set('Katalog lokalny — brak Internetu. Brakujące pliki wymagają połączenia.' if snapshot.get('offline') else 'Wybierz moduły i zatwierdź operację.')
+            self.status.set(self.terminal_message or ('Katalog lokalny — brak Internetu. Brakujące pliki wymagają połączenia.' if snapshot.get('offline') else 'Wybierz moduły i zatwierdź operację.'))
+        self.rollback_button.configure(state='disabled' if self.busy or self.operation_id or not self.model.selected else 'normal')
+
+    def select_version(self,module_id,version_id):
+        self.model.select(module_id,version_id)
+        self.render(self.model.snapshot)
 
     @staticmethod
     def open_release(url):
@@ -172,6 +185,9 @@ class ModuleLauncherWindow:
             self.ttk.Button(self.conflicts,text='Nie aktualizuj',command=lambda:[widget.destroy() for widget in self.conflicts.winfo_children()]).pack(side='left')
             return
         changes='\n'.join(f"{c['module_id']}: {c['current'] or 'brak'} → {c['target']}" for c in plan['changes'])
+        if plan['action'] == 'update_all':
+            overridden = set(self.model.selected) | {m['module_id'] for m in (self.model.snapshot or {}).get('modules',[]) if m['pinned']}
+            if overridden: changes += '\nAktualizacje zostaną włączone, a wybory cofnięcia pominięte dla: ' + ', '.join(sorted(overridden)) + '.'
         if not self.messagebox.askyesno('Zatwierdź plan',f"{changes or 'Zgodny zestaw modułów.'}\nDo pobrania: {plan['download_bytes']:,} bajtów.\nZatwierdzić operację?",parent=self.root): return
         acknowledge=False
         if restore:
@@ -180,6 +196,7 @@ class ModuleLauncherWindow:
         self._run(lambda:self.model.execute(plan['plan_id'],restore_backup_id=restore,acknowledge_data_loss=acknowledge),self.accepted)
 
     def accepted(self,result):
+        self.terminal_message=None
         self.operation_id=result['operation_id']
         self.status.set('Operacja została przyjęta przez kontroler.')
         self.root.after(1000,self.poll)
@@ -192,6 +209,7 @@ class ModuleLauncherWindow:
             self.status.set('Oczekiwanie na kontroler…'); self.root.after(2000,self.poll); return
         self.status.set(f"Operacja: {result['state']} — {result.get('error') or ''}")
         if result['state'] in {'committed','rolled_back','failed','recovery_required'}:
+            self.terminal_message=self.status.get()
             if result['state']=='committed': self.model.selected.clear()
             self.operation_id=None; self.refresh()
         else: self.root.after(1500,self.poll)
@@ -201,13 +219,16 @@ class ModuleLauncherWindow:
 
     def open_app(self,app):
         def launch():
+            from .module_sessions import standalone_session
             from .module_state import read_module_set, module_set_root, verify_module_set_files
             from .module_filesystem import safe_path
-            selected=read_module_set(self.context)
-            verify_module_set_files(self.context,selected)
-            name='PicSyncra-Migrator.exe' if app=='migrator' else 'PicSyncra.exe'
-            executable=safe_path(module_set_root(self.context,selected),f'apps/{app}/{name}')
-            if not executable.is_file(): raise RuntimeError('Ten moduł nie jest zainstalowany.')
+            with standalone_session(self.context):
+                selected=read_module_set(self.context)
+                verify_module_set_files(self.context,selected)
+                name='PicSyncra-Migrator.exe' if app=='migrator' else 'PicSyncra.exe'
+                executable=safe_path(module_set_root(self.context,selected),f'apps/{app}/{name}')
+                if not executable.is_file(): raise RuntimeError('Ten moduł nie jest zainstalowany.')
+            # The child reacquires the lifetime lease before loading any app code.
             subprocess.Popen([str(executable)],cwd=executable.parent)
         self._run(launch,lambda result:self.status.set('Aplikacja została uruchomiona.'))
 

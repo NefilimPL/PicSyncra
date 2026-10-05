@@ -132,7 +132,7 @@ def _active_bundle(program_root: Path, installation_id: str) -> Path:
     return program_root / "versions" / str(_load_active_release(program_root, installation_id))
 
 
-def _registered_context(registration: Mapping[str, object]) -> InstallContext | None:
+def _registered_context(registration: Mapping[str, object], *, require_active_bundle=True) -> InstallContext | None:
     installation_id = registration.get("installation_id")
     if not _valid_installation_id(installation_id):
         return None
@@ -153,7 +153,7 @@ def _registered_context(registration: Mapping[str, object]) -> InstallContext | 
         return None
     active_bundle = _active_bundle(canonical_program_root, installation_id)
     try:
-        canonical_active_bundle = active_bundle.resolve(strict=True)
+        canonical_active_bundle = active_bundle.resolve(strict=require_active_bundle)
     except (OSError, RuntimeError):
         return None
     if not _is_within(canonical_active_bundle, canonical_program_root):
@@ -227,7 +227,7 @@ def load_registered_install_context(installation_id: str) -> InstallContext | No
         context
         for registration in _read_hklm_registrations()
         if registration.get("installation_id") == installation_id
-        for context in [_registered_context(registration)]
+        for context in [_registered_context(registration, require_active_bundle=False)]
         if context is not None
     ]
     return matches[0] if len(matches) == 1 else None
