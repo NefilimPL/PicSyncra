@@ -3,14 +3,51 @@
 from __future__ import annotations
 
 import json
+import ctypes
+import re
+import sys
 from pathlib import Path
 import sqlite3
+
+import pytest
 
 from picsyncra.installation.setup_cli import (
     PRODUCT_APP_ID,
     build_installer_layout,
     main,
 )
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows command line parsing")
+def test_controller_task_command_preserves_a_program_files_executable_path() -> None:
+    """The task action must be one argument containing a quoted EXE path."""
+    installer = (Path(__file__).parents[1] / "installer" / "PicSyncra.iss").read_text(encoding="utf-8")
+    constant = re.search(r"ControllerTaskParameters\s*=\s*'([^']+)';", installer)
+    if constant:
+        parameters = constant.group(1)
+    else:
+        line = next(line for line in installer.splitlines() if "/Create /TN" in line)
+        parameters = line.split("Parameters: ", 1)[1].split("; Flags:", 1)[0][1:-1].replace('""', '"')
+    parameters = parameters.replace("{app}", r"C:\Program Files\PicSyncra")
+    shell = ctypes.WinDLL("shell32", use_last_error=True)
+    shell.CommandLineToArgvW.argtypes = [ctypes.c_wchar_p, ctypes.POINTER(ctypes.c_int)]
+    shell.CommandLineToArgvW.restype = ctypes.POINTER(ctypes.c_wchar_p)
+    count = ctypes.c_int()
+    pointer = shell.CommandLineToArgvW("schtasks.exe " + parameters, ctypes.byref(count))
+    assert pointer
+    try:
+        arguments = [pointer[index] for index in range(count.value)]
+    finally:
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.LocalFree.argtypes = [ctypes.c_void_p]
+        kernel.LocalFree.restype = ctypes.c_void_p
+        kernel.LocalFree(pointer)
+    assert arguments == [
+        "schtasks.exe", "/Create", "/TN", "PicSyncra Controller primary-installation",
+        "/SC", "ONSTART", "/RU", "SYSTEM", "/RL", "HIGHEST", "/TR",
+        '"C:\\Program Files\\PicSyncra\\controller\\PicSyncra-Controller.exe" --installation-id primary-installation',
+        "/F",
+    ]
 
 
 def test_base_installer_contains_required_apps_but_not_ocr_or_local() -> None:
@@ -56,7 +93,11 @@ def test_inno_base_package_uses_the_setup_mutex_and_preserves_machine_data() -> 
 
     assert "SetupMutex=Global\\PicSyncra.Setup" in installer
     assert "CreateMutex(" not in installer
-    assert "{commonappdata}\\PicSyncra\\primary-installation\\config" in installer
+    assert "StateRoot + '\\config'" in installer
+    assert (
+        'Name: "{commonappdata}\\PicSyncra\\primary-installation\\config"'
+        not in installer
+    )
     assert "{commonappdata}\\PicSyncra\\primary-installation\\data" in installer
     assert "Flags: uninsneveruninstall" in installer
     assert 'Subkey: "SOFTWARE\\PicSyncra\\Installations\\primary-installation"' in installer
@@ -99,7 +140,9 @@ def test_installed_build_keeps_pyinstaller_specs_as_versioned_source_files() -> 
     assert "!installer/installed.spec" in ignored
     assert "!installer/ocr.spec" in ignored
     assert "installer/installed.spec" in build_script
-    assert "installer/ocr.spec" in build_script
+    assert (root / 'installer/module-host.spec').is_file()
+    assert '!installer/module-host.spec' in ignored
+    assert 'installer/module-host.spec' in build_script
 
 
 def test_inno_collects_database_and_optional_config_through_protected_requests() -> None:
@@ -126,6 +169,27 @@ def test_inno_json_escaping_mutates_the_request_text_not_the_change_count() -> N
 
     assert "Result := StringChangeEx" not in installer
     assert "StringChangeEx(Result, '\\', '\\\\', True)" in installer
+
+
+def test_inno_installer_emits_a_named_package_and_makes_config_import_opt_in() -> None:
+    """Catches forced config imports or setup executables written outside build output."""
+
+    installer = (
+        Path(__file__).resolve().parents[1] / "installer" / "PicSyncra.iss"
+    ).read_text(encoding="utf-8")
+
+    assert "OutputDir={#BuildRoot}" in installer
+    assert "OutputBaseFilename=PicSyncra-Setup-{#ReleaseId}" in installer
+    assert "SetupIconFile={#BuildRoot}\\PicSyncra-Setup.ico" in installer
+    assert 'RunOnceId: "stop-controller"' in installer
+    assert 'RunOnceId: "delete-controller-task"' in installer
+    assert "ConfigurationImportPage := CreateInputOptionPage" in installer
+    assert "ConfigurationImportPage.Values[0] := False;" in installer
+    assert "not ConfigurationImportPage.Values[0]" in installer
+    assert (
+        'Name: "{commonappdata}\\PicSyncra\\primary-installation\\config"'
+        not in installer
+    )
 
 
 def test_import_config_cli_reads_secret_material_only_from_a_request_file(

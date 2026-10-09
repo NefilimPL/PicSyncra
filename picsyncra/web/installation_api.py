@@ -27,6 +27,7 @@ class InstallationApiDependencies:
     set_autostart: Callable[[bool], dict[str, Any]]
     heartbeat: Callable[[str, str], dict[str, Any]]
     public_status: Callable[[], dict[str, Any]]
+    module_client: Any = None
 
 
 def _require_installed(dependencies: InstallationApiDependencies) -> None:
@@ -65,6 +66,44 @@ def _operation(payload: object) -> OperationRequest:
 def build_installation_router(dependencies: InstallationApiDependencies) -> APIRouter:
     """Build installed-update routes without coupling portable WEB to updates."""
     router = APIRouter()
+
+    def modules(request, *, mutation=False):
+        _require_installed(dependencies)
+        dependencies.require_admin(request)
+        if mutation: dependencies.require_csrf(request)
+        if dependencies.module_client is None:
+            raise HTTPException(status_code=409, detail='Wymagany pełny instalator z obsługą modułów.')
+        return dependencies.module_client
+
+    @router.get('/api/installation/modules')
+    def installation_modules(request: Request):
+        client = modules(request)
+        try: return client.module_catalog()
+        except RuntimeError as exc: raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @router.post('/api/installation/module-plans')
+    async def installation_module_plan(request: Request):
+        client = modules(request, mutation=True)
+        from ..installation.control_protocol import validate_module_payload
+        try:
+            payload = await request.json()
+            validate_module_payload('module_plan', payload)
+            return client.module_plan(**payload)
+        except ValueError as exc: raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc: raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @router.post('/api/installation/module-plans/{plan_id}/execute')
+    async def installation_module_execute(request: Request, plan_id: str):
+        client = modules(request, mutation=True)
+        from ..installation.control_protocol import validate_module_payload
+        try:
+            body = await request.json()
+            if not isinstance(body, dict) or set(body) != {'restore_backup_id', 'acknowledge_data_loss'}:
+                raise ValueError('Nieprawidłowe zatwierdzenie planu.')
+            validate_module_payload('module_execute', dict(body, plan_id=plan_id))
+            return JSONResponse(client.module_execute(plan_id, **body), status_code=202)
+        except ValueError as exc: raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc: raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @router.get("/api/installation")
     def installation_status(request: Request) -> dict[str, Any]:
@@ -119,9 +158,12 @@ def build_installation_router(dependencies: InstallationApiDependencies) -> APIR
         dependencies.require_csrf(request)
         payload = await request.json()
         channel = payload.get("channel") if isinstance(payload, dict) else None
-        if channel not in {"stable", "dev"}:
+        if not isinstance(channel,str) or channel not in {"stable", "dev"}:
             raise HTTPException(status_code=400, detail="Niepoprawny kanal wydan.")
-        return dependencies.change_channel(channel)
+        try:
+            return dependencies.change_channel(channel)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @router.post("/api/installation/autostart")
     async def installation_autostart(request: Request) -> dict[str, Any]:

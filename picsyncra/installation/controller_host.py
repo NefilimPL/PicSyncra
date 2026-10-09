@@ -24,7 +24,7 @@ from ..install_paths import load_registered_install_context
 from .contracts import InstallContext
 from .control_pipe import NamedPipeControlServer
 from .control_protocol import ControlDispatcher
-from .controller import InstallationController
+from .controller import InstallationController, InstallationControllerError
 from .journal import OperationJournal
 from .restart_handoff import (
     RestartHandoffError,
@@ -79,7 +79,22 @@ def active_web_executable(context: InstallContext) -> Path:
         program_root = Path(context.program_root).resolve(strict=True)
         release_id = read_active_release(context)
         bundle = program_root / "versions" / str(release_id)
+        bundle_parent = program_root / 'versions'
         executable = bundle / "web" / "PicSyncra-WEB.exe"
+        marker = json.loads((program_root / 'active.json').read_text(encoding='utf-8'))
+        if marker.get('schema') == 2:
+            from .module_state import read_module_set, module_set_root
+            from .module_filesystem import safe_path
+            selected = read_module_set(context)
+            bundle = module_set_root(context, selected)
+            bundle_parent = program_root / 'sets'
+            executable = safe_path(bundle, 'apps/web/PicSyncra-WEB.exe')
+            import hashlib
+            descriptor = next((f for m in selected.modules for f in m.files if f.path == 'apps/web/PicSyncra-WEB.exe'), None)
+            if descriptor is None: raise ControllerHostError('Brak hosta WEB w aktywnym zestawie.')
+            with executable.open('rb') as handle:
+                if executable.stat().st_size != descriptor.size or hashlib.file_digest(handle, 'sha256').hexdigest() != descriptor.sha256:
+                    raise ControllerHostError('Host WEB ma niezgodną sumę kontrolną.')
         resolved_bundle = bundle.resolve(strict=True)
         resolved_executable = executable.resolve(strict=True)
     except (ActiveReleaseError, OSError, RuntimeError) as exc:
@@ -90,7 +105,7 @@ def active_web_executable(context: InstallContext) -> Path:
         or executable.is_symlink()
         or not resolved_bundle.is_dir()
         or not resolved_executable.is_file()
-        or not _within(resolved_bundle, program_root / "versions")
+        or not _within(resolved_bundle, bundle_parent)
         or not _within(resolved_executable, resolved_bundle)
         or resolved_executable.name.lower() != "picsyncra-web.exe"
     ):
@@ -114,7 +129,7 @@ class _WindowsKillOnCloseJob:
             raise ControllerHostError("pywin32 job support is required for the controller.") from exc
         self._win32api = win32api
         self._win32job = win32job
-        self._handle = win32job.CreateJobObject(None, None)
+        self._handle = win32job.CreateJobObject(None, "")
         information = win32job.QueryInformationJobObject(
             self._handle, win32job.JobObjectExtendedLimitInformation
         )
@@ -407,9 +422,24 @@ def run_controller(installation_id: str, *, stop_requested: Callable[[], bool] |
         raise ControllerHostError("The registered installation is unavailable.")
     supervisor = ActiveBackendSupervisor(context)
     controller = InstallationController(context, supervisor, backend_port=8010)
+    from .module_service import ModuleService
+    modules = ModuleService(context, controller)
+    try:
+        recovered = modules.executor.recover()
+    except (RuntimeError, OSError, ValueError):
+        recovered = 'recovery_required'
+    if recovered == 'recovery_required':
+        # Keep the recovery pipe alive even if the selected application is bad.
+        supervisor.set_autostart(False)
     if supervisor.autostart_enabled():
-        controller.start_backend()
-        _complete_restart_handoff(context, controller, True)
+        try:
+            controller.start_backend()
+        except (ControllerHostError, InstallationControllerError, OSError, ValueError):
+            # The stable recovery endpoint must survive a missing/corrupt WEB
+            # payload or an occupied port. Explicit starts still report failure.
+            pass
+        else:
+            _complete_restart_handoff(context, controller, True)
     dispatcher = ControlDispatcher(
         DeferredRestartController(
             controller,
@@ -417,6 +447,7 @@ def run_controller(installation_id: str, *, stop_requested: Callable[[], bool] |
         ),
         installation_id=context.installation_id,
         authorized_identities={"S-1-5-18", "S-1-5-32-544"},
+        module_service=modules,
     )
     try:
         ControllerPipeHost(

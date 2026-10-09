@@ -50,6 +50,16 @@ def _payload(context: InstallContext, path: Path) -> dict[str, object]:
 def read_active_release(context: InstallContext) -> int:
     """Read the active bundle identifier without accepting a foreign marker."""
     root = _root(context)
+    try:
+        candidate = json.loads((root / "active.json").read_text(encoding="utf-8"))
+        if isinstance(candidate, dict) and candidate.get("schema") == 2:
+            from .module_state import read_module_set, ModuleStateError
+            try:
+                return read_module_set(context).release_id
+            except ModuleStateError as exc:
+                raise ActiveReleaseError(str(exc)) from exc
+    except (OSError, ValueError):
+        pass
     return _release_id(_payload(context, root / "active.json").get("release_id"))
 
 

@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import re
 from typing import Any
-import winerror
 
 from .control_protocol import ControlDispatcher, ControlProtocolError, MAX_MESSAGE_BYTES
 
@@ -13,7 +12,7 @@ from .control_protocol import ControlDispatcher, ControlProtocolError, MAX_MESSA
 _INSTALLATION_ID = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,62}[A-Za-z0-9])?")
 _SID = re.compile(r"S-1-(?:\d+-)*\d+", re.IGNORECASE)
 _PIPE_PREFIX = r"\\.\pipe\PicSyncra.Control."
-_RESPONSE_BYTES = 1024
+_RESPONSE_BYTES = 1024 * 1024
 
 
 class ControlPipeError(RuntimeError):
@@ -103,6 +102,7 @@ class NamedPipeControlServer:
         if self._handle is None:
             raise ControlPipeError("Open the controller pipe before serving requests.")
         _win32api, _win32con, win32file, win32pipe, _win32security = _windows_modules()
+        import winerror
         try:
             win32pipe.ConnectNamedPipe(self._handle, None)
         except Exception as exc:
@@ -123,6 +123,8 @@ class NamedPipeControlServer:
         except Exception:
             response = {"ok": False, "error": "controller_unavailable"}
         encoded = json.dumps(response, separators=(",", ":")).encode("utf-8")
+        if len(encoded) > _RESPONSE_BYTES:
+            encoded = b'{"ok":false,"error":"response_too_large"}'
         win32file.WriteFile(self._handle, encoded)
 
     def _client_sid(self, win32pipe: Any) -> str:
@@ -132,7 +134,9 @@ class NamedPipeControlServer:
             win32con.PROCESS_QUERY_LIMITED_INFORMATION, False, process_id
         )
         try:
-            token = win32security.OpenProcessToken(process, win32con.TOKEN_QUERY)
+            token = win32security.OpenProcessToken(
+                process, win32con.TOKEN_QUERY | win32con.TOKEN_DUPLICATE
+            )
             try:
                 sid, _attributes = win32security.GetTokenInformation(
                     token, win32security.TokenUser
@@ -145,8 +149,16 @@ class NamedPipeControlServer:
                     group = win32security.CreateWellKnownSid(
                         win32security.WinBuiltinAdministratorsSid, None
                     )
-                    if win32security.CheckTokenMembership(token, group):
-                        return administrators_sid
+                    # OpenProcessToken returns a primary token, but Windows
+                    # requires an impersonation token for CheckTokenMembership.
+                    impersonation = win32security.DuplicateToken(
+                        token, win32security.SecurityImpersonation
+                    )
+                    try:
+                        if win32security.CheckTokenMembership(impersonation, group):
+                            return administrators_sid
+                    finally:
+                        impersonation.Close()
                 return identity
             finally:
                 token.Close()

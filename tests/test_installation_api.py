@@ -15,7 +15,7 @@ class RequestStub:
         return self._payload
 
 
-def app_with_dependencies(*, installed: bool = True):
+def app_with_dependencies(*, installed: bool = True, module_client=None):
     from picsyncra.web.installation_api import InstallationApiDependencies, build_installation_router
 
     calls: list[object] = []
@@ -48,8 +48,28 @@ def app_with_dependencies(*, installed: bool = True):
         set_autostart=lambda enabled: {"autostart": enabled},
         heartbeat=lambda user_id, session_id: {"user": user_id, "session": session_id},
         public_status=lambda: {"state": "countdown", "deadline_utc": "2026-09-16T12:00:00Z"},
+        module_client=module_client,
     ))
     return {route.path: route.endpoint for route in router.routes}, calls
+
+
+def test_module_plan_is_admin_csrf_protected_and_execution_is_separate():
+    class Client:
+        calls = []
+        def module_catalog(self): return {'modules': []}
+        def module_plan(self, **payload): self.calls.append(payload); return {'plan_id': 'a' * 32, 'conflicts': []}
+        def module_execute(self, plan_id, **payload): self.calls.append(plan_id); return {'state': 'accepted'}
+    client = Client()
+    routes, _ = app_with_dependencies(module_client=client)
+    payload = {'action': 'rollback_modules', 'selected': {'ftp': 'a' * 64}, 'excluded': [], 'restore_backup_id': None}
+    with pytest.raises(HTTPException):
+        asyncio.run(routes['/api/installation/module-plans'](RequestStub(payload)))
+    result = asyncio.run(routes['/api/installation/module-plans'](RequestStub(payload, csrf='valid')))
+    assert result['plan_id'] == 'a' * 32
+    assert client.calls == [payload]
+    result = asyncio.run(routes['/api/installation/module-plans/{plan_id}/execute'](
+        RequestStub({'restore_backup_id': None, 'acknowledge_data_loss': False}, csrf='valid'), 'a' * 32))
+    assert result.status_code == 202
 
 
 def test_portable_runtime_does_not_expose_installed_update_endpoints() -> None:
@@ -88,6 +108,17 @@ def test_force_channel_and_autostart_are_csrf_protected_admin_mutations() -> Non
     assert routes["/api/installation/operations/{operation_id}/force"](request, "op-1").status_code == 202
     assert asyncio.run(routes["/api/installation/channel"](RequestStub({"channel": "dev"}, csrf="valid"))) == {"channel": "dev"}
     assert asyncio.run(routes["/api/installation/autostart"](RequestStub({"enabled": True}, csrf="valid"))) == {"autostart": True}
+
+
+def test_channel_change_rejects_malformed_values_and_requires_csrf():
+    routes, _ = app_with_dependencies()
+    for channel in (['dev'], {}, None, 'preview'):
+        with pytest.raises(HTTPException) as error:
+            asyncio.run(routes['/api/installation/channel'](RequestStub({'channel':channel}, csrf='valid')))
+        assert error.value.status_code == 400
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(routes['/api/installation/channel'](RequestStub({'channel':'dev'})))
+    assert error.value.status_code == 403
 
 
 def test_presence_requires_logged_in_user_but_public_status_needs_no_session() -> None:

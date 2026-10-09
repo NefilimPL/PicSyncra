@@ -15,6 +15,9 @@
 AppId={#AppId}
 AppName={#AppName}
 AppVersion={#ReleaseId}
+OutputDir={#BuildRoot}
+OutputBaseFilename=PicSyncra-Setup-{#ReleaseId}
+SetupIconFile={#BuildRoot}\PicSyncra-Setup.ico
 DefaultDirName={autopf}\PicSyncra
 DefaultGroupName=PicSyncra
 PrivilegesRequired=admin
@@ -37,7 +40,6 @@ Name: "local"; Description: "Wersja lokalna (opcjonalna)"
 ; ProgramData is intentionally not cleaned by the uninstaller: it may contain
 ; a selected external database, configuration and rollback backups.
 Name: "{commonappdata}\PicSyncra\primary-installation"; Flags: uninsneveruninstall
-Name: "{commonappdata}\PicSyncra\primary-installation\config"; Flags: uninsneveruninstall
 Name: "{commonappdata}\PicSyncra\primary-installation\data"; Flags: uninsneveruninstall
 Name: "{commonappdata}\PicSyncra\primary-installation\logs"; Flags: uninsneveruninstall
 Name: "{commonappdata}\PicSyncra\primary-installation\cache"; Flags: uninsneveruninstall
@@ -46,12 +48,12 @@ Name: "{commonappdata}\PicSyncra\primary-installation\control"; Flags: uninsneve
 Name: "{commonappdata}\PicSyncra\primary-installation\staging"; Flags: uninsneveruninstall
 
 [Files]
-Source: "{#BuildRoot}\versions\{#ReleaseId}\web\*"; DestDir: "{app}\versions\{#ReleaseId}\web"; Components: web; Flags: recursesubdirs createallsubdirs ignoreversion
-Source: "{#BuildRoot}\versions\{#ReleaseId}\migrator\*"; DestDir: "{app}\versions\{#ReleaseId}\migrator"; Components: migrator; Flags: recursesubdirs createallsubdirs ignoreversion
-Source: "{#BuildRoot}\versions\{#ReleaseId}\local\*"; DestDir: "{app}\versions\{#ReleaseId}\local"; Components: local; Flags: recursesubdirs createallsubdirs ignoreversion
+Source: "{#BuildRoot}\module-sets\{#BaseSetId}\*"; DestDir: "{app}\sets\{#BaseSetId}"; Check: not WizardIsComponentSelected('local'); Flags: recursesubdirs createallsubdirs ignoreversion
+Source: "{#BuildRoot}\module-sets\{#LocalSetId}\*"; DestDir: "{app}\sets\{#LocalSetId}"; Components: local; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "{#BuildRoot}\PicSyncra-Controller\*"; DestDir: "{app}\controller"; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "{#BuildRoot}\helper\*"; DestDir: "{app}\controller\helper"; Flags: recursesubdirs createallsubdirs ignoreversion
-Source: "{#BuildRoot}\active.json"; DestDir: "{app}"; Flags: onlyifdoesntexist ignoreversion
+Source: "{#BuildRoot}\module-initial-layout.json"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#BuildRoot}\PicSyncra-Launcher\*"; DestDir: "{app}\launcher"; Flags: recursesubdirs createallsubdirs ignoreversion
 
 [Registry]
 Root: HKLM64; Subkey: "SOFTWARE\PicSyncra\Installations\primary-installation"; ValueType: string; ValueName: "InstallationId"; ValueData: "primary-installation"
@@ -60,22 +62,22 @@ Root: HKLM64; Subkey: "SOFTWARE\PicSyncra\Installations\primary-installation"; V
 Root: HKLM64; Subkey: "SOFTWARE\PicSyncra\Installations\primary-installation"; ValueType: string; ValueName: "DatabasePath"; ValueData: "{code:SelectedDatabasePath}"; Flags: uninsdeletekey
 
 [Icons]
-Name: "{autoprograms}\PicSyncra WEB"; Filename: "{app}\versions\{#ReleaseId}\web\PicSyncra-WEB.exe"; Components: web
-Name: "{autoprograms}\PicSyncra Migrator"; Filename: "{app}\versions\{#ReleaseId}\migrator\PicSyncra-Migrator.exe"; Components: migrator
-Name: "{autoprograms}\PicSyncra"; Filename: "{app}\versions\{#ReleaseId}\local\PicSyncra.exe"; Components: local
-
-[Run]
-Filename: "{sys}\schtasks.exe"; Parameters: "/Create /TN ""PicSyncra Controller primary-installation"" /SC ONSTART /RU SYSTEM /RL HIGHEST /TR """"""{app}\controller\PicSyncra-Controller.exe"" --installation-id primary-installation"""" /F"; Flags: runhidden waituntilterminated
-Filename: "{sys}\schtasks.exe"; Parameters: "/Run /TN ""PicSyncra Controller primary-installation"""; Flags: runhidden waituntilterminated
+Name: "{autoprograms}\PicSyncra WEB"; Filename: "{app}\launcher\PicSyncra-Launcher.exe"; Parameters: "--app web"; Components: web
+Name: "{autoprograms}\PicSyncra Migrator"; Filename: "{app}\launcher\PicSyncra-Launcher.exe"; Parameters: "--app migrator"; Components: migrator
+Name: "{autoprograms}\PicSyncra"; Filename: "{app}\launcher\PicSyncra-Launcher.exe"; Parameters: "--app local"; Components: local
 
 [UninstallRun]
-Filename: "{sys}\schtasks.exe"; Parameters: "/End /TN ""PicSyncra Controller primary-installation"""; Flags: runhidden waituntilterminated
-Filename: "{sys}\schtasks.exe"; Parameters: "/Delete /TN ""PicSyncra Controller primary-installation"" /F"; Flags: runhidden waituntilterminated
+Filename: "{sys}\schtasks.exe"; Parameters: "/End /TN ""PicSyncra Controller primary-installation"""; RunOnceId: "stop-controller"; Flags: runhidden waituntilterminated
+Filename: "{sys}\schtasks.exe"; Parameters: "/Delete /TN ""PicSyncra Controller primary-installation"" /F"; RunOnceId: "delete-controller-task"; Flags: runhidden waituntilterminated
 
 [Code]
+const
+  ControllerTaskParameters = '/Create /TN "PicSyncra Controller primary-installation" /SC ONSTART /RU SYSTEM /RL HIGHEST /TR "\"{app}\controller\PicSyncra-Controller.exe\" --installation-id primary-installation" /F';
+
 var
   DataRootPage: TInputDirWizardPage;
   ExistingDatabasePage: TInputFileWizardPage;
+  ConfigurationImportPage: TInputOptionWizardPage;
   ConfigurationRootPage: TInputDirWizardPage;
 
 function StateRoot: String;
@@ -106,11 +108,24 @@ begin
   ExistingDatabasePage.Add('Istniejąca baza:',
     'Bazy SQLite (*.sqlite;*.db)|*.sqlite;*.db|Wszystkie pliki|*.*', 'sqlite');
 
-  ConfigurationRootPage := CreateInputDirPage(ExistingDatabasePage.ID,
+  ConfigurationImportPage := CreateInputOptionPage(ExistingDatabasePage.ID,
+    'Import konfiguracji', 'Czy chcesz zaimportować konfigurację portable?',
+    'Pozostaw opcję niezaznaczoną, aby aplikacja użyła domyślnej konfiguracji.',
+    False, False);
+  ConfigurationImportPage.Add('Importuj konfigurację portable');
+  ConfigurationImportPage.Values[0] := False;
+
+  ConfigurationRootPage := CreateInputDirPage(ConfigurationImportPage.ID,
     'Import konfiguracji', 'Wybierz konfigurację portable do importu',
-    'To pole jest opcjonalne. Pominięcie nie nadpisuje konfiguracji domyślnymi plikami.',
+    'Wybierz katalog konfiguracji portable do importu.',
     False, '');
-  ConfigurationRootPage.Add('Katalog konfiguracji portable (opcjonalny):');
+  ConfigurationRootPage.Add('Katalog konfiguracji portable:');
+end;
+
+function ShouldSkipPage(PageID: Integer): Boolean;
+begin
+  Result := (PageID = ConfigurationRootPage.ID) and
+    (not ConfigurationImportPage.Values[0]);
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;
@@ -128,7 +143,7 @@ begin
       Result := False;
     end;
   end else if CurPageID = ConfigurationRootPage.ID then begin
-    if (ConfigurationRootPage.Values[0] <> '') and
+    if ConfigurationImportPage.Values[0] and
        (not DirExists(ConfigurationRootPage.Values[0])) then begin
       MsgBox('Wybrany katalog konfiguracji nie istnieje.', mbError, MB_OK);
       Result := False;
@@ -165,7 +180,7 @@ procedure ImportSelectedConfiguration;
 var
   RequestJson: String;
 begin
-  if ConfigurationRootPage.Values[0] = '' then
+  if not ConfigurationImportPage.Values[0] then
     exit;
   RequestJson := '{"source_config_root":"' + JsonEscape(ConfigurationRootPage.Values[0]) +
     '","destination_config_root":"' + JsonEscape(StateRoot + '\config') +
@@ -183,6 +198,17 @@ begin
   RunSetupHelper('inspect', RequestJson);
 end;
 
+procedure RunControllerTask(const Parameters, FailureMessage: String);
+var
+  ResultCode: Integer;
+begin
+  ResultCode := 0;
+  if (not Exec(ExpandConstant('{sys}\schtasks.exe'),
+    ExpandConstant(Parameters), '', SW_HIDE, ewWaitUntilTerminated, ResultCode)) or
+    (ResultCode <> 0) then
+    RaiseException(FailureMessage + ' (kod ' + IntToStr(ResultCode) + ').');
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   ResultCode: Integer;
@@ -197,5 +223,13 @@ begin
   if CurStep = ssPostInstall then begin
     InspectSelectedDatabase;
     ImportSelectedConfiguration;
+    if WizardIsComponentSelected('local') then
+      RunSetupHelper('initialize-modules', '{"installation_id":"primary-installation","program_root":"' + JsonEscape(ExpandConstant('{app}')) + '","state_root":"' + JsonEscape(StateRoot) + '","database_path":"' + JsonEscape(SelectedDatabasePath('')) + '","include_local":true}')
+    else
+      RunSetupHelper('initialize-modules', '{"installation_id":"primary-installation","program_root":"' + JsonEscape(ExpandConstant('{app}')) + '","state_root":"' + JsonEscape(StateRoot) + '","database_path":"' + JsonEscape(SelectedDatabasePath('')) + '","include_local":false}');
+    RunControllerTask(ControllerTaskParameters,
+      'Nie można zarejestrować zadania kontrolera PicSyncra');
+    RunControllerTask('/Run /TN "PicSyncra Controller primary-installation"',
+      'Nie można uruchomić zadania kontrolera PicSyncra');
   end;
 end;

@@ -105,9 +105,14 @@ def _load_active_release(program_root: Path, installation_id: str) -> int | None
         return None
     if not isinstance(payload, dict):
         return None
-    if set(payload) != {"schema", "installation_id", "release_id"}:
-        return None
-    if payload.get("schema") != 1:
+    expected = {"schema", "installation_id", "release_id"}
+    if payload.get("schema") == 2:
+        expected |= {"set_id", "revision"}
+        if not isinstance(payload.get("set_id"), str) or not re.fullmatch(r"[a-f0-9]{64}", payload["set_id"]):
+            return None
+        if type(payload.get("revision")) is not int or payload["revision"] < 1:
+            return None
+    if set(payload) != expected or type(payload.get("schema")) is not int or payload["schema"] not in {1, 2}:
         return None
     if payload.get("installation_id") != installation_id:
         return None
@@ -119,7 +124,15 @@ def _load_active_release(program_root: Path, installation_id: str) -> int | None
     return release_id
 
 
-def _registered_context(registration: Mapping[str, object]) -> InstallContext | None:
+def _active_bundle(program_root: Path, installation_id: str) -> Path:
+    payload = json.loads((program_root / "active.json").read_text(encoding="utf-8"))
+    if payload.get("schema") == 2:
+        from .installation.module_filesystem import safe_path
+        return safe_path(program_root, "sets/" + payload["set_id"])
+    return program_root / "versions" / str(_load_active_release(program_root, installation_id))
+
+
+def _registered_context(registration: Mapping[str, object], *, require_active_bundle=True) -> InstallContext | None:
     installation_id = registration.get("installation_id")
     if not _valid_installation_id(installation_id):
         return None
@@ -138,9 +151,9 @@ def _registered_context(registration: Mapping[str, object]) -> InstallContext | 
     release_id = _load_active_release(canonical_program_root, installation_id)
     if release_id is None:
         return None
-    active_bundle = canonical_program_root / "versions" / str(release_id)
+    active_bundle = _active_bundle(canonical_program_root, installation_id)
     try:
-        canonical_active_bundle = active_bundle.resolve(strict=True)
+        canonical_active_bundle = active_bundle.resolve(strict=require_active_bundle)
     except (OSError, RuntimeError):
         return None
     if not _is_within(canonical_active_bundle, canonical_program_root):
@@ -165,11 +178,7 @@ def _context_for_registration(
         return None
     try:
         canonical_executable = executable.resolve(strict=True)
-        active_bundle = (
-            context.program_root
-            / "versions"
-            / str(_load_active_release(context.program_root, context.installation_id))
-        ).resolve(strict=True)
+        active_bundle = _active_bundle(context.program_root, context.installation_id).resolve(strict=True)
     except (OSError, RuntimeError):
         return None
     if (
@@ -218,7 +227,7 @@ def load_registered_install_context(installation_id: str) -> InstallContext | No
         context
         for registration in _read_hklm_registrations()
         if registration.get("installation_id") == installation_id
-        for context in [_registered_context(registration)]
+        for context in [_registered_context(registration, require_active_bundle=False)]
         if context is not None
     ]
     return matches[0] if len(matches) == 1 else None

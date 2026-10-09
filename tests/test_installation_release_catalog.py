@@ -71,9 +71,10 @@ def test_catalog_never_uses_draft_or_release_from_wrong_channel() -> None:
 
 
 def test_catalog_blocks_a_signed_release_that_requires_a_newer_controller() -> None:
+    from picsyncra.installation.controller_version import CONTROLLER_VERSION
     loader, keys = signed_loader()
     choices = catalog_releases(
-        [release(3, "v1.2.0", manifest_payload=manifest(3, "v1.2.0", minimum_controller=2))],
+        [release(3, "v1.2.0", manifest_payload=manifest(3, "v1.2.0", minimum_controller=CONTROLLER_VERSION + 1))],
         channel="stable", manifest_loader=loader, trusted_keys=keys,
     )
 

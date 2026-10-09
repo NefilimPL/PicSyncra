@@ -1,4 +1,4 @@
 # Dependencies used only by the onedir Windows installation/controller build.
-# Both pins provide Windows x64 wheels for the CPython 3.13 build workflow.
+# Both pins provide Windows x64 wheels for CPython 3.11 CI and 3.13 builds.
 pywin32==312
 cryptography==50.0.1

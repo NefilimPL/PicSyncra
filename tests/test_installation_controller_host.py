@@ -1,8 +1,35 @@
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
 from picsyncra.installation.contracts import InstallContext, OperationRequest
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows Job Object lifecycle")
+def test_native_controller_job_terminates_its_owned_child_when_closed() -> None:
+    """A real pywin32 job must be creatable and own the spawned WEB process."""
+    from picsyncra.installation.controller_host import _default_job_factory
+
+    job = _default_job_factory()
+    process = None
+    try:
+        process = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        job.assign(process)
+        assert process.poll() is None
+        job.close()
+        # Job shutdown can use exit code zero; exiting before the child's
+        # 30-second sleep finishes is the observable ownership guarantee.
+        process.wait(timeout=10)
+    finally:
+        job.close()
+        if process is not None and process.poll() is None:
+            process.terminate()
+            process.wait(timeout=10)
 
 
 def _context(tmp_path: Path) -> InstallContext:
@@ -216,3 +243,41 @@ class FakeController:
 
     def snapshot(self) -> dict[str, bool]:
         return {"backend_running": True, "autostart": True}
+def test_active_backend_uses_verified_schema_two_set(tmp_path):
+    from picsyncra.installation.controller_host import active_web_executable
+    from picsyncra.installation.module_content import ModuleContentStore
+    from picsyncra.installation.module_state import make_module_set, activate_module_set, module_set_root
+    from picsyncra.installation.module_manifest import parse_module_manifest
+    from tests.module_fixtures import module_payload, release_payload
+    from picsyncra.installation.contracts import InstallContext
+    program=tmp_path/'program'; program.mkdir()
+    state=tmp_path/'state'; state.mkdir()
+    context=InstallContext('test',program,state,state/'config',state/'db.sqlite')
+    release=parse_module_manifest(release_payload(5,[module_payload('core','apps/web/PicSyncra-WEB.exe'),
+        module_payload('migrator','apps/migrator/PicSyncra-Migrator.exe')]))
+    selected=make_module_set(1,5,release.modules)
+    store=ModuleContentStore(context); store.import_bytes(b'code'); store.assemble(selected)
+    activate_module_set(context,selected,expected_revision=0)
+    assert active_web_executable(context)==module_set_root(context,selected)/'apps/web/PicSyncra-WEB.exe'
+
+
+def test_broken_autostart_web_keeps_recovery_pipe_available(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from picsyncra.installation import controller_host, module_service
+    value = _context(tmp_path)
+    served = []
+    class BrokenSupervisor:
+        def __init__(self, context): pass
+        def autostart_enabled(self): return True
+        def listener_owner(self, port): return None
+        def start_backend(self): raise controller_host.ControllerHostError('Missing selected WEB executable')
+        def shutdown(self): served.append('shutdown')
+    class RecoveryPipe:
+        def __init__(self, **kwargs): pass
+        def serve_forever(self): served.append('pipe')
+    monkeypatch.setattr(controller_host, 'load_registered_install_context', lambda identifier: value)
+    monkeypatch.setattr(controller_host, 'ActiveBackendSupervisor', BrokenSupervisor)
+    monkeypatch.setattr(controller_host, 'ControllerPipeHost', RecoveryPipe)
+    monkeypatch.setattr(module_service, 'ModuleService', lambda *args: SimpleNamespace(executor=SimpleNamespace(recover=lambda: None)))
+    assert controller_host.run_controller(value.installation_id) == 0
+    assert served == ['pipe', 'shutdown']

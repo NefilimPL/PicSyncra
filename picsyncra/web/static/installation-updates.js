@@ -27,6 +27,7 @@
       build: text(source.build),
       backend_running: source.backend_running === true,
       autostart: source.autostart === true,
+      ...(source.module_mode === true ? {module_mode:true} : {}),
       maintenance: {
         state: text(maintenance.state || "idle"),
         active_tasks: Number.isInteger(maintenance.active_tasks) ? maintenance.active_tasks : 0,

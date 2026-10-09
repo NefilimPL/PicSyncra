@@ -49,12 +49,14 @@ picsyncra_web_uvicorn.*.log
 build/
 dist/
 *.spec
+!installer/module-host.spec
 !installer/installed.spec
 !installer/ocr.spec
 *.manifest
 Generator exe/.icons/
 Generator exe/*.exe
 Generator exe/Nowy folder/
+installer/Output/
 
 # Separately built OCR runtime.  Release packages are uploaded by CI; these
 # directories are local PyInstaller output and must never enter source control.
