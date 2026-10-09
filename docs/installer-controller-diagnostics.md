@@ -156,3 +156,28 @@ Final validation: **1984 Python tests passed**, 3 skipped, 66 subtests passed;
 workflow trigger sanity and `pip check` passed. Review identified the missing
 draft-display case; its regression tests failed before the correction and passed
 after it. Follow-up review found no further important issues.
+
+## Release publication timestamp handoff — 2026-10-09
+
+The supplied Actions build successfully packaged the OCR host, then rejected
+the publication timestamp `10/09/2026 09:51:54` during module manifest creation.
+PowerShell's JSON conversion had produced a DateTime object; implicit string
+interpolation emitted a date unsuitable for the ISO/timezone manifest contract.
+The release-resolution step now explicitly serializes DateTime/DateTimeOffset
+values as invariant ISO UTC timestamps. ISO strings remain intact, and the
+manifest's strict date validation is preserved.
+
+Regression tests execute the workflow's metadata step with a stub GitHub CLI
+and a JSON conversion wrapper exercising string, DateTime and DateTimeOffset
+representations in en-US and pl-PL cultures. The DateTime case reproduced the
+exact supplied error before the fix. All six representations now preserve the
+publication instant and pass the real Python manifest builder. Local tests use
+Windows PowerShell 5.1 and emulate PowerShell 7's date deserialization. The
+existing signing/provenance workflow checks remain in place. A new Release tag
+containing this correction is needed; re-running the old tagged workflow does
+not incorporate the fix. Complete hosted build/publication remains external.
+
+Validation: **52 targeted tests passed**, including the six timestamp cases,
+repeated installed-build harnesses, module manifests and release/workflow checks.
+`git diff --check` passed. This correction changes metadata handoff only; it
+does not rebuild or publish release assets locally.

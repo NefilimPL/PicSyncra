@@ -36,11 +36,17 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or $release.draft) { throw 'Target Release unavailable' }
           $channel = if ($release.prerelease) { 'dev' } else { 'stable' }
           if ($env:REQUESTED_CHANNEL -and $channel -ne $env:REQUESTED_CHANNEL) { throw 'Release channel mismatch' }
+          # ConvertFrom-Json can deserialize ISO strings into date objects.
+          # Interpolation alone would emit a locale-dependent date for Python.
+          $publishedAt = $release.published_at
+          if ($publishedAt -is [datetime] -or $publishedAt -is [datetimeoffset]) {
+            $publishedAt = $publishedAt.ToUniversalTime().ToString('o', [Globalization.CultureInfo]::InvariantCulture)
+          }
           "tag=$($release.tag_name)" >> $env:GITHUB_OUTPUT
           "release_id=$($release.id)" >> $env:GITHUB_OUTPUT
           "channel=$channel" >> $env:GITHUB_OUTPUT
           "source_branch=$($release.target_commitish)" >> $env:GITHUB_OUTPUT
-          "published_at=$($release.published_at)" >> $env:GITHUB_OUTPUT
+          "published_at=$publishedAt" >> $env:GITHUB_OUTPUT
       - uses: actions/checkout@v4
         with:
           ref: refs/tags/${{ steps.release.outputs.tag }}
