@@ -7,7 +7,8 @@ class Element {
   appendChild(item) { this.append(item); }
   addEventListener(name, callback) { this.events[name] = callback; }
   replaceChildren(...items) { this.children = items; }
-  setAttribute() {}
+  setAttribute(name, value) { this[name] = value; }
+  removeAttribute(name) { delete this[name]; }
 }
 function setup({differentChannels=false} = {}) {
   resetBrowserGlobals();
@@ -63,4 +64,25 @@ test('channel selector persists channel and refreshes without applying drafts', 
   assert.match(panel.rows.get('ftp').status.textContent, /niedostępna.*kanale/i);
   assert.ok(panel.rows.get('ftp').select.children.some(option => option.value === 'old'));
   assert.equal(calls.some(([url]) => url.endsWith('/execute')), false);
+});
+
+test('reopened panel resumes OCR progress with bytes and percent and keeps controls locked', async () => {
+  resetBrowserGlobals();
+  global.document = {createElement: tag => new Element(tag)};
+  loadBrowserScript('picsyncra/web/static/module-updates-panel.js');
+  const operation = {operation_id:'a'.repeat(32),state:'downloading',action:'install_ocr',
+    progress:{downloaded_bytes:1048576,total_bytes:2097152}};
+  const panel = window.PicSyncra.ModuleUpdatesPanel.create({requestJson:async url =>
+    url.endsWith('/modules') ? {modules:[],operation} : operation});
+  await panel.refresh();
+  await new Promise(resolve => setImmediate(resolve));
+  const bar = panel.element.children.find(child => child.tagName === 'progress');
+  const status = panel.element.children.find(child => child.role === 'status');
+  assert.ok(bar);
+  assert.equal(bar.max,2097152);
+  assert.equal(bar.value,1048576);
+  assert.match(status.textContent,/OCR.*50%/);
+  const controls = panel.element.children.find(child => child.className === 'module-updates-controls');
+  assert.ok(controls.children.every(button => button.disabled));
+  panel.dispose();
 });

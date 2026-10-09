@@ -12,6 +12,32 @@ import webbrowser
 from .launcher import InstallationControlClient
 
 
+_OPERATION_LABELS = {
+    'accepted': 'Operacja przyjęta — oczekiwanie na rozpoczęcie.',
+    'downloading': 'Pobieranie', 'draining': 'Oczekiwanie na zakończenie zadań.',
+    'stopping': 'Zatrzymywanie backendu.', 'backing_up': 'Tworzenie kopii bazy i konfiguracji.',
+    'installing': 'Instalowanie', 'restoring': 'Odtwarzanie bazy i konfiguracji.',
+    'migrating': 'Migracja bazy.', 'validating': 'Sprawdzanie działania modułów.',
+    'committed': 'Gotowe — instalacja zakończona.', 'rolling_back': 'Przywracanie poprzednich wersji.',
+    'rolled_back': 'Przywrócono poprzednie wersje.', 'failed': 'Operacja nie powiodła się.',
+    'recovery_required': 'Wymagane odzyskiwanie instalacji.',
+}
+
+
+def operation_message(operation):
+    phase = operation.get('state', 'accepted')
+    label = _OPERATION_LABELS.get(phase, phase)
+    if phase in {'downloading', 'installing'}:
+        label += ' OCR' if operation.get('action') == 'install_ocr' else ' modułów'
+    progress = operation.get('progress') or {}
+    total = progress.get('total_bytes', 0)
+    downloaded = progress.get('downloaded_bytes', 0)
+    if phase == 'downloading' and total > 0:
+        label += f': {downloaded / 1048576:.1f} / {total / 1048576:.1f} MiB ({min(100, int(downloaded * 100 / total))}%)'
+    if operation.get('error'): label += ' — ' + str(operation['error'])
+    return label
+
+
 class ModuleLauncherModel:
     def __init__(self, client):
         self.client = client
@@ -93,6 +119,8 @@ class ModuleLauncherWindow:
         self.channel.bind('<<ComboboxSelected>>',lambda event: self.change_channel())
         self.status=tk.StringVar(value='Odczyt kontrolera…')
         ttk.Label(root,textvariable=self.status,wraplength=1000).pack(fill='x',padx=12,pady=10)
+        self.progressbar=ttk.Progressbar(root,mode='indeterminate')
+        self.progressbar.pack(fill='x',padx=12,pady=(0,8))
         canvas=tk.Canvas(root,highlightthickness=0)
         scrollbar=ttk.Scrollbar(root,orient='vertical',command=canvas.yview)
         canvas.configure(yscrollcommand=scrollbar.set)
@@ -139,14 +167,18 @@ class ModuleLauncherWindow:
 
     def _finish(self, callback, result):
         self.busy=False
-        for button in self.buttons: button.configure(state='normal')
-        for widget in self.rows.winfo_children():
-            if isinstance(widget,self.ttk.Combobox): widget.configure(state='readonly')
-        self.backup.configure(state='readonly')
-        self.channel.configure(state='disabled' if self.operation_id else 'readonly')
         callback(result)
-        self.channel.configure(state='disabled' if self.busy or self.operation_id else 'readonly')
-        self.rollback_button.configure(state='disabled' if self.busy or self.operation_id or not self.model.selected else 'normal')
+        self._synchronize_controls()
+        if not self.busy and not self.operation_id: self.progressbar.stop()
+
+    def _synchronize_controls(self):
+        locked = self.busy or bool(self.operation_id)
+        for button in self.buttons: button.configure(state='disabled' if locked else 'normal')
+        for widget in self.rows.winfo_children():
+            if isinstance(widget,self.ttk.Combobox): widget.configure(state='disabled' if locked else 'readonly')
+        self.backup.configure(state='disabled' if locked else 'readonly')
+        self.channel.configure(state='disabled' if locked else 'readonly')
+        self.rollback_button.configure(state='disabled' if locked or not self.model.selected else 'normal')
 
     def refresh(self): self._run(self.model.refresh,self.render)
 
@@ -159,6 +191,8 @@ class ModuleLauncherWindow:
         self._run(work,self.render)
 
     def render(self,snapshot):
+        if snapshot.get('operation') and not self.operation_id:
+            self.accepted(snapshot['operation'])
         self.channel.set('Dev' if snapshot.get('channel') == 'dev' else 'Stable')
         for widget in self.rows.winfo_children(): widget.destroy()
         for index,module in enumerate(snapshot.get('modules',[])):
@@ -195,7 +229,7 @@ class ModuleLauncherWindow:
         if self.backup.get() not in self.backup_ids: self.backup.current(0)
         if not self.operation_id:
             self.status.set(self.terminal_message or ('Katalog lokalny — brak Internetu. Brakujące pliki wymagają połączenia.' if snapshot.get('offline') else 'Wybierz moduły i zatwierdź operację.'))
-        self.rollback_button.configure(state='disabled' if self.busy or self.operation_id or not self.model.selected else 'normal')
+        self._synchronize_controls()
 
     def select_version(self,module_id,version_id):
         self.model.select(module_id,version_id)
@@ -209,6 +243,10 @@ class ModuleLauncherWindow:
             webbrowser.open(url)
 
     def prepare(self,action):
+        if self.busy or self.operation_id: return
+        self.status.set('Sprawdzanie zgodności i przygotowanie instalacji OCR…' if action == 'install_ocr' else 'Sprawdzanie zgodności i przygotowanie planu…')
+        self.progressbar.configure(mode='indeterminate',value=0)
+        self.progressbar.start()
         restore=self.backup_ids.get(self.backup.get())
         self._run(lambda: self.model.prepare(action,restore_backup_id=restore),lambda plan:self.confirm_plan(plan,restore))
 
@@ -234,7 +272,8 @@ class ModuleLauncherWindow:
     def accepted(self,result):
         self.terminal_message=None
         self.operation_id=result['operation_id']
-        self.status.set('Operacja została przyjęta przez kontroler.')
+        self._show_progress(result)
+        self._synchronize_controls()
         self.root.after(1000,self.poll)
 
     def poll(self):
@@ -243,13 +282,26 @@ class ModuleLauncherWindow:
     def progress(self,result):
         if result is None:
             self.status.set('Oczekiwanie na kontroler…'); self.root.after(2000,self.poll); return
-        self.status.set(f"Operacja: {result['state']} — {result.get('error') or ''}")
+        self._show_progress(result)
         if result['state'] in {'committed','rolled_back','failed','recovery_required'}:
             self.terminal_message=self.status.get()
             if result['state']=='committed':
                 self.model.selected.clear(); self.model.selected_versions.clear()
             self.operation_id=None; self.refresh()
         else: self.root.after(1500,self.poll)
+
+    def _show_progress(self,result):
+        self.status.set(operation_message(result))
+        self.progressbar.stop()
+        progress=result.get('progress') or {}
+        total=progress.get('total_bytes',0)
+        if result.get('state') == 'downloading' and total > 0:
+            self.progressbar.configure(mode='determinate',maximum=total,value=progress.get('downloaded_bytes',0))
+        elif result.get('state') in {'committed','rolled_back','failed','recovery_required'}:
+            self.progressbar.configure(mode='determinate',maximum=1,value=1 if result['state']=='committed' else 0)
+        else:
+            self.progressbar.configure(mode='indeterminate',value=0)
+            self.progressbar.start()
 
     def open_panel(self):
         self._run(lambda:self.model.client.start_backend(),lambda result:webbrowser.open('http://127.0.0.1:8010'))

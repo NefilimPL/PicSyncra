@@ -11499,6 +11499,16 @@ function renderInstalledUpdateControls(panel) {
     error.className = "error-text";
     error.textContent = state.installationUpdatesError;
     panel.appendChild(error);
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.className = 'secondary-button';
+    retry.textContent = 'Ponów połączenie z kontrolerem';
+    retry.addEventListener('click', async () => {
+      retry.disabled = true;
+      try { await loadInstallationUpdates(); } catch (_) {}
+      finally { if (state.activeSettingsTab === 'module-status') renderSettings(); }
+    });
+    panel.appendChild(retry);
     return;
   }
   const snapshot = state.installationUpdates;

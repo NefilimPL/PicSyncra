@@ -1650,8 +1650,15 @@ function renderSettingsOcr() {
 }
 
 function renderSettingsModuleStatus() {
-  const utilities = moduleBuildStatusUtilities();
   const panel = document.createElement("section");
+  if (!state.installationUpdatesChecked || state.installationUpdatesLoading ||
+      state.installationUpdatesError || state.installationUpdates?.module_mode) {
+    panel.className = "settings-block";
+    settingsOutput.appendChild(panel);
+    renderInstalledUpdateControls(panel);
+    return;
+  }
+  const utilities = moduleBuildStatusUtilities();
   const heading = document.createElement("div");
   const title = document.createElement("h2");
   const refresh = document.createElement("button");

@@ -202,9 +202,12 @@ class InstalledOperationService:
     def read_operation(self, operation_id: str) -> dict[str, object] | None:
         import re
         if re.fullmatch('[a-f0-9]{32}', operation_id) and hasattr(self._controller, 'module_operation'):
+            from .control_pipe import ControlPipeError
             try:
                 result = self._controller.module_operation(operation_id)
                 if result is not None: return result
+            except ControlPipeError:
+                raise
             except (RuntimeError, ValueError): pass
         try:
             return asdict(self._journal.read(operation_id))

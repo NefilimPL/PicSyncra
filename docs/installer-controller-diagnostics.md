@@ -181,3 +181,47 @@ Validation: **52 targeted tests passed**, including the six timestamp cases,
 repeated installed-build harnesses, module manifests and release/workflow checks.
 `git diff --check` passed. This correction changes metadata handoff only; it
 does not rebuild or publish release assets locally.
+
+## Launcher OCR progress and pipe disconnect correction — 2026-10-09
+
+The supplied log identifies GET `/api/installation` failing in native
+`ReadFile` with Windows error 233. A real Windows test with the server context
+closing immediately after dispatch and a delayed client read reproduced the
+same exception. DisconnectNamedPipe discarded the unread response. The final
+transport waits for a receipt after the complete client read, with a two-second
+bound on request/receipt input. This avoids both lost responses and an unbounded
+FlushFileBuffers wait when a live client stops reading. Silent clients,
+malformed receipts, disconnected clients and simultaneous clients are covered
+by native tests. Connection setup retries never replay a transmitted operation.
+ACL checks, caller SID validation and exclusive pipe ownership remain intact.
+
+Native transport failures become ControlPipeError instead of leaking pywin32
+exceptions through WEB. Status and operation routes report service unavailable;
+the module tab offers a retry. Installed module layouts now bypass portable
+build diagnostics, including misleading missing-build messages. Portable still
+uses its existing comparison. Static resource versions invalidate old caches.
+
+Module downloads report unique missing byte counts while streaming verified
+ranges. Small atomic progress snapshots live separately from the transaction
+journal. Both launcher and WEB show translated phases, download percentage and
+bytes, lock mutation controls throughout the operation and discover ongoing
+accepted work on reopening. A controller restart before deferred work begins
+reports that accepted operation as failed, requiring a freshly confirmed plan;
+it does not automatically execute an old approval or mutate another host's
+queued-operation metadata.
+
+Review found the stalled-reader case, orphaned accepted work and missing retry.
+Their regression tests failed before the respective corrections and passed
+afterward. Isolated native Tk acceptance covers preparation, streamed OCR
+bytes/percent, installing/completed phases, locked controls and a second launcher
+joining the same operation. No HKLM registration or scheduled task changes are
+made by the acceptance harness. OCR payloads are test fixtures; this checks the
+download/install flow without claiming to exercise Paddle inference.
+
+Final verification: **2006 Python tests passed**, 3 skipped, 66 subtests passed;
+**45 JavaScript tests passed**. Compileall, JS syntax checks and git diff checks
+passed. A fresh isolated PyInstaller launcher build returned exit code 0, and
+the actual EXE passed the authenticated-pipe streamed OCR GUI acceptance with
+packaged Tcl/Tk. Test hooks exist only in ignored acceptance build directories,
+not in the production builder. The old local full Setup artifact is unchanged;
+GitHub Actions must build a new Release tag containing this correction.

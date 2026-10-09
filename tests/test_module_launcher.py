@@ -1,6 +1,16 @@
 from picsyncra.installation.module_launcher import ModuleLauncherModel
 
 
+def test_launcher_operation_message_shows_ocr_bytes_percent_and_installation_phase():
+    from picsyncra.installation import module_launcher
+    message = module_launcher.operation_message({'state':'downloading', 'action':'install_ocr',
+        'progress':{'downloaded_bytes':1048576, 'total_bytes':2097152}, 'error':None})
+    assert 'OCR' in message and '50%' in message and 'MiB' in message
+    assert 'Instalowanie' in module_launcher.operation_message({'state':'installing','action':'install_ocr'})
+    assert 'Gotowe' in module_launcher.operation_message({'state':'committed','action':'install_ocr'})
+    assert 'awaria' in module_launcher.operation_message({'state':'failed','error':'awaria'})
+
+
 class Client:
     def __init__(self): self.calls=[]
     def module_catalog(self): return {'modules': []}

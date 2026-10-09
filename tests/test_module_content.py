@@ -37,6 +37,29 @@ def test_only_missing_ranges_are_fetched_and_unchanged_content_reused(context):
     assert requests == []
 
 
+def test_progress_counts_only_unique_missing_content_and_reports_chunks(context):
+    modules = [module_payload(), module_payload('migrator', 'apps/migrator/PicSyncra-Migrator.exe'),
+               module_payload('ftp', 'picsyncra/services/ftp_service.py', b'new'),
+               module_payload('sql', 'picsyncra/services/sql_service.py', b'new')]
+    class ChunkedResponse(Response):
+        def read(self, size=-1): return super().read(min(size, 1))
+    requests = []
+    def fetch(url, start, size, total):
+        requests.append(url)
+        return ChunkedResponse(b'new', start, total)
+    store = ModuleContentStore(context, fetch=fetch)
+    store.import_bytes(b'code')
+    selected = make_module_set(1, 5, parse_module_manifest(release_payload(5, modules)).modules)
+    progress = []
+    store.assemble(selected, on_progress=lambda value: progress.append(dict(value)))
+    assert len(requests) == 1
+    assert progress[0]['downloaded_bytes'] == 0
+    assert {item['total_bytes'] for item in progress} == {3}
+    assert [item['downloaded_bytes'] for item in progress] == [0, 1, 2, 3]
+    assert progress[-1]['module_id'] == 'ftp'
+    verify_module_set_files(context, selected)
+
+
 @pytest.mark.parametrize('status,data', [(200, b'code'), (206, b'evil')])
 def test_full_pack_fallback_and_hash_changes_are_rejected(context, status, data):
     store = ModuleContentStore(context, fetch=lambda url, start, size, total: Response(data, start, total, status))

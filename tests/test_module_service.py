@@ -33,6 +33,38 @@ def test_catalog_and_planning_are_read_only_and_execution_is_deferred(context):
     assert not read_module_set(context).pinned
 
 
+def test_shared_operation_reports_download_progress_and_pending_work_after_reopen(context):
+    from tests.module_fixtures import module_payload
+    from tests.test_module_content import Response
+    import json
+    _, store, _ = prepare(context)
+    raw = release_payload()
+    raw['modules'].append(module_payload('ftp', 'picsyncra/services/ftp_service.py', b'new'))
+    release = parse_module_manifest(raw)
+    class DownloadSource(Source):
+        def load(self, channel): return (ModuleCatalogEntry(5, 'v5', release.published_at, release),)
+    jobs, observed = [], []
+    service = ModuleService(context, Controller(), source=DownloadSource(), content=store, schedule=jobs.append,
+                            quiesce=lambda op: None, healthy=lambda: True)
+    plan = service.prepare(action='update_all', selected={}, excluded=[])
+    operation_id = plan['plan_id']
+    class ChunkedResponse(Response):
+        def read(self, size=-1):
+            observed.append(service.operation(operation_id))
+            return super().read(min(size, 1))
+    store.fetch = lambda url, start, size, total: ChunkedResponse(b'new', start, total)
+    service.execute(operation_id)
+    assert service.catalog()['operation']['operation_id'] == operation_id
+    assert service.catalog()['operation']['state'] == 'accepted'
+    jobs.pop()()
+    assert any(item.get('progress', {}).get('downloaded_bytes') == 1 for item in observed)
+    completed = service.operation(operation_id)
+    assert completed['state'] == 'committed'
+    assert completed['progress']['downloaded_bytes'] == completed['progress']['total_bytes'] == 3
+    assert service.catalog()['operation'] is None
+    assert json.loads((context.state_root / 'module-progress' / (operation_id + '.json')).read_text()) == completed['progress']
+
+
 def test_plan_survives_service_restart_and_stale_plan_is_rejected(context):
     active, store, _ = prepare(context)
     service = ModuleService(context, Controller(), source=Source(), content=store, schedule=lambda job: job(),
@@ -43,6 +75,22 @@ def test_plan_survives_service_restart_and_stale_plan_is_rejected(context):
     restarted = ModuleService(context, Controller(), source=Source(), content=store, schedule=lambda job: job(),
                               quiesce=lambda op: None, healthy=lambda: True)
     with pytest.raises(RuntimeError, match='zmieniła'): restarted.execute(second['plan_id'])
+
+
+def test_restart_before_deferred_execution_ends_orphaned_accepted_status(context):
+    active, store, _ = prepare(context)
+    queued = []
+    first = ModuleService(context, Controller(), source=Source(), content=store, schedule=queued.append)
+    plan = first.prepare(action='update_all', selected={}, excluded=[])
+    first.execute(plan['plan_id'])
+    assert first.operation(plan['plan_id'])['state'] == 'accepted'
+    restarted = ModuleService(context, Controller(), source=Source(), content=store)
+    assert restarted.executor.recover() is None
+    status = restarted.operation(plan['plan_id'])
+    assert status['state'] == 'failed'
+    assert 'rozpoczęciem' in status['error']
+    assert restarted.catalog()['operation'] is None
+    assert read_module_set(context) == active
 
 
 def test_pipe_rejects_paths_and_arbitrary_selected_identifiers():

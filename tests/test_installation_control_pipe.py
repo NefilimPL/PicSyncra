@@ -5,6 +5,9 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
+from uuid import uuid4
+import pytest
 
 import win32api
 import win32con
@@ -15,6 +18,176 @@ from picsyncra.installation.control_pipe import (
     NamedPipeControlServer,
 )
 from picsyncra.installation.control_protocol import ControlDispatcher
+
+
+def test_server_shutdown_preserves_reply_until_delayed_client_reads(monkeypatch):
+    from picsyncra.installation import control_pipe
+    modules = control_pipe._windows_modules()
+    real_file = modules[2]
+    caller = threading.current_thread()
+
+    class SlowClientFile:
+        def __getattr__(self, name):
+            return getattr(real_file, name)
+
+        def ReadFile(self, *args):
+            if threading.current_thread() is caller:
+                time.sleep(0.15)
+            return real_file.ReadFile(*args)
+
+    monkeypatch.setattr(control_pipe, '_windows_modules', lambda: (*modules[:2], SlowClientFile(), *modules[3:]))
+    ready = threading.Event()
+    failures = []
+    installation_id = 'delayed-' + uuid4().hex
+    class Dispatcher:
+        def dispatch(self, message, *, peer_identity):
+            return {'ok': True, 'received': message.decode()}
+    server = NamedPipeControlServer(Dispatcher(), installation_id=installation_id, allowed_sids={_current_user_sid()})
+    def serve():
+        try:
+            with server:
+                ready.set()
+                server.serve_once()
+        except Exception as exc:
+            failures.append(exc)
+    worker = threading.Thread(target=serve, daemon=True)
+    worker.start()
+    assert ready.wait(5)
+    try:
+        response = NamedPipeControlClient(server.pipe_name).request(b'hello')
+    finally:
+        worker.join(5)
+    assert not failures
+    assert not worker.is_alive()
+    assert response == {'ok': True, 'received': 'hello'}
+
+
+def test_native_read_failure_is_a_control_pipe_error_not_an_unhandled_win32_error(monkeypatch):
+    from picsyncra.installation import control_pipe
+    import pywintypes
+    class File:
+        writes = 0
+        def CreateFile(self, *args): return object()
+        def WriteFile(self, *args): self.writes += 1
+        def ReadFile(self, *args): raise pywintypes.error(233, 'ReadFile', 'disconnected')
+        def CloseHandle(self, handle): pass
+    class Pipe:
+        PIPE_READMODE_MESSAGE = 2
+        def SetNamedPipeHandleState(self, *args): pass
+    modules = control_pipe._windows_modules()
+    file = File()
+    monkeypatch.setattr(control_pipe, '_windows_modules', lambda: (*modules[:2], file, Pipe(), modules[4]))
+    with pytest.raises(control_pipe.ControlPipeError, match='kontroler'):
+        NamedPipeControlClient(r'\\.\pipe\PicSyncra.Control.test').request(b'hello')
+    assert file.writes == 1
+
+
+def test_native_host_survives_a_client_disconnect_and_serves_the_next_client():
+    import win32file
+    from picsyncra.installation.windows_service import ControllerPipeHost
+    installation_id = 'closed-' + uuid4().hex
+    ready, dispatched = threading.Event(), threading.Event()
+    calls, failures = [], []
+    class Dispatcher:
+        def dispatch(self, message, *, peer_identity):
+            calls.append(message)
+            dispatched.set()
+            return {'ok':True}
+    class ReadyServer(NamedPipeControlServer):
+        def __enter__(self):
+            super().__enter__()
+            ready.set()
+            return self
+    def factory():
+        return ReadyServer(Dispatcher(), installation_id=installation_id, allowed_sids={_current_user_sid()})
+    def serve():
+        try:
+            ControllerPipeHost(server_factory=factory, stop_requested=lambda: len(calls) >= 2).serve_forever()
+        except Exception as exc: failures.append(exc)
+    worker = threading.Thread(target=serve, daemon=True)
+    worker.start()
+    assert ready.wait(5)
+    pipe_name = r'\\.\pipe\PicSyncra.Control.' + installation_id
+    handle = win32file.CreateFile(pipe_name, win32con.GENERIC_READ | win32con.GENERIC_WRITE, 0, None, win32con.OPEN_EXISTING, 0, None)
+    try:
+        win32file.WriteFile(handle, b'first')
+        assert dispatched.wait(5)
+    finally: win32file.CloseHandle(handle)
+    response = NamedPipeControlClient(pipe_name).request(b'second')
+    worker.join(5)
+    assert not worker.is_alive() and not failures
+    assert calls == [b'first',b'second'] and response == {'ok':True}
+
+
+def test_concurrent_native_clients_wait_for_the_current_pipe_request():
+    from picsyncra.installation.windows_service import ControllerPipeHost
+    installation_id = 'busy-' + uuid4().hex
+    ready = threading.Event()
+    requests, responses, failures = [], [], []
+    class Dispatcher:
+        def dispatch(self, message, *, peer_identity):
+            time.sleep(0.15)
+            requests.append(message)
+            return {'ok':True, 'received':message.decode()}
+    class Server(NamedPipeControlServer):
+        def __enter__(self):
+            super().__enter__()
+            ready.set()
+            return self
+    def serve():
+        try:
+            ControllerPipeHost(server_factory=lambda: Server(Dispatcher(), installation_id=installation_id,
+                allowed_sids={_current_user_sid()}), stop_requested=lambda: len(requests) >= 2).serve_forever()
+        except Exception as exc: failures.append(exc)
+    worker = threading.Thread(target=serve, daemon=True); worker.start()
+    assert ready.wait(5)
+    def request(message):
+        try: responses.append(NamedPipeControlClient(r'\\.\pipe\PicSyncra.Control.' + installation_id).request(message))
+        except Exception as exc: failures.append(exc)
+    clients = [threading.Thread(target=request, args=(message,), daemon=True) for message in (b'one',b'two')]
+    for client in clients: client.start()
+    for client in clients: client.join(6)
+    worker.join(5)
+    assert not worker.is_alive() and not failures
+    assert {response['received'] for response in responses} == {'one','two'}
+
+
+@pytest.mark.parametrize('mode', ['unread_reply', 'no_request', 'invalid_receipt'])
+def test_a_live_client_that_never_reads_cannot_block_the_next_request(mode):
+    import win32file
+    from picsyncra.installation.windows_service import ControllerPipeHost
+    installation_id = 'stalled-' + uuid4().hex
+    ready, dispatched = threading.Event(), threading.Event()
+    calls, failures = [], []
+    class Dispatcher:
+        def dispatch(self, message, *, peer_identity):
+            calls.append(message); dispatched.set()
+            return {'ok':True}
+    class Server(NamedPipeControlServer):
+        def __enter__(self): super().__enter__(); ready.set(); return self
+    def serve():
+        try:
+            ControllerPipeHost(server_factory=lambda: Server(Dispatcher(), installation_id=installation_id,
+                allowed_sids={_current_user_sid()}), stop_requested=lambda: b'next' in calls).serve_forever()
+        except Exception as exc: failures.append(exc)
+    worker = threading.Thread(target=serve, daemon=True); worker.start()
+    assert ready.wait(5)
+    pipe_name = r'\\.\pipe\PicSyncra.Control.' + installation_id
+    handle = win32file.CreateFile(pipe_name, win32con.GENERIC_READ | win32con.GENERIC_WRITE, 0, None, win32con.OPEN_EXISTING, 0, None)
+    try:
+        if mode != 'no_request':
+            win32file.WriteFile(handle,b'stalled')
+            assert dispatched.wait(5)
+        if mode == 'invalid_receipt':
+            import win32pipe
+            win32pipe.SetNamedPipeHandleState(handle,win32pipe.PIPE_READMODE_MESSAGE,None,None)
+            assert win32file.ReadFile(handle,1024)[1]
+            win32file.WriteFile(handle,b'invalid receipt')
+        response = NamedPipeControlClient(pipe_name).request(b'next')
+        assert response == {'ok':True}
+    finally: win32file.CloseHandle(handle)
+    worker.join(5)
+    assert not worker.is_alive() and not failures
 
 
 def _current_user_sid() -> str:

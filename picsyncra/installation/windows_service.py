@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 import time
 from typing import Protocol
+from .control_pipe import ControlPipePeerDisconnected
 
 
 class ServiceApi(Protocol):
@@ -45,8 +46,12 @@ class ControllerPipeHost:
         """Finish any connected request before observing the next stop signal."""
 
         while not self._stop_requested():
-            with self._server_factory() as server:
-                server.serve_once()
+            try:
+                with self._server_factory() as server:
+                    server.serve_once()
+            except ControlPipePeerDisconnected:
+                # Closing a launcher/tab must not terminate the SYSTEM host.
+                continue
 
 
 class Pywin32ServiceApi:

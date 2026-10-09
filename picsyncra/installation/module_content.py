@@ -90,7 +90,7 @@ class ModuleContentStore:
                 finally:
                     temporary.unlink(missing_ok=True)
 
-    def acquire(self, module: ModuleVersion, file: ModuleFile) -> Path:
+    def acquire(self, module: ModuleVersion, file: ModuleFile, *, on_progress=None) -> Path:
         destination = safe_path(self.root, file.sha256)
         if destination.is_file() and destination.stat().st_size == file.size and _digest(destination) == file.sha256:
             return destination
@@ -112,11 +112,12 @@ class ModuleContentStore:
                 with temporary.open('xb') as stream:
                     while remaining:
                         chunk = response.read(min(1024 * 1024, remaining))
-                        if not chunk:
+                        if not chunk or len(chunk) > remaining:
                             raise ModuleContentError('Przerwane pobieranie pliku modułu.')
                         digest.update(chunk)
                         stream.write(chunk)
                         remaining -= len(chunk)
+                        if on_progress: on_progress(file.size - remaining)
                     if response.read(1) or digest.hexdigest() != file.sha256:
                         raise ModuleContentError('Suma kontrolna pobranego pliku modułu jest niezgodna.')
                     stream.flush()
@@ -128,12 +129,22 @@ class ModuleContentStore:
         finally:
             temporary.unlink(missing_ok=True)
 
-    def assemble(self, selected: ActiveModuleSet) -> None:
+    def assemble(self, selected: ActiveModuleSet, *, on_progress=None) -> None:
         root = module_set_root(self.context, selected)
         root.mkdir(parents=True, exist_ok=True)
+        downloaded = {}
+        total = 0
+        if on_progress:
+            unique = {file.sha256: file for module in selected.modules for file in module.files}
+            cached = self.available_hashes()
+            total = sum(file.size for digest, file in unique.items() if digest not in cached)
+            on_progress(dict(downloaded_bytes=0, total_bytes=total, module_id=None))
         for module in selected.modules:
             for file in module.files:
-                source = self.acquire(module, file)
+                def report(count):
+                    downloaded[file.sha256] = count
+                    on_progress(dict(downloaded_bytes=sum(downloaded.values()), total_bytes=total, module_id=module.module_id))
+                source = self.acquire(module, file, on_progress=report if on_progress else None)
                 destination = safe_path(root, file.path)
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 if destination.exists():

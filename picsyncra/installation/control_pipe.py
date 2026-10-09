@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from typing import Any
 
 from .control_protocol import ControlDispatcher, ControlProtocolError, MAX_MESSAGE_BYTES
@@ -13,10 +14,20 @@ _INSTALLATION_ID = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,62}[A-Za-z0-9])?"
 _SID = re.compile(r"S-1-(?:\d+-)*\d+", re.IGNORECASE)
 _PIPE_PREFIX = r"\\.\pipe\PicSyncra.Control."
 _RESPONSE_BYTES = 1024 * 1024
+_RECEIPT = b'\x06'
 
 
 class ControlPipeError(RuntimeError):
     """The local controller pipe could not exchange a complete request."""
+
+
+class ControlPipePeerDisconnected(ControlPipeError):
+    """A connected client went away; the controller may accept another client."""
+
+
+def _peer_disconnected(exc: Exception) -> bool:
+    # ERROR_BROKEN_PIPE, ERROR_NO_DATA, ERROR_PIPE_NOT_CONNECTED.
+    return getattr(exc, 'winerror', None) in {109, 232, 233}
 
 
 def _windows_modules() -> tuple[Any, Any, Any, Any, Any]:
@@ -53,11 +64,14 @@ class NamedPipeControlServer:
         *,
         installation_id: str,
         allowed_sids: frozenset[str] | set[str],
+        io_timeout_seconds: float = 2.0,
     ) -> None:
         self._dispatcher = dispatcher
         self._installation_id = _validate_installation_id(installation_id)
         self._allowed_sids = _validate_sids(allowed_sids)
         self._handle: Any | None = None
+        if io_timeout_seconds <= 0: raise ValueError('io_timeout_seconds must be positive.')
+        self._io_timeout_seconds = io_timeout_seconds
 
     @property
     def pipe_name(self) -> str:
@@ -107,10 +121,12 @@ class NamedPipeControlServer:
             win32pipe.ConnectNamedPipe(self._handle, None)
         except Exception as exc:
             if getattr(exc, "winerror", None) != winerror.ERROR_PIPE_CONNECTED:
+                if _peer_disconnected(exc):
+                    raise ControlPipePeerDisconnected('Klient odłączył się od kontrolera.') from exc
                 raise ControlPipeError("The controller pipe could not accept a client.") from exc
         response: dict[str, object]
         try:
-            error_code, message = win32file.ReadFile(self._handle, MAX_MESSAGE_BYTES + 1)
+            error_code, message = self._read_message(win32file, win32pipe, MAX_MESSAGE_BYTES + 1)
             if error_code == winerror.ERROR_MORE_DATA or len(message) > MAX_MESSAGE_BYTES:
                 raise ControlProtocolError("The controller request is too large.")
             if error_code:
@@ -118,14 +134,41 @@ class NamedPipeControlServer:
             response = self._dispatcher.dispatch(
                 message, peer_identity=self._client_sid(win32pipe)
             )
+        except ControlPipePeerDisconnected:
+            raise
         except (ControlProtocolError, ControlPipeError, ValueError):
             response = {"ok": False, "error": "invalid_request"}
-        except Exception:
+        except Exception as exc:
+            if _peer_disconnected(exc):
+                raise ControlPipePeerDisconnected('Klient odłączył się od kontrolera.') from exc
             response = {"ok": False, "error": "controller_unavailable"}
         encoded = json.dumps(response, separators=(",", ":")).encode("utf-8")
         if len(encoded) > _RESPONSE_BYTES:
             encoded = b'{"ok":false,"error":"response_too_large"}'
-        win32file.WriteFile(self._handle, encoded)
+        try:
+            win32file.WriteFile(self._handle, encoded)
+            # DisconnectNamedPipe discards unread data, while FlushFileBuffers
+            # cannot be bounded for a live client which stops reading. The client
+            # acknowledges its complete read; wait only a bounded time for it.
+            error_code, receipt = self._read_message(win32file, win32pipe, len(_RECEIPT) + 1)
+            if error_code or receipt != _RECEIPT:
+                raise ControlPipePeerDisconnected('Klient nie potwierdził odebrania odpowiedzi kontrolera.')
+        except ControlPipePeerDisconnected:
+            raise
+        except Exception as exc:
+            if _peer_disconnected(exc) or getattr(exc, 'winerror', None) == winerror.ERROR_MORE_DATA:
+                raise ControlPipePeerDisconnected('Klient odłączył się od kontrolera.') from exc
+            raise ControlPipeError('Nie udało się wysłać odpowiedzi kontrolera.') from exc
+
+    def _read_message(self, win32file, win32pipe, maximum_bytes):
+        deadline = time.monotonic() + self._io_timeout_seconds
+        while True:
+            _data, available, _remaining = win32pipe.PeekNamedPipe(self._handle, 0)
+            if available:
+                return win32file.ReadFile(self._handle, maximum_bytes)
+            if time.monotonic() >= deadline:
+                raise ControlPipePeerDisconnected('Klient nie zakończył wymiany z kontrolerem w wymaganym czasie.')
+            time.sleep(0.01)
 
     def _client_sid(self, win32pipe: Any) -> str:
         win32api, win32con, _win32file, _win32pipe, win32security = _windows_modules()
@@ -185,18 +228,25 @@ class NamedPipeControlClient:
         if not isinstance(message, bytes) or len(message) > MAX_MESSAGE_BYTES:
             raise ControlPipeError("The controller request is too large.")
         _win32api, win32con, win32file, win32pipe, _win32security = _windows_modules()
-        try:
-            handle = win32file.CreateFile(
-                self._pipe_name,
-                win32con.GENERIC_READ | win32con.GENERIC_WRITE,
-                0,
-                None,
-                win32con.OPEN_EXISTING,
-                0,
-                None,
-            )
-        except Exception as exc:
-            raise ControlPipeError("The controller pipe is unavailable.") from exc
+        deadline = time.monotonic() + 5.0
+        while True:
+            try:
+                handle = win32file.CreateFile(
+                    self._pipe_name,
+                    win32con.GENERIC_READ | win32con.GENERIC_WRITE,
+                    0,
+                    None,
+                    win32con.OPEN_EXISTING,
+                    0,
+                    None,
+                )
+                break
+            except Exception as exc:
+                # Only retry connection setup. Never replay a request after it
+                # was written: its operation may already have been accepted.
+                if getattr(exc, 'winerror', None) not in {2, 231, 232, 233} or time.monotonic() >= deadline:
+                    raise ControlPipeError('Brak połączenia z kontrolerem instalacji. Spróbuj ponownie.') from exc
+                time.sleep(0.05)
         try:
             win32pipe.SetNamedPipeHandleState(
                 handle, win32pipe.PIPE_READMODE_MESSAGE, None, None
@@ -205,18 +255,32 @@ class NamedPipeControlClient:
             error_code, response = win32file.ReadFile(handle, _RESPONSE_BYTES)
             if error_code or len(response) > _RESPONSE_BYTES:
                 raise ControlPipeError("The controller response is invalid.")
+            try:
+                win32file.WriteFile(handle, _RECEIPT)
+            except Exception as exc:
+                # Old hosts may close immediately after a successful read. A
+                # complete response is authoritative even if its receipt is lost.
+                if not _peer_disconnected(exc): raise
             decoded = json.loads(response.decode("utf-8"))
             if not isinstance(decoded, dict) or not isinstance(decoded.get("ok"), bool):
                 raise ControlPipeError("The controller response has an invalid schema.")
             return decoded
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise ControlPipeError("The controller response is not valid JSON.") from exc
+        except ControlPipeError:
+            raise
+        except Exception as exc:
+            raise ControlPipeError('Połączenie z kontrolerem instalacji zostało przerwane. Sprawdź stan operacji przed ponowieniem.') from exc
         finally:
-            win32file.CloseHandle(handle)
+            try:
+                win32file.CloseHandle(handle)
+            except Exception as exc:
+                raise ControlPipeError('Nie udało się zamknąć połączenia z kontrolerem instalacji.') from exc
 
 
 __all__ = [
     "ControlPipeError",
+    "ControlPipePeerDisconnected",
     "NamedPipeControlClient",
     "NamedPipeControlServer",
 ]

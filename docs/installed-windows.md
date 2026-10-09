@@ -121,6 +121,27 @@ nie pobiera silnika ani modeli automatycznie. Obecne deklaracje zgodności
 znajdują się w `installer/module-compatibility.json`; zmiana schematu wymaga
 podpisanej, jawnie zarejestrowanej migracji wykonywanej w osobnym hoście.
 
+Po kliknięciu **Pobierz OCR** launcher i panel WEB pokazują przygotowanie planu,
+pobrane bajty i procent oraz kolejne etapy: oczekiwanie na zadania, kopię bazy,
+instalację i sprawdzanie działania. Licznik obejmuje wyłącznie brakującą,
+unikalną zawartość, z pominięciem zweryfikowanych lokalnych plików. Ponowne
+otwarcie launchera lub panelu przyłącza się do trwającej operacji; nie uruchamia
+drugiej instalacji. Do zakończenia operacji przyciski zmian są zablokowane.
+Jeśli kontroler zrestartuje się przed rozpoczęciem przyjętej operacji, odczyt
+jej stanu informuje o przerwaniu i konieczności zatwierdzenia nowego planu.
+
+Zakładka **Wersje modułów** w instalacji pokazuje zainstalowane moduły i
+podpisany katalog Release. Porównanie wbudowanego buildu z gałęzią GitHub
+pozostaje przeznaczone dla portable. Przy chwilowym braku połączenia z
+kontrolerem przycisk **Ponów połączenie z kontrolerem** ponawia odczyt.
+
+Poprawki samego kontrolera i launchera wymagają uruchomienia nowego pełnego
+instalatora na istniejącej instalacji. Naprawa zachowuje aktywne moduły i ich
+blokady; następnie zaktualizuj moduły przez launcher, aby panel WEB otrzymał
+nowe pliki. Utwórz Release z nowego taga zawierającego poprawki — ponowienie
+Actions dla starego taga buduje stary kod. Dopisek `dev` w nazwie taga jest
+opcjonalny; wydanie testowe z `dev` musi mieć zaznaczone **pre-release**.
+
 Restart backendu i autostart są dostępne z WEB wyłącznie dla administratora.
 Instalator rejestruje zadanie `PicSyncra Controller primary-installation`,
 które jest właścicielem tylko uruchomionego przez siebie procesu WEB. Kontroler

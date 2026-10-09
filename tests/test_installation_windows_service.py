@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import pytest
 
 from picsyncra.installation.windows_service import (
     ControllerPipeHost,
@@ -81,3 +82,26 @@ def test_controller_pipe_host_stops_after_the_current_request_when_signalled() -
     host.serve_forever()
 
     assert events == ["open", "request", "close"]
+
+
+def test_controller_pipe_host_survives_a_client_closing_before_reading():
+    from picsyncra.installation.control_pipe import ControlPipeError
+    from picsyncra.installation import control_pipe
+    disconnected = getattr(control_pipe, 'ControlPipePeerDisconnected', ControlPipeError)
+    requests = []
+    class Server:
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def serve_once(self):
+            requests.append(1)
+            if len(requests) == 1: raise disconnected('client left')
+    ControllerPipeHost(server_factory=Server, stop_requested=lambda: len(requests) >= 2).serve_forever()
+    assert len(requests) == 2
+
+
+def test_controller_pipe_host_does_not_hide_an_ownership_or_acl_failure():
+    class Server:
+        def __enter__(self): raise RuntimeError('duplicate owner')
+        def __exit__(self, *args): pass
+    with pytest.raises(RuntimeError, match='duplicate owner'):
+        ControllerPipeHost(server_factory=Server, stop_requested=lambda: False).serve_forever()

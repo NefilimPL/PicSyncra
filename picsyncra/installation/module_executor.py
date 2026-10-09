@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import shutil
 import sqlite3
+from time import monotonic
 from uuid import uuid4
 from .backups import create_operation_backup
 from .database import inspect_database
@@ -151,7 +152,18 @@ class ModuleExecutor:
             self._write(record, 'downloading')
             try:
                 self.content.seed(active, allow_incomplete=True)
-                self.content.assemble(plan.target)
+                progress_path = safe_path(self.context.state_root, 'module-progress/' + plan.plan_id + '.json')
+                last_progress = None
+                last_report = 0.0
+                def report_progress(value):
+                    nonlocal last_progress, last_report
+                    now = monotonic()
+                    if last_progress is None or last_progress['downloaded_bytes'] == 0 or value['downloaded_bytes'] == value['total_bytes'] or now - last_report >= 0.25:
+                        # Keep small progress snapshots separate from the full
+                        # transaction journal, which may include many OCR files.
+                        atomic_json(progress_path, value, replace=True)
+                        last_progress, last_report = value, now
+                self.content.assemble(plan.target, on_progress=report_progress)
                 self._write(record, 'draining')
                 self.quiesce(plan.plan_id)
                 self._write(record, 'stopping')

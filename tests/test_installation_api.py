@@ -15,7 +15,7 @@ class RequestStub:
         return self._payload
 
 
-def app_with_dependencies(*, installed: bool = True, module_client=None):
+def app_with_dependencies(*, installed: bool = True, module_client=None, installation_status=None, read_operation=None):
     from picsyncra.web.installation_api import InstallationApiDependencies, build_installation_router
 
     calls: list[object] = []
@@ -39,10 +39,10 @@ def app_with_dependencies(*, installed: bool = True, module_client=None):
         require_admin=require_admin,
         require_user=require_user,
         require_csrf=require_csrf,
-        installation_status=lambda: {"channel": "stable", "build": "41"},
+        installation_status=installation_status or (lambda: {"channel": "stable", "build": "41"}),
         list_releases=lambda channel: [{"release_id": 42, "channel": channel}],
         submit_operation=submit,
-        read_operation=lambda operation_id: {"operation_id": operation_id, "state": "draining"},
+        read_operation=read_operation or (lambda operation_id: {"operation_id": operation_id, "state": "draining"}),
         force_operation=lambda operation_id: {"operation_id": operation_id, "state": "draining", "force_allowed": True},
         change_channel=lambda channel: {"channel": channel},
         set_autostart=lambda enabled: {"autostart": enabled},
@@ -77,6 +77,25 @@ def test_portable_runtime_does_not_expose_installed_update_endpoints() -> None:
     with pytest.raises(HTTPException) as error:
         routes["/api/installation"](RequestStub())
     assert error.value.status_code == 404
+
+
+def test_status_returns_service_unavailable_when_controller_disconnects():
+    from picsyncra.installation.control_pipe import ControlPipeError
+    def unavailable(): raise ControlPipeError('Brak połączenia z kontrolerem instalacji.')
+    routes, _ = app_with_dependencies(installation_status=unavailable)
+    with pytest.raises(HTTPException) as error:
+        routes['/api/installation'](RequestStub())
+    assert error.value.status_code == 503
+    assert 'kontrolerem' in error.value.detail
+
+
+def test_operation_poll_returns_service_unavailable_instead_of_critical_error():
+    from picsyncra.installation.control_pipe import ControlPipeError
+    def unavailable(operation_id): raise ControlPipeError('Brak połączenia z kontrolerem.')
+    routes, _ = app_with_dependencies(read_operation=unavailable)
+    with pytest.raises(HTTPException) as error:
+        routes['/api/installation/operations/{operation_id}'](RequestStub(), 'a' * 32)
+    assert error.value.status_code == 503
 
 
 def test_installation_status_and_release_channel_require_admin() -> None:

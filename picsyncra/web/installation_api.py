@@ -109,7 +109,10 @@ def build_installation_router(dependencies: InstallationApiDependencies) -> APIR
     def installation_status(request: Request) -> dict[str, Any]:
         _require_installed(dependencies)
         dependencies.require_admin(request)
-        return dependencies.installation_status()
+        try:
+            return dependencies.installation_status()
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     @router.get("/api/installation/releases")
     def installation_releases(request: Request, channel: str = "stable") -> dict[str, Any]:
@@ -136,7 +139,10 @@ def build_installation_router(dependencies: InstallationApiDependencies) -> APIR
     def installation_operation_status(request: Request, operation_id: str) -> dict[str, Any]:
         _require_installed(dependencies)
         dependencies.require_admin(request)
-        result = dependencies.read_operation(_text(operation_id, "operation_id"))
+        try:
+            result = dependencies.read_operation(_text(operation_id, "operation_id"))
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
         if result is None:
             raise HTTPException(status_code=404, detail="Nie znaleziono operacji.")
         return result

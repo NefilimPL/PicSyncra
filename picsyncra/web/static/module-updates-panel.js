@@ -19,6 +19,9 @@
     const note = node('p', 'Wybór wersji przygotowuje cofnięcie i wyłącza ten moduł z bieżącej aktualizacji. Zmiany zatwierdza wspólny przycisk.', 'settings-note');
     const status = node('p', '', 'settings-note');
     status.setAttribute('role', 'status');
+    const progressbar = node('progress');
+    progressbar.setAttribute('aria-label', 'Postęp pobierania i instalacji modułów');
+    progressbar.hidden = true;
     const table = node('div', undefined, 'module-updates-rows');
     const controls = node('div', undefined, 'module-updates-controls');
     const channelLabel = node('label', 'Kanał aktualizacji: ');
@@ -55,7 +58,27 @@
     const backups = node('select'); backups.setAttribute('aria-label', 'Kopia bazy do odtworzenia');
     backups.addEventListener('change', () => { restoreBackupId = backups.value || null; });
     backupLabel.append(backups);
-    element.append(title, note, channelLabel, status, table, controls, backupLabel, conflicts);
+    element.append(title, note, channelLabel, status, progressbar, table, controls, backupLabel, conflicts);
+    function showProgress(operation) {
+      const labels = {accepted:'Operacja przyjęta — oczekiwanie na rozpoczęcie.', downloading:'Pobieranie',
+        draining:'Oczekiwanie na zakończenie zadań.', stopping:'Zatrzymywanie backendu.',
+        backing_up:'Tworzenie kopii bazy i konfiguracji.', installing:'Instalowanie',
+        restoring:'Odtwarzanie bazy i konfiguracji.', migrating:'Migracja bazy.',
+        validating:'Sprawdzanie działania modułów.', committed:'Gotowe — instalacja zakończona.',
+        rolling_back:'Przywracanie poprzednich wersji.', rolled_back:'Przywrócono poprzednie wersje.',
+        failed:'Operacja nie powiodła się.', recovery_required:'Wymagane odzyskiwanie instalacji.'};
+      let text = labels[operation.state] || operation.state;
+      if (['downloading','installing'].includes(operation.state)) text += operation.action === 'install_ocr' ? ' OCR' : ' modułów';
+      const downloaded = operation.progress?.downloaded_bytes || 0;
+      const total = operation.progress?.total_bytes || 0;
+      progressbar.hidden = ['committed','rolled_back','failed','recovery_required'].includes(operation.state);
+      if (operation.state === 'downloading' && total > 0) {
+        const mib = value => (value / 1048576).toLocaleString('pl-PL', {minimumFractionDigits:1, maximumFractionDigits:1});
+        text += `: ${mib(downloaded)} / ${mib(total)} MiB (${Math.min(100, Math.floor(downloaded * 100 / total))}%)`;
+        progressbar.max = total; progressbar.value = downloaded;
+      } else progressbar.removeAttribute('value');
+      status.textContent = text + (operation.error ? ` — ${operation.error}` : '');
+    }
     function synchronize() {
       rollback.disabled = busy || !selected.size;
       update.disabled = updateAll.disabled = ocr.disabled = refreshButton.disabled = busy;
@@ -86,6 +109,12 @@
         const snapshot = await requestJson('/api/installation/modules');
         currentChannel = snapshot.channel || currentChannel;
         channel.value = currentChannel;
+        if (!operationId && snapshot.operation && !['committed','rolled_back','failed','recovery_required'].includes(snapshot.operation.state)) {
+          operationId = snapshot.operation.operation_id;
+          busy = true; terminalMessage = null;
+          showProgress(snapshot.operation);
+          poll();
+        }
         rows.clear(); table.replaceChildren();
         for (const module of snapshot.modules || []) {
           const row = node('div', undefined, 'module-update-row');
@@ -133,17 +162,19 @@
     async function prepare(action) {
       if (busy) return;
       busy = true; synchronize(); conflicts.replaceChildren();
+      progressbar.hidden = false; progressbar.removeAttribute('value');
+      status.textContent = action === 'install_ocr' ? 'Sprawdzanie zgodności i przygotowanie instalacji OCR…' : 'Sprawdzanie zgodności i przygotowanie planu…';
       try {
         const plan = await post('/api/installation/module-plans', {action,
           selected: action === 'rollback_modules' ? Object.fromEntries(selected) : {},
           excluded: action === 'update' ? [...selected.keys()] : [], restore_backup_id:restoreBackupId});
-        if (plan.conflicts.length) { conflictDialog(plan); return plan; }
+        if (plan.conflicts.length) { status.textContent = 'Plan zawiera konflikty zgodności.'; conflictDialog(plan); return plan; }
         let changes = (plan.changes || []).map(item => `${item.module_id}: ${item.current || 'brak'} → ${item.target}`).join('\n');
         if (action === 'update_all') {
           const overridden = new Set([...selected.keys(), ...[...rows.values()].filter(row => row.module.pinned).map(row => row.module.module_id)]);
           if (overridden.size) changes += `\nAktualizacje zostaną włączone, a wybory cofnięcia pominięte dla: ${[...overridden].sort().join(', ')}.`;
         }
-        if (!await confirm(`${changes || 'Zgodny zestaw modułów.'}\nDo pobrania: ${plan.download_bytes.toLocaleString('pl-PL')} bajtów.\nZatwierdzić operację?`)) return plan;
+        if (!await confirm(`${changes || 'Zgodny zestaw modułów.'}\nDo pobrania: ${plan.download_bytes.toLocaleString('pl-PL')} bajtów.\nZatwierdzić operację?`)) { status.textContent = 'Operacja anulowana przed rozpoczęciem.'; return plan; }
         let acknowledged = false;
         if (restoreBackupId) {
           acknowledged = await confirm('Odtworzenie starszej bazy usunie dane zapisane po wykonaniu wybranej kopii. Potwierdzasz utratę tych nowszych danych?');
@@ -153,16 +184,17 @@
           {restore_backup_id:restoreBackupId, acknowledge_data_loss:acknowledged});
         operationId = operation.operation_id;
         terminalMessage = null;
+        showProgress(operation);
         try { window.sessionStorage?.setItem('picsyncra-module-operation', operationId); } catch (_) {}
         poll(); return plan;
       } catch (error) { status.textContent = error.message; }
-      finally { if (!operationId) busy = false; synchronize(); }
+      finally { if (!operationId) { busy = false; progressbar.hidden = true; } synchronize(); }
     }
     async function poll() {
       if (!operationId) return;
       try {
         const operation = await requestJson(`/api/installation/operations/${operationId}`);
-        status.textContent = `Operacja: ${operation.state}${operation.error ? ` — ${operation.error}` : ''}`;
+        showProgress(operation);
         if (['committed','rolled_back','failed','recovery_required'].includes(operation.state)) {
           terminalMessage = status.textContent;
           if (operation.state === 'committed') { selected.clear(); selectedVersions.clear(); restoreBackupId = null; }

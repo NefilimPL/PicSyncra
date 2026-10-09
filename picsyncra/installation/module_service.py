@@ -36,6 +36,7 @@ class ModuleService:
         self.schedule = schedule or self._defer
         self._lock = threading.Lock()
         self.busy = False
+        self.current_operation_id = None
         self.entries = ()
         self.executor = ModuleExecutor(context, controller, content=self.content,
                                        quiesce=quiesce or self._quiesce, healthy=healthy or self._healthy,
@@ -81,6 +82,7 @@ class ModuleService:
             operation_id = status['operation_id']
             self._load_plan(operation_id)
             self.busy = True
+            self.current_operation_id = operation_id
         def work():
             try:
                 self.executor.recover()
@@ -142,7 +144,8 @@ class ModuleService:
                     backups.append(dict(backup_id=path.name, schema_version=schema))
                 except (RuntimeError, OSError, ValueError): continue
                 if len(backups) >= 100: break
-        return dict(revision=active.revision, channel=channel, modules=rows, offline=self.source.offline, backups=backups,
+        operation = self.operation(self.current_operation_id) if self.busy and self.current_operation_id else None
+        return dict(revision=active.revision, channel=channel, modules=rows, offline=self.source.offline, backups=backups, operation=operation,
                     ocr_installed=all(any(m.module_id == name for m in active.modules) for name in ('ocr_runtime', 'ocr_models')),
                     blocked_releases=[dict(release_id=e.release_id, tag=e.tag, reason=e.blocked_reason) for e in self.entries if e.blocked_reason][:50])
 
@@ -226,6 +229,7 @@ class ModuleService:
         with self._lock:
             if self.busy: raise ModuleExecutionError('Inna operacja modułów jest w toku.')
             self.busy = True
+            self.current_operation_id = plan_id
         accepted = dict(operation_id=plan_id, state='accepted', action=plan.action, error=None)
         operation_path = safe_path(self.context.state_root, 'module-operations/' + plan_id + '.json')
         atomic_json(operation_path, accepted, replace=True)
@@ -247,9 +251,19 @@ class ModuleService:
         self._load_plan(operation_id)
         current = self.executor.status()
         if current and current['operation_id'] == operation_id:
-            return {key: current[key] for key in ('operation_id', 'state', 'action', 'error')}
-        path = safe_path(self.context.state_root, 'module-operations/' + operation_id + '.json')
-        return json.loads(path.read_text(encoding='utf-8')) if path.exists() else None
+            result = {key: current[key] for key in ('operation_id', 'state', 'action', 'error')}
+        else:
+            path = safe_path(self.context.state_root, 'module-operations/' + operation_id + '.json')
+            result = json.loads(path.read_text(encoding='utf-8')) if path.exists() else None
+        if result is not None and result['state'] == 'accepted' and self.current_operation_id != operation_id:
+            # Accepted work belongs to this controller instance's worker. A
+            # restarted host must not leave old clients polling forever or
+            # silently execute a plan whose live preflight may have changed.
+            result.update(state='failed', error='Kontroler został uruchomiony ponownie przed rozpoczęciem operacji. Przygotuj i zatwierdź nowy plan.')
+        progress_path = safe_path(self.context.state_root, 'module-progress/' + operation_id + '.json')
+        if result is not None and progress_path.exists():
+            result['progress'] = json.loads(progress_path.read_text(encoding='utf-8'))
+        return result
 
     def _healthy(self):
         from .controller_host import _backend_ready

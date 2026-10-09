@@ -59,6 +59,17 @@ def test_remote_restart_uses_only_controller_and_advances_session_epoch(tmp_path
     assert service.status()["session_epoch"] == 1
 
 
+def test_module_operation_transport_failure_is_not_misreported_as_missing(tmp_path):
+    from picsyncra.installation.operation_service import InstalledOperationService
+    from picsyncra.installation.control_pipe import ControlPipeError
+    class Disconnected(Controller):
+        def module_operation(self, operation_id):
+            raise ControlPipeError('Brak połączenia z kontrolerem.')
+    service = InstalledOperationService(context(tmp_path), Disconnected())
+    with pytest.raises(ControlPipeError):
+        service.read_operation('a' * 32)
+
+
 def test_failed_remote_restart_is_recorded_without_advancing_session_epoch(tmp_path: Path) -> None:
     from picsyncra.installation.operation_service import InstalledOperationService
 
