@@ -16,19 +16,29 @@ class ModuleLauncherModel:
     def __init__(self, client):
         self.client = client
         self.selected = {}
+        self.selected_versions = {}
         self.snapshot = {}
 
     def refresh(self):
         self.snapshot = self.client.module_catalog()
         return self.snapshot
 
+    def change_channel(self, channel):
+        result=self.client.module_channel(channel)
+        self.snapshot['channel']=result['channel']
+        return result
+
     def select(self, module_id, version_id):
         from .module_definition import module_definitions
         if module_id not in {m.module_id for m in module_definitions()}: raise ValueError('Nieznany moduł.')
         if version_id is None:
             self.selected.pop(module_id, None)
+            self.selected_versions.pop(module_id, None)
         elif isinstance(version_id, str) and re.fullmatch('[a-f0-9]{64}', version_id):
             self.selected[module_id] = version_id
+            versions=next((m['versions'] for m in self.snapshot.get('modules',[]) if m['module_id'] == module_id),[])
+            version=next((v for v in versions if v['version_id'] == version_id),None)
+            if version is not None: self.selected_versions[module_id]=dict(version)
         else: raise ValueError('Nieprawidłowa wersja modułu.')
 
     def prepare(self, action, *, restore_backup_id=None):
@@ -76,6 +86,11 @@ class ModuleLauncherWindow:
             button.grid(row=index//3,column=index%3,padx=3,pady=3,sticky='ew'); self.buttons.append(button)
             if label == 'Cofnij wersję modułu': self.rollback_button = button
         for column in range(3): toolbar.columnconfigure(column,weight=1)
+        channel_frame=ttk.Frame(root); channel_frame.pack(fill='x',padx=12,pady=6)
+        ttk.Label(channel_frame,text='Kanał aktualizacji:').pack(side='left')
+        self.channel=ttk.Combobox(channel_frame,state='readonly',values=['Stable','Dev'],width=12)
+        self.channel.set('Stable'); self.channel.pack(side='left',padx=8)
+        self.channel.bind('<<ComboboxSelected>>',lambda event: self.change_channel())
         self.status=tk.StringVar(value='Odczyt kontrolera…')
         ttk.Label(root,textvariable=self.status,wraplength=1000).pack(fill='x',padx=12,pady=10)
         canvas=tk.Canvas(root,highlightthickness=0)
@@ -108,6 +123,7 @@ class ModuleLauncherWindow:
         for widget in self.rows.winfo_children():
             if isinstance(widget,self.ttk.Combobox): widget.configure(state='disabled')
         self.backup.configure(state='disabled')
+        self.channel.configure(state='disabled')
         def worker():
             try:
                 result=work()
@@ -116,6 +132,7 @@ class ModuleLauncherWindow:
                 message=str(exc)
                 def failed(value):
                     self.status.set(value)
+                    self.channel.set('Dev' if self.model.snapshot.get('channel') == 'dev' else 'Stable')
                     if self.operation_id: self.root.after(2000,self.poll)
                 self.callbacks.put(lambda: self._finish(failed,message))
         threading.Thread(target=worker,daemon=True,name='PicSyncraLauncherIO').start()
@@ -126,18 +143,32 @@ class ModuleLauncherWindow:
         for widget in self.rows.winfo_children():
             if isinstance(widget,self.ttk.Combobox): widget.configure(state='readonly')
         self.backup.configure(state='readonly')
+        self.channel.configure(state='disabled' if self.operation_id else 'readonly')
         callback(result)
+        self.channel.configure(state='disabled' if self.busy or self.operation_id else 'readonly')
         self.rollback_button.configure(state='disabled' if self.busy or self.operation_id or not self.model.selected else 'normal')
 
     def refresh(self): self._run(self.model.refresh,self.render)
 
+    def change_channel(self):
+        if self.busy or self.operation_id: return
+        channel='dev' if self.channel.get() == 'Dev' else 'stable'
+        def work():
+            self.model.change_channel(channel)
+            return self.model.refresh()
+        self._run(work,self.render)
+
     def render(self,snapshot):
+        self.channel.set('Dev' if snapshot.get('channel') == 'dev' else 'Stable')
         for widget in self.rows.winfo_children(): widget.destroy()
         for index,module in enumerate(snapshot.get('modules',[])):
             self.ttk.Label(self.rows,text=module['label']).grid(row=index,column=0,padx=5,pady=10,sticky='w')
             text=f"Obecna: {module['current']}  Dostępna: {module['latest'] or 'brak podpisanego wydania'}"
             if module['pinned']: text+='  [wyłączony z aktualizacji]'
             if module['module_id'] in self.model.selected: text+='  [wybrany do cofnięcia; pomijany w aktualizacji]'
+            chosen=self.model.selected.get(module['module_id'])
+            if chosen and not any(v['version_id']==chosen and v['available'] for v in module['versions']):
+                text+='  [wybrana wersja niedostępna w tym kanale]'
             self.ttk.Label(self.rows,text=text,wraplength=350).grid(row=index,column=1,sticky='w',padx=5)
             values={'Bez zmiany':None}
             links={}
@@ -147,6 +178,11 @@ class ModuleLauncherWindow:
                 values[label]=version['version_id']; links[label]=version['release_url']
             combo=self.ttk.Combobox(self.rows,state='readonly',values=list(values),width=25)
             chosen=self.model.selected.get(module['module_id'])
+            if chosen and chosen not in values.values():
+                version=self.model.selected_versions.get(module['module_id'],{})
+                label=f"{version.get('display_version',chosen[:8])} — niedostępna w tym kanale"
+                values[label]=chosen; links[label]=version.get('release_url','')
+                combo.configure(values=list(values))
             combo.set(next((key for key,value in values.items() if value==chosen),'Bez zmiany'))
             combo.grid(row=index,column=2,padx=5)
             combo.bind('<<ComboboxSelected>>',lambda event,mid=module['module_id'],box=combo,options=values: self.select_version(mid,options[box.get()]))
@@ -210,7 +246,8 @@ class ModuleLauncherWindow:
         self.status.set(f"Operacja: {result['state']} — {result.get('error') or ''}")
         if result['state'] in {'committed','rolled_back','failed','recovery_required'}:
             self.terminal_message=self.status.get()
-            if result['state']=='committed': self.model.selected.clear()
+            if result['state']=='committed':
+                self.model.selected.clear(); self.model.selected_versions.clear()
             self.operation_id=None; self.refresh()
         else: self.root.after(1500,self.poll)
 

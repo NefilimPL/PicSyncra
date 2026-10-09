@@ -26,6 +26,13 @@ def initialize_module_layout(request):
             read_module_set(context)
             return  # Infrastructure repair preserves selected versions/pins.
         layout=json.loads(safe_path(context.program_root,'module-initial-layout.json').read_text(encoding='utf-8'))
+        channel=layout.get('channel','stable')
+        if not isinstance(channel,str) or channel not in {'stable','dev'}:
+            raise ValueError('Invalid initial module channel.')
+        settings_path=safe_path(context.state_root,'installation-settings.json')
+        settings=json.loads(settings_path.read_text(encoding='utf-8')) if settings_path.exists() else {}
+        if not isinstance(settings,dict): raise ValueError('Invalid installation settings.')
+        if 'channel' not in settings: settings['channel']=channel
         selected_id=layout['local' if request['include_local'] else 'base']
         selected=parse_module_set(json.loads(safe_path(context.program_root,'sets/'+selected_id+'/module-set.json').read_text(encoding='utf-8')))
         if selected.set_id!=selected_id: raise ValueError('Initial set identity mismatch.')
@@ -38,4 +45,5 @@ def initialize_module_layout(request):
             receipt=create_operation_backup(context,'module-upgrade-'+uuid4().hex)
             atomic_json(safe_path(context.state_root,'module-initial-backup.json'),dict(marker=marker,backup_id=receipt.backup_id),replace=True)
         publish_module_set(context,selected)
+        atomic_json(settings_path,settings,replace=True)
         activate_module_set(context,selected,expected_revision=0)

@@ -70,6 +70,15 @@ przez pełny nowy instalator. Nie można bezpiecznie mieszać jej modułów bez
 deklaracji zgodności. Naprawa istniejącej instalacji modułowej zachowuje jej
 aktywny zestaw i blokady.
 
+Przy pierwszej instalacji kanał aktualizacji pochodzi z instalatora:
+Release oznaczony jako pre-release ustawia **Dev**, a zwykły Release **Stable**.
+Pole **Kanał aktualizacji** w panelu WEB i launcherze zmienia wspólne ustawienie
+oraz odświeża katalog podpisanych wersji. Nie rozpoczyna pobierania ani
+instalacji. Zmiana kanału jest blokowana podczas wykonywania operacji modułów.
+Naprawa instalacji zachowuje wcześniej wybrany kanał. Wybory cofnięcia i blokady
+modułów pozostają zachowane; wersja niewystępująca w nowym kanale jest jawnie
+oznaczona jako niedostępna, z zachowanym linkiem do jej Release.
+
 Publikowanie tych paczek wymaga aktywnego workflow w repozytorium oraz
 konfiguracji środowiska `installed-release-signing`: publicznych kluczy
 `PICSYNCRA_RELEASE_PUBLIC_KEYS` i prywatnego sekretu

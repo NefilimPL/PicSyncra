@@ -11,7 +11,8 @@ import pytest
 ROOT = Path(__file__).parents[1]
 
 
-def test_installed_build_from_clean_directory_and_repeated_release(tmp_path: Path) -> None:
+@pytest.mark.parametrize('channel', ['stable','dev'])
+def test_installed_build_from_clean_directory_and_repeated_release(tmp_path: Path, channel: str) -> None:
     """Run the packaging script without the expensive external compilers.
 
     Catches a missing output root, nested bundles on rebuild, stale files,
@@ -31,7 +32,7 @@ def test_installed_build_from_clean_directory_and_repeated_release(tmp_path: Pat
     shutil.copy2(ROOT / 'PicSyncra.pyw', checkout)
     harness = tmp_path / "build-harness.ps1"
     harness.write_text(
-        r"""param([string]$Checkout, [string]$TestPython)
+        r"""param([string]$Checkout, [string]$TestPython, [string]$TestChannel)
 $ErrorActionPreference = 'Stop'
 function Invoke-BuildPython {
     $arguments = @($args)
@@ -75,7 +76,7 @@ function Get-Command {
 function Invoke-TestIscc {
     $global:LASTEXITCODE = 0
 }
-& (Join-Path $Checkout 'installer\build_installer.ps1') -ReleaseId 1 -ReleaseCommit ('a' * 40) -Python Invoke-BuildPython
+& (Join-Path $Checkout 'installer\build_installer.ps1') -ReleaseId 1 -ReleaseCommit ('a' * 40) -Channel $TestChannel -SourceBranch $(if ($TestChannel -eq 'dev') { 'dev2' } else { 'main' }) -Python Invoke-BuildPython
 """,
         encoding="utf-8",
     )
@@ -83,7 +84,7 @@ function Invoke-TestIscc {
     def run_build() -> None:
         result = subprocess.run(
             [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(harness),
-             str(checkout), sys.executable],
+             str(checkout), sys.executable, channel],
             capture_output=True, text=True, timeout=60,
         )
         assert result.returncode == 0, result.stdout + result.stderr
@@ -91,6 +92,7 @@ function Invoke-TestIscc {
     run_build()
     output = checkout / "dist" / "installed"
     layout = json.loads((output / 'module-initial-layout.json').read_text())
+    assert layout['channel'] == channel
     base = output / 'module-sets' / layout['base']
     local = output / 'module-sets' / layout['local']
     static = base / 'picsyncra/web/static'

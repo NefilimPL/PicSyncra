@@ -130,7 +130,7 @@ def prepare_layout(dist_root, *, release_id, tag, commit, channel='stable', sour
                 target=root/file.path; target.parent.mkdir(parents=True,exist_ok=True); shutil.copyfile(payload/file.path,target)
         atomic_json(root/'module-set.json',module_set_payload(selected))
         layouts[variant]=selected.set_id
-    atomic_json(dist_root/'module-initial-layout.json',dict(schema=1,release_id=release_id,**layouts),replace=True)
+    atomic_json(dist_root/'module-initial-layout.json',dict(schema=1,release_id=release_id,channel=channel,**layouts),replace=True)
     return layouts
 
 

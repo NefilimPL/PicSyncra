@@ -51,6 +51,7 @@ _COMMAND_PAYLOADS: dict[str, frozenset[str]] = {
     "set_autostart": frozenset({"enabled"}),
     "module_catalog": frozenset(),
     "module_recover": frozenset(),
+    "module_channel": frozenset({'channel'}),
     "module_plan": frozenset({'action', 'selected', 'excluded', 'restore_backup_id'}),
     "module_execute": frozenset({'plan_id', 'restore_backup_id', 'acknowledge_data_loss'}),
     "module_operation": frozenset({'operation_id'}),
@@ -62,6 +63,10 @@ def validate_module_payload(command, payload):
     if command not in _COMMAND_PAYLOADS or not isinstance(payload, dict) or set(payload) != _COMMAND_PAYLOADS[command]:
         _reject('Invalid module command payload.')
     if command in {'module_catalog', 'module_recover'}: return
+    if command == 'module_channel':
+        if not isinstance(payload['channel'],str) or payload['channel'] not in {'stable','dev'}:
+            _reject('Invalid module release channel.')
+        return
     backup = payload.get('restore_backup_id')
     if backup is not None and (not isinstance(backup, str) or not re.fullmatch('[A-Za-z0-9][A-Za-z0-9._-]{0,63}', backup)):
         _reject('Invalid backup identifier.')
@@ -157,6 +162,7 @@ class ControlDispatcher:
             try:
                 if request.command == 'module_catalog': result = service.catalog()
                 elif request.command == 'module_recover': result = service.recover()
+                elif request.command == 'module_channel': result = service.change_channel(**request.payload)
                 elif request.command == 'module_plan': result = service.prepare(**request.payload)
                 elif request.command == 'module_execute': result = service.execute(**request.payload)
                 else: result = service.operation(request.payload['operation_id'])

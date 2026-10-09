@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import re
 from typing import Any
-import winerror
 
 from .control_protocol import ControlDispatcher, ControlProtocolError, MAX_MESSAGE_BYTES
 
@@ -103,6 +102,7 @@ class NamedPipeControlServer:
         if self._handle is None:
             raise ControlPipeError("Open the controller pipe before serving requests.")
         _win32api, _win32con, win32file, win32pipe, _win32security = _windows_modules()
+        import winerror
         try:
             win32pipe.ConnectNamedPipe(self._handle, None)
         except Exception as exc:

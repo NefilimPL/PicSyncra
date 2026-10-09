@@ -123,3 +123,36 @@ external release steps. No Release was published and no production signing key
 was created or changed. The local installer has no compiled trusted public key,
 so it displays controls but cannot download an official unsigned OCR/update
 source. Actions must publish signed complete module assets from the release tag.
+
+## Dev channel and CI import correction — 2026-10-09
+
+The supplied Windows/Python 3.11 Actions log reported 17 collection errors:
+`web.app` imported the installed pipe transport, whose global `winerror` import
+required pywin32. CI installed build/WEB/Qt requirements but omitted the installed
+requirements. CI now installs and caches `requirements-installed.txt`; pushes
+to `dev2` also trigger checks. `winerror` is imported only when serving a native
+pipe, so portable WEB remains importable without pywin32. A subprocess test
+blocks all Windows dependency imports and verifies this boundary.
+
+Initial module-layout metadata carries the release channel. Fresh installations
+initialize it, while existing choices and repair selections remain intact. WEB
+and the launcher change the shared channel through the controller's authenticated
+closed pipe API, which rejects changes while a module operation is running.
+Both selectors preserve rollback drafts, their Release links and pins, marking
+drafts absent from the new channel as unavailable.
+
+Native hidden Tk GUI acceptance used a real authenticated Windows pipe and an
+isolated installation under `build`: channel selection, unavailable drafts,
+unchanged active modules/pins and restoration of the displayed channel after
+busy rejection passed. No HKLM or scheduled tasks were modified. Python 3.11
+Windows x64 wheels for both pinned installed dependencies were downloaded and
+verified as available. The local test interpreter is Python 3.13; the new Actions
+run remains to be executed after pushing the changes. The installer artifact
+listed above predates this correction; a build from the new release tag includes
+the updated controls and initialization.
+
+Final validation: **1984 Python tests passed**, 3 skipped, 66 subtests passed;
+**40 JavaScript tests passed**. Python compileall, both app/module-panel JS syntax,
+workflow trigger sanity and `pip check` passed. Review identified the missing
+draft-display case; its regression tests failed before the correction and passed
+after it. Follow-up review found no further important issues.

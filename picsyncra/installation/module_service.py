@@ -61,6 +61,17 @@ class ModuleService:
         except (OSError, ValueError, KeyError):
             return False
 
+    def change_channel(self, channel):
+        if not isinstance(channel,str) or channel not in {'stable','dev'}:
+            raise ValueError('Niepoprawny kanał wydań.')
+        with self._lock:
+            if self.busy: raise ModuleExecutionError('Inna operacja modułów jest w toku.')
+            path=safe_path(self.context.state_root,'installation-settings.json')
+            settings=json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
+            if not isinstance(settings,dict): raise ValueError('Niepoprawne ustawienia instalacji.')
+            atomic_json(path,dict(settings,channel=channel),replace=True)
+        return dict(channel=channel)
+
     def recover(self):
         with self._lock:
             if self.busy: raise ModuleExecutionError('Inna operacja modułów jest w toku.')
@@ -90,13 +101,14 @@ class ModuleService:
             config_schema = inspect_configuration(self.context.config_root)
         return ModuleEnvironment(schema, config_schema, RUNTIME_ABI, CONTROLLER_VERSION, LAUNCHER_VERSION)
 
-    def _catalog(self):
-        self.entries = self.source.load(self._channel())
+    def _catalog(self, channel=None):
+        self.entries = self.source.load(channel or self._channel())
         return tuple(entry.release for entry in self.entries if entry.release and not entry.blocked_reason)
 
     def catalog(self):
         active = read_module_set(self.context)
-        releases = self._catalog()
+        channel=self._channel()
+        releases = self._catalog(channel)
         latest = max(releases, key=lambda r: r.published_at, default=None)
         labels = {item.module_id: item.label for item in module_definitions()}
         rows = []
@@ -130,7 +142,7 @@ class ModuleService:
                     backups.append(dict(backup_id=path.name, schema_version=schema))
                 except (RuntimeError, OSError, ValueError): continue
                 if len(backups) >= 100: break
-        return dict(revision=active.revision, modules=rows, offline=self.source.offline, backups=backups,
+        return dict(revision=active.revision, channel=channel, modules=rows, offline=self.source.offline, backups=backups,
                     ocr_installed=all(any(m.module_id == name for m in active.modules) for name in ('ocr_runtime', 'ocr_models')),
                     blocked_releases=[dict(release_id=e.release_id, tag=e.tag, reason=e.blocked_reason) for e in self.entries if e.blocked_reason][:50])
 

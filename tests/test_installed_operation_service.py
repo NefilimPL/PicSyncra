@@ -252,6 +252,22 @@ def test_channel_and_autostart_are_persisted_by_installed_service(tmp_path: Path
     assert reloaded.status()["channel"] == "dev"
 
 
+def test_modular_web_channel_change_is_delegated_to_shared_controller(tmp_path: Path):
+    from picsyncra.installation.operation_service import InstalledOperationService
+    from picsyncra.installation.module_filesystem import atomic_json
+    calls=[]
+    class ModularController(Controller):
+        def module_channel(self, channel):
+            calls.append(channel)
+            return {'channel':channel}
+    value=context(tmp_path)
+    atomic_json(value.program_root/'active.json', dict(schema=2), replace=True)
+    service=InstalledOperationService(value,ModularController())
+    assert service.change_channel('dev') == {'channel':'dev'}
+    assert calls == ['dev']
+    assert not (value.state_root/'installation-settings.json').exists()
+
+
 def test_restart_waits_for_admitted_work_and_force_exposes_drain_status(tmp_path: Path) -> None:
     from picsyncra.installation.operation_service import InstalledOperationService
 

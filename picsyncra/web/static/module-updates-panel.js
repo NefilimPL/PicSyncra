@@ -21,8 +21,25 @@
     status.setAttribute('role', 'status');
     const table = node('div', undefined, 'module-updates-rows');
     const controls = node('div', undefined, 'module-updates-controls');
+    const channelLabel = node('label', 'Kanał aktualizacji: ');
+    const channel = node('select'); channel.setAttribute('aria-label', 'Kanał aktualizacji');
+    for (const [value, label] of [['stable','Stable'], ['dev','Dev']]) {
+      const option = node('option', label); option.value = value; channel.append(option);
+    }
+    let currentChannel = 'stable'; channel.value = currentChannel;
+    channel.addEventListener('change', async () => {
+      if (busy) { channel.value = currentChannel; return; }
+      busy = true; synchronize();
+      try {
+        const result = await post('/api/installation/channel', {channel:channel.value});
+        currentChannel = result.channel;
+        await refresh(); onChanged();
+      } catch (error) { channel.value = currentChannel; status.textContent = error.message; }
+      finally { busy = false; synchronize(); }
+    });
+    channelLabel.append(channel);
     const conflicts = node('div', undefined, 'module-updates-conflicts');
-    const selected = new Map(), rows = new Map();
+    const selected = new Map(), rows = new Map(), selectedVersions = new Map();
     let busy = false, timer = null, operationId = null, restoreBackupId = null, terminalMessage = null;
     function button(label, action) {
       const item = node('button', label); item.type = 'button';
@@ -38,22 +55,26 @@
     const backups = node('select'); backups.setAttribute('aria-label', 'Kopia bazy do odtworzenia');
     backups.addEventListener('change', () => { restoreBackupId = backups.value || null; });
     backupLabel.append(backups);
-    element.append(title, note, status, table, controls, backupLabel, conflicts);
+    element.append(title, note, channelLabel, status, table, controls, backupLabel, conflicts);
     function synchronize() {
       rollback.disabled = busy || !selected.size;
       update.disabled = updateAll.disabled = ocr.disabled = refreshButton.disabled = busy;
       for (const row of rows.values()) row.select.disabled = busy;
       backups.disabled = busy;
+      channel.disabled = busy;
     }
     function select(moduleId, versionId) {
       const row = rows.get(moduleId);
       if (!row) throw new Error('Nieznany moduł.');
-      if (versionId) selected.set(moduleId, versionId); else selected.delete(moduleId);
+      if (versionId) selected.set(moduleId, versionId);
+      else { selected.delete(moduleId); selectedVersions.delete(moduleId); }
       row.select.value = versionId || '';
       const version = row.module.versions.find(item => item.version_id === versionId);
-      row.link.href = releaseUrl(version?.release_url || row.module.versions.find(item => item.version_id === row.module.current_id)?.release_url);
+      if (version) selectedVersions.set(moduleId, version);
+      const draft = version || selectedVersions.get(moduleId);
+      row.link.href = releaseUrl(versionId ? draft?.release_url : row.module.versions.find(item => item.version_id === row.module.current_id)?.release_url);
       row.link.hidden = !row.link.href;
-      row.status.textContent = versionId ? 'Wybrany do cofnięcia; pomijany w aktualizacji.' :
+      row.status.textContent = versionId ? (!version || !version.available ? 'Wybrana wersja jest niedostępna w tym kanale; moduł pomijany w aktualizacji.' : 'Wybrany do cofnięcia; pomijany w aktualizacji.') :
         row.module.pinned ? 'Wyłączony z aktualizacji po cofnięciu.' : 'Aktualizacje włączone.';
       synchronize();
     }
@@ -63,6 +84,8 @@
     async function refresh() {
       try {
         const snapshot = await requestJson('/api/installation/modules');
+        currentChannel = snapshot.channel || currentChannel;
+        channel.value = currentChannel;
         rows.clear(); table.replaceChildren();
         for (const module of snapshot.modules || []) {
           const row = node('div', undefined, 'module-update-row');
@@ -73,6 +96,12 @@
           for (const version of module.versions || []) {
             const option = node('option', `${version.display_version}${version.version_id === module.current_id ? ' (obecna)' : ''}${version.available ? '' : ' — niedostępna'}`);
             option.value = version.version_id; option.disabled = !version.available; dropdown.append(option);
+          }
+          const chosen = selected.get(module.module_id);
+          if (chosen && !module.versions.some(version => version.version_id === chosen)) {
+            const version = selectedVersions.get(module.module_id);
+            const option = node('option', `${version?.display_version || chosen.slice(0,8)} — niedostępna w tym kanale`);
+            option.value = chosen; option.disabled = true; dropdown.append(option);
           }
           const link = node('a', 'Wydanie na GitHub'); link.target = '_blank'; link.rel = 'noopener noreferrer';
           const rowStatus = node('span', '', 'settings-note');
@@ -136,7 +165,7 @@
         status.textContent = `Operacja: ${operation.state}${operation.error ? ` — ${operation.error}` : ''}`;
         if (['committed','rolled_back','failed','recovery_required'].includes(operation.state)) {
           terminalMessage = status.textContent;
-          if (operation.state === 'committed') { selected.clear(); restoreBackupId = null; }
+          if (operation.state === 'committed') { selected.clear(); selectedVersions.clear(); restoreBackupId = null; }
           operationId = null; busy = false;
           try { window.sessionStorage?.removeItem('picsyncra-module-operation'); } catch (_) {}
           await refresh(); onChanged(); return;

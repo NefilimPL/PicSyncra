@@ -91,3 +91,34 @@ def test_configuration_schema_is_read_from_selected_verified_backup(context):
     service = ModuleService(context, Controller(), source=Source(), content=store)
     assert service._environment().config_schema == 1
     assert service._environment('config-two').config_schema == 2
+
+
+def test_channel_change_is_shared_by_clients_and_preserves_modules_and_settings(context):
+    import json
+    from picsyncra.installation.control_protocol import ControlDispatcher
+    from picsyncra.installation.launcher import InstallationControlClient
+    active, store, _ = prepare(context)
+    channels = []
+    class ChannelSource(Source):
+        def load(self, channel):
+            channels.append(channel)
+            return super().load(channel)
+    service = ModuleService(context, Controller(), source=ChannelSource(), content=store)
+    dispatcher = ControlDispatcher(Controller(), installation_id='test', authorized_identities={'admin'}, module_service=service)
+    class Pipe:
+        def request(self, message): return dispatcher.dispatch(message, peer_identity='admin')
+    web = InstallationControlClient('test', pipe_client=Pipe())
+    launcher = InstallationControlClient('test', pipe_client=Pipe())
+    settings = context.state_root / 'installation-settings.json'
+    settings.write_text('{"channel":"stable","extra":true}')
+    assert web.module_channel('dev') == {'channel':'dev'}
+    assert launcher.module_catalog()['channel'] == 'dev'
+    assert channels == ['dev']
+    assert json.loads(settings.read_text()) == {'channel':'dev', 'extra':True}
+    assert read_module_set(context) == active
+    service.busy = True
+    with pytest.raises(RuntimeError, match='toku'): launcher.module_channel('stable')
+    assert json.loads(settings.read_text())['channel'] == 'dev'
+    service.busy = False
+    with pytest.raises(ValueError): web.module_channel(['dev'])
+    with pytest.raises(ValueError): web.module_channel('../invalid')

@@ -158,9 +158,12 @@ def build_installation_router(dependencies: InstallationApiDependencies) -> APIR
         dependencies.require_csrf(request)
         payload = await request.json()
         channel = payload.get("channel") if isinstance(payload, dict) else None
-        if channel not in {"stable", "dev"}:
+        if not isinstance(channel,str) or channel not in {"stable", "dev"}:
             raise HTTPException(status_code=400, detail="Niepoprawny kanal wydan.")
-        return dependencies.change_channel(channel)
+        try:
+            return dependencies.change_channel(channel)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @router.post("/api/installation/autostart")
     async def installation_autostart(request: Request) -> dict[str, Any]:

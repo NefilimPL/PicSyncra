@@ -110,6 +110,17 @@ def test_force_channel_and_autostart_are_csrf_protected_admin_mutations() -> Non
     assert asyncio.run(routes["/api/installation/autostart"](RequestStub({"enabled": True}, csrf="valid"))) == {"autostart": True}
 
 
+def test_channel_change_rejects_malformed_values_and_requires_csrf():
+    routes, _ = app_with_dependencies()
+    for channel in (['dev'], {}, None, 'preview'):
+        with pytest.raises(HTTPException) as error:
+            asyncio.run(routes['/api/installation/channel'](RequestStub({'channel':channel}, csrf='valid')))
+        assert error.value.status_code == 400
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(routes['/api/installation/channel'](RequestStub({'channel':'dev'})))
+    assert error.value.status_code == 403
+
+
 def test_presence_requires_logged_in_user_but_public_status_needs_no_session() -> None:
     routes, _calls = app_with_dependencies()
     assert routes["/api/installation/public-status"]() == {"state": "countdown", "deadline_utc": "2026-09-16T12:00:00Z"}

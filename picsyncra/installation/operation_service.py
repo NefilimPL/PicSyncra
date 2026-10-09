@@ -227,6 +227,9 @@ class InstalledOperationService:
     def change_channel(self, channel: str) -> dict[str, object]:
         if channel not in {"stable", "dev"}:
             raise ValueError("channel is invalid")
+        marker=json.loads((self._context.program_root/'active.json').read_text(encoding='utf-8'))
+        if marker.get('schema') == 2:
+            return self._controller.module_channel(channel)
         self._write_settings({"channel": channel})
         return {"channel": channel}
 
