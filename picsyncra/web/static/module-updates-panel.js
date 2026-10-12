@@ -105,6 +105,7 @@
       return requestJson(url, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
     }
     async function refresh() {
+      if (!operationId) status.textContent = 'Pobieranie katalogu wersji z GitHuba…';
       try {
         const snapshot = await requestJson('/api/installation/modules');
         currentChannel = snapshot.channel || currentChannel;
@@ -147,7 +148,8 @@
         }
         backups.value = restoreBackupId || '';
         ocr.hidden = snapshot.ocr_installed === true;
-        if (!operationId) status.textContent = terminalMessage || (snapshot.offline ? 'Katalog lokalny: Internet niedostępny. Brakujące pliki wymagają połączenia.' :
+        if (!operationId) status.textContent = terminalMessage || (snapshot.offline ?
+          `${snapshot.catalog_error?.message || 'Nie udało się pobrać katalogu GitHuba.'} Pokazywany jest katalog lokalny; brakujące pliki wymagają połączenia.` :
           snapshot.blocked_releases?.length && !snapshot.modules.some(m => m.latest) ? 'Brak kompletnego podpisanego wydania modułów w Release.' : '');
         synchronize();
       } catch (error) { status.textContent = error.message; }

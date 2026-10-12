@@ -10,6 +10,18 @@ class Element {
   setAttribute(name, value) { this[name] = value; }
   removeAttribute(name) { delete this[name]; }
 }
+
+test('offline empty catalog displays GitHub failure cause', async () => {
+  resetBrowserGlobals();
+  global.document = {createElement: tag => new Element(tag)};
+  loadBrowserScript('picsyncra/web/static/module-updates-panel.js');
+  const panel = window.PicSyncra.ModuleUpdatesPanel.create({requestJson:async () => ({
+    modules:[], offline:true, catalog_error:{code:'rate_limit',message:'GitHub: przekroczono limit zapytań.'}})});
+  await panel.refresh();
+  const status = panel.element.children.find(child => child.role === 'status');
+  assert.match(status.textContent,/limit/);
+  assert.match(status.textContent,/lokalny/);
+});
 function setup({differentChannels=false} = {}) {
   resetBrowserGlobals();
   global.document = {createElement: tag => new Element(tag)};

@@ -13,6 +13,7 @@ from .module_contracts import ActiveModuleSet, ModuleFile, ModuleVersion
 from .module_filesystem import safe_path
 from .module_state import module_set_root, publish_module_set
 from .downloads import _TrustedGithubRedirect, _trusted_url
+from .https import verified_https_context
 
 
 class ModuleContentError(RuntimeError):
@@ -21,7 +22,7 @@ class ModuleContentError(RuntimeError):
 
 def _fetch_range(url, start, size, total):
     _trusted_url(url, initial=True)
-    return build_opener(_TrustedGithubRedirect(), HTTPSHandler()).open(Request(url, headers={'Range': f'bytes={start}-{start + size - 1}',
+    return build_opener(_TrustedGithubRedirect(), HTTPSHandler(context=verified_https_context())).open(Request(url, headers={'Range': f'bytes={start}-{start + size - 1}',
                                         'Accept-Encoding': 'identity', 'User-Agent': 'PicSyncra-installed/2'}), timeout=90)
 
 

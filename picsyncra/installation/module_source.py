@@ -2,6 +2,9 @@
 from __future__ import annotations
 import base64
 import json
+import socket
+import ssl
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, build_opener, HTTPSHandler
 from .repository import fetch_release_json, GITHUB_REPOSITORY
 from .downloads import _TrustedGithubRedirect, _trusted_url
@@ -9,13 +12,29 @@ from .module_catalog import catalog_module_releases
 from .module_filesystem import safe_path, atomic_json
 from .release_keys import trusted_release_keys
 from .release_source import _asset_url
+from .https import verified_https_context
 
 MANIFEST_NAME = 'PicSyncra-modules-manifest.json'
 
 
+def _catalog_error(exc):
+    if isinstance(exc, HTTPError):
+        if exc.code == 429 or (exc.code == 403 and exc.headers and exc.headers.get('X-RateLimit-Remaining') == '0'):
+            return dict(code='rate_limit', message='GitHub: przekroczono limit zapytań. Spróbuj ponownie po odnowieniu limitu.')
+        return dict(code='http_error', message=f'Nie udało się pobrać wydań z GitHuba (HTTP {exc.code}). Spróbuj ponownie.')
+    reason = exc.reason if isinstance(exc, URLError) else exc
+    if isinstance(reason, ssl.SSLCertVerificationError):
+        return dict(code='certificate_error', message='Nie udało się zweryfikować certyfikatu GitHuba. Sprawdź datę systemową i zaufane certyfikaty komputera.')
+    if isinstance(reason, socket.gaierror):
+        return dict(code='dns_error', message='Nie udało się odczytać adresu GitHuba (DNS). Sprawdź połączenie sieciowe kontrolera.')
+    if isinstance(reason, TimeoutError):
+        return dict(code='timeout', message='Przekroczono czas pobierania wydań z GitHuba. Spróbuj ponownie.')
+    return dict(code='connection_error', message='Brak połączenia kontrolera z katalogiem GitHuba. Sprawdź sieć, proxy i zaporę dla kontrolera.')
+
+
 def fetch_manifest_asset(url, limit=64 * 1024 * 1024):
     _trusted_url(url, initial=True)
-    with build_opener(_TrustedGithubRedirect(), HTTPSHandler()).open(Request(url, headers={'User-Agent': 'PicSyncra-installed/2'}), timeout=30) as response:
+    with build_opener(_TrustedGithubRedirect(), HTTPSHandler(context=verified_https_context())).open(Request(url, headers={'User-Agent': 'PicSyncra-installed/2'}), timeout=30) as response:
         raw = response.read(limit + 1)
         if len(raw) > limit: raise ValueError('Manifest modułów jest zbyt duży.')
         return raw
@@ -27,6 +46,7 @@ class ModuleReleaseSource:
         self.keys = trusted_release_keys() if keys is None else keys
         self.fetch_json, self.fetch_asset = fetch_json, fetch_asset
         self.offline = False
+        self.error = None
 
     def load(self, channel):
         path = safe_path(self.context.state_root, 'module-catalog-' + channel + '.json')
@@ -39,9 +59,11 @@ class ModuleReleaseSource:
                 records.extend(batch)
                 if len(batch) < 100: break
             self.offline = False
-        except Exception:
+            self.error = None
+        except Exception as exc:
             records = cached['records']
             self.offline = True
+            self.error = _catalog_error(exc)
         manifests = dict(cached['manifests'])
         def loader(record):
             key = str(record['id'])

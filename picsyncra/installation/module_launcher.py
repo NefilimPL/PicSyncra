@@ -38,6 +38,13 @@ def operation_message(operation):
     return label
 
 
+def catalog_message(snapshot):
+    error = (snapshot.get('catalog_error') or {}).get('message')
+    if snapshot.get('offline'):
+        return (error or 'Nie udało się pobrać katalogu GitHuba.') + ' Pokazywany jest katalog lokalny; brakujące pliki wymagają połączenia.'
+    return 'Wybierz moduły i zatwierdź operację.'
+
+
 class ModuleLauncherModel:
     def __init__(self, client):
         self.client = client
@@ -180,7 +187,10 @@ class ModuleLauncherWindow:
         self.channel.configure(state='disabled' if locked else 'readonly')
         self.rollback_button.configure(state='disabled' if locked or not self.model.selected else 'normal')
 
-    def refresh(self): self._run(self.model.refresh,self.render)
+    def refresh(self):
+        self.status.set('Pobieranie katalogu wersji z GitHuba…')
+        self.progressbar.start()
+        self._run(self.model.refresh,self.render)
 
     def change_channel(self):
         if self.busy or self.operation_id: return
@@ -228,7 +238,7 @@ class ModuleLauncherWindow:
         self.backup.configure(values=list(self.backup_ids))
         if self.backup.get() not in self.backup_ids: self.backup.current(0)
         if not self.operation_id:
-            self.status.set(self.terminal_message or ('Katalog lokalny — brak Internetu. Brakujące pliki wymagają połączenia.' if snapshot.get('offline') else 'Wybierz moduły i zatwierdź operację.'))
+            self.status.set(self.terminal_message or catalog_message(snapshot))
         self._synchronize_controls()
 
     def select_version(self,module_id,version_id):

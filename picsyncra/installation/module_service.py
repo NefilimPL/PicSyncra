@@ -145,7 +145,8 @@ class ModuleService:
                 except (RuntimeError, OSError, ValueError): continue
                 if len(backups) >= 100: break
         operation = self.operation(self.current_operation_id) if self.busy and self.current_operation_id else None
-        return dict(revision=active.revision, channel=channel, modules=rows, offline=self.source.offline, backups=backups, operation=operation,
+        return dict(revision=active.revision, channel=channel, modules=rows, offline=self.source.offline,
+                    catalog_error=getattr(self.source, 'error', None), backups=backups, operation=operation,
                     ocr_installed=all(any(m.module_id == name for m in active.modules) for name in ('ocr_runtime', 'ocr_models')),
                     blocked_releases=[dict(release_id=e.release_id, tag=e.tag, reason=e.blocked_reason) for e in self.entries if e.blocked_reason][:50])
 

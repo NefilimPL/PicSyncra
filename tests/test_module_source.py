@@ -1,4 +1,8 @@
 import json
+import socket
+import ssl
+from urllib.error import HTTPError, URLError
+import pytest
 from picsyncra.installation.module_source import ModuleReleaseSource, MANIFEST_NAME
 from tests.test_module_state import context
 from tests.module_fixtures import signed, release_payload
@@ -21,3 +25,25 @@ def test_offline_catalog_reverifies_signature(context):
     cached['manifests']['5']['signature'] = 'AAAA'
     path.write_text(json.dumps(cached))
     assert all(entry.blocked_reason for entry in source.load('stable'))
+
+
+@pytest.mark.parametrize('failure,code,fragment', [
+    (HTTPError('https://api.github.com', 403, 'Forbidden', {'X-RateLimit-Remaining':'0'}, None), 'rate_limit', 'limit'),
+    (HTTPError('https://api.github.com', 429, 'Too Many Requests', {}, None), 'rate_limit', 'limit'),
+    (HTTPError('https://api.github.com', 500, 'Server Error', {}, None), 'http_error', '500'),
+    (URLError(ssl.SSLCertVerificationError('certificate')), 'certificate_error', 'certyfikat'),
+    (URLError(socket.gaierror('DNS')), 'dns_error', 'DNS'),
+    (TimeoutError('timed out'), 'timeout', 'czas'),
+    (OSError('potentially sensitive proxy details'), 'connection_error', 'połączenia'),
+])
+def test_offline_catalog_reports_cause_and_clears_it_after_success(context, failure, code, fragment):
+    def fail(path): raise failure
+    source=ModuleReleaseSource(context, keys={}, fetch_json=fail)
+    assert source.load('dev') == ()
+    assert source.offline is True
+    assert source.error['code'] == code
+    assert fragment in source.error['message']
+    assert 'sensitive' not in source.error['message']
+    source.fetch_json=lambda path: []
+    assert source.load('dev') == ()
+    assert source.offline is False and source.error is None

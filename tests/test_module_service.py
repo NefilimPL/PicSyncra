@@ -15,6 +15,20 @@ class Source:
         return (ModuleCatalogEntry(5, 'v5', release.published_at, release),)
 
 
+def test_catalog_exposes_fetch_failure_even_when_no_release_is_cached(context):
+    _, store, _ = prepare(context)
+    class OfflineSource:
+        offline=True
+        error={'code':'rate_limit','message':'GitHub: przekroczono limit zapytań.'}
+        def load(self, channel): return ()
+    service=ModuleService(context, Controller(), source=OfflineSource(), content=store)
+    snapshot=service.catalog()
+    assert snapshot['offline'] is True
+    assert snapshot['blocked_releases'] == []
+    assert all(module['latest'] is None for module in snapshot['modules'])
+    assert snapshot['catalog_error'] == OfflineSource.error
+
+
 def test_catalog_and_planning_are_read_only_and_execution_is_deferred(context):
     active, store, _ = prepare(context)
     jobs = []

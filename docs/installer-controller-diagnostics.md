@@ -262,8 +262,44 @@ hashes; inspection of embedded bytecode constants, without executing downloaded
 code, confirmed the same public key in both builds. Both manifest signatures,
 module identities and source asset sizes passed the real catalog validation.
 Reconstructing the initial dev.1 module selection yielded available dev.2
-updates and a trusted current version in each rollback dropdown. This does not
-reproduce or resolve the reported local refresh failure. The installation's
-`/api/installation/modules` response is needed to distinguish a pipe failure,
-offline catalog and a blocked manifest. Newer versions intentionally appear as
-updates, not rollback choices.
+updates and a trusted current version in each rollback dropdown. The user's
+`/api/installation/modules` response subsequently confirmed `offline: true`,
+no cached catalog, no blocked releases and `latest: null`. A browser on the
+same machine successfully fetched the public release API. This establishes a
+controller-side catalog fetch failure; the old code discarded the underlying
+exception. Newer versions intentionally appear as updates, not rollback choices.
+
+## Controller HTTPS trust and catalog failure diagnostics — 2026-10-12
+
+Installed transports previously used only default system trust. Fresh Windows
+Sandbox and SYSTEM profiles may not have public roots populated yet, while the
+main application already uses bundled certifi. A real local TLS server with an
+empty system store reproduced certificate verification failures in all four
+installed transports (release API, signed manifests, module content ranges and
+legacy assets). They now share an explicit verified context which retains
+system trust and adds bundled certifi roots. Hostname and certificate validation
+remain required, as do the existing trusted redirect hosts, signatures, file
+hashes and exact range checks.
+
+Catalog fallback now retains a bounded diagnostic code/message for rate limits,
+HTTP failures, certificate failures, DNS errors, timeout and connection failure.
+Both launcher and WEB display that cause alongside the local-cache explanation.
+Successful online refresh clears the prior failure. Refresh shows a loading
+message; the launcher also animates its progress indicator. No raw network error
+or proxy configuration is sent to WEB. The exact original exception on the
+user's old controller is still unavailable, so this is not evidence that every
+possible local proxy/firewall problem is resolved.
+
+The five real TLS acceptance cases pass, including rejection of a trusted
+certificate for the wrong hostname. An isolated freshly built PyInstaller EXE
+with empty simulated system trust downloaded and accepted both live signed
+dev.1/dev.2 catalogs with `offline=False`. It used the public key extracted from
+the released host; downloaded host bytecode was inspected only, never executed.
+Native Tk/authenticated-pipe OCR acceptance also passed after the refresh change.
+The stable controller and launcher need replacement by a new Setup containing
+this correction; a module-only update cannot replace that stable infrastructure.
+
+Final validation: **2026 Python tests passed**, 3 skipped, 66 subtests passed;
+**46 JavaScript tests passed**. Installation Python compileall, module-panel
+JavaScript syntax and git diff checks passed. The full OCR EXE build remains
+to be run in Actions from the new commit.

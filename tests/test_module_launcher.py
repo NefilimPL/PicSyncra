@@ -1,6 +1,15 @@
 from picsyncra.installation.module_launcher import ModuleLauncherModel
 
 
+def test_launcher_explains_offline_empty_catalog_instead_of_generic_instruction():
+    from picsyncra.installation import module_launcher
+    snapshot={'offline':True,'catalog_error':{'code':'rate_limit','message':'GitHub: przekroczono limit zapytań.'}}
+    assert 'limit' in module_launcher.catalog_message(snapshot)
+    assert 'lokalny' in module_launcher.catalog_message(snapshot)
+    assert 'lokalny' in module_launcher.catalog_message({'offline':True})
+    assert 'Wybierz' in module_launcher.catalog_message({'offline':False})
+
+
 def test_launcher_operation_message_shows_ocr_bytes_percent_and_installation_phase():
     from picsyncra.installation import module_launcher
     message = module_launcher.operation_message({'state':'downloading', 'action':'install_ocr',

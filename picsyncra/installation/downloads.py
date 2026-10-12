@@ -18,6 +18,7 @@ from urllib.request import HTTPSHandler, HTTPRedirectHandler, Request, build_ope
 
 from .repository import GITHUB_OWNER, GITHUB_REPOSITORY
 from .contracts import ComponentRef, ReleaseChoice
+from .https import verified_https_context
 
 
 class DownloadError(RuntimeError):
@@ -59,7 +60,7 @@ class _TrustedGithubRedirect(HTTPRedirectHandler):
 
 def _open_github_asset(url: str) -> DownloadResponse:
     request = Request(url, headers={"User-Agent": "PicSyncra-Installer"})
-    opener = build_opener(_TrustedGithubRedirect(), HTTPSHandler())
+    opener = build_opener(_TrustedGithubRedirect(), HTTPSHandler(context=verified_https_context()))
     return opener.open(request, timeout=30)  # type: ignore[return-value]
 
 
