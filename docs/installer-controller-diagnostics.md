@@ -225,3 +225,45 @@ the actual EXE passed the authenticated-pipe streamed OCR GUI acceptance with
 packaged Tcl/Tk. Test hooks exist only in ignored acceptance build directories,
 not in the production builder. The old local full Setup artifact is unchanged;
 GitHub Actions must build a new Release tag containing this correction.
+
+## OCR model preparation source correction — 2026-10-12
+
+The supplied portable WEB-OCR Actions log failed before PyInstaller, while
+downloading `PP-OCRv5_mobile_det`. Hugging Face's Xet CAS reconstruction failed;
+the AIStudio fallback then returned repository-not-found (404). The missing
+ccache warning was unrelated to the failure.
+
+All three OCR preparation entrypoints (Actions, the local WEB EXE generator,
+and the installed builder) now prefer PaddleX's official BOS model archives.
+Root-host availability probes are disabled: a rejected root HEAD must not
+exclude a working archive endpoint. Actual downloads and the existing complete
+fast/accurate profile checks remain required. Hugging Face fallback disables
+Xet and uses regular HTTP downloads. Variables are set before importing Paddle.
+
+The regression harness executes the actual PowerShell preparation blocks with
+a substituted model downloader, checks import-time source configuration, and
+confirms that a missing accurate recognizer still fails the build. It does not
+claim to run Paddle inference or build a complete OCR EXE locally. Read-only
+network probes confirmed that all four required official BOS archives answer
+with valid tar headers. The complete hosted build must be verified in Actions
+from a commit containing this correction; rerunning an old tagged workflow
+keeps its old downloader configuration.
+
+Validation: **45 targeted Python tests passed**, including complete and
+incomplete preparation for all three entrypoints. Both complete PowerShell
+scripts parsed without errors; `git diff --check` passed. No complete OCR EXE
+was built or published locally.
+
+The accompanying report of only “Bez zmiany” in an installed dev.1 launcher
+was investigated separately. Public API records and all manifest sidecars for
+dev.1/dev.2 downloaded with the production fetchers. Read-only range downloads
+of the WEB host (about 9 MB each, not the full content packs) verified the host
+hashes; inspection of embedded bytecode constants, without executing downloaded
+code, confirmed the same public key in both builds. Both manifest signatures,
+module identities and source asset sizes passed the real catalog validation.
+Reconstructing the initial dev.1 module selection yielded available dev.2
+updates and a trusted current version in each rollback dropdown. This does not
+reproduce or resolve the reported local refresh failure. The installation's
+`/api/installation/modules` response is needed to distinguish a pipe failure,
+offline catalog and a blocked manifest. Newer versions intentionally appear as
+updates, not rollback choices.

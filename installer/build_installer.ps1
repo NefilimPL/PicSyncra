@@ -99,6 +99,11 @@ try {
         $modelCache = Join-Path $workRoot 'ocr-model-cache'
         New-Item -ItemType Directory -Path $modelCache -Force | Out-Null
         $env:PADDLE_PDX_CACHE_HOME = $modelCache
+        # Prefer the official archives; root HEAD probes can exclude a working source.
+        $env:PADDLE_PDX_MODEL_SOURCE = 'bos'
+        $env:PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK = 'True'
+        $env:HF_HUB_DISABLE_XET = '1'
+        Write-Host "OCR models: source=bos, Xet disabled, cache=$modelCache"
         & $Python -c "from paddleocr import PaddleOCR; from picsyncra.services.ocr_profiles import available_ocr_profiles; [PaddleOCR(text_detection_model_name=profile.detector_model, text_recognition_model_name=profile.recognizer_model, enable_mkldnn=False, use_doc_orientation_classify=False, use_doc_unwarping=False, use_textline_orientation=False) for profile in available_ocr_profiles()]"
         if ($LASTEXITCODE -ne 0) { throw 'Nie udalo sie przygotowac lokalnych modeli OCR.' }
         & $Python -c "from picsyncra.services.image_dimensions import _model_cache_has_profile; from picsyncra.services.ocr_profiles import available_ocr_profiles; import os; missing = [profile.id for profile in available_ocr_profiles() if not _model_cache_has_profile(os.environ['PADDLE_PDX_CACHE_HOME'], profile)]; (_ for _ in ()).throw(RuntimeError('Brakuje modeli OCR: ' + ', '.join(missing))) if missing else None"
