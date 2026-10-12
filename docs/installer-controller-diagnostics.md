@@ -472,3 +472,36 @@ all **59 JavaScript tests passed**. Native Tk acceptance through an authenticate
 pipe passed OCR progress, HTTP 503/manual retry/cache reuse, and a real Windows
 progress-reader lock without aborting OCR. Compileall, JavaScript syntax and
 diff checks passed. Final review found no remaining blocking issues.
+
+## OCR staging temporary path exceeds MAX_PATH — 2026-10-12
+
+The reported `Errno 2` named a `.part` file under the deeply nested Paddle
+headers directory. Its absolute path is 268 characters; the destination header
+is 229 characters and its parent is 198. Assembly previously appended a UUID
+and `.part` to the complete destination filename. This makes an otherwise valid
+destination fail in a Windows process subject to the legacy path limit. The
+failure occurs while copying verified cache content into the selected set,
+after acquisition, rather than while fetching the header from GitHub.
+
+Assembly now creates UUID-only scratch files at the selected set root. The
+scratch file and destination remain on the same filesystem. The content cache
+still has independent immutable copies; atomic, no-overwrite `os.link`
+publication and `finally` cleanup remain intact. SHA-256 verification of every
+selected file is unchanged. No registry policy or payload names are modified.
+
+A real Windows API probe without long-path opt-in failed with system code 3
+at length 268 and succeeded at length 236. An isolated PyInstaller EXE with
+long-path opt-in disabled then reproduced the old assembly's exact `Errno 2`
+and passed assembly plus full selected-file verification with the correction.
+The automated regression first failed on the old code and then passed on the
+new code. A separate interrupted-copy test verifies cleanup and successful retry
+from verified cached content without network access. These fixtures verify file
+assembly, not a production Paddle download or OCR inference.
+
+Existing installations need a rebuilt full Setup to replace the stable
+controller that owns assembly. Updating WEB alone cannot apply this correction.
+
+Validation: **2076 Python tests passed**, three skipped and 66 subtests passed.
+Both frozen EXE scenarios passed (legacy failure reproduced, corrected assembly
+verified). Compileall and diff checks passed; review found no production blockers.
+The frozen acceptance EXE is an isolated fixture, not a production Setup.

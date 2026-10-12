@@ -221,7 +221,10 @@ class ModuleContentStore:
                     continue
                 # Separate immutable set copies: modifying one set cannot corrupt
                 # every cached version through a writable hard link.
-                temporary = destination.with_name('.' + destination.name + '.' + uuid4().hex + '.part')
+                # The signed payload name can already approach MAX_PATH. Keep
+                # scratch files at the set root instead of extending that name.
+                # Both paths stay on the same volume for atomic publication.
+                temporary = safe_path(root, uuid4().hex + '.part')
                 try:
                     shutil.copyfile(source, temporary)
                     os.link(temporary, destination)

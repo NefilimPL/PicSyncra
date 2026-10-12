@@ -187,3 +187,71 @@ def test_corrupt_local_cache_is_never_reused(context):
     digest = store.import_bytes(b'code')
     (context.program_root / 'content' / digest).write_bytes(b'evil')
     assert digest not in store.available_hashes()
+
+
+def test_ocr_assembly_keeps_temporary_paths_below_windows_limit(context, monkeypatch):
+    from dataclasses import replace
+    from pathlib import Path
+    import shutil
+    from uuid import uuid4
+    from picsyncra.installation import module_content
+
+    # Match the reported 229-character destination / 268-character temporary
+    # path. Python itself opts into long paths; emulate a controller process
+    # without that opt-in at the file creation boundary.
+    build_root = (Path.cwd() / 'build').resolve()
+    build_root.mkdir(exist_ok=True)
+    program = build_root / ('ocr-stage-' + uuid4().hex[:8])
+    assert program.resolve().is_relative_to(build_root)
+    program.mkdir()
+    context = replace(context, program_root=program)
+    prefix = program / 'sets' / ('0' * 64) / 'runtime' / 'ocr'
+    padding = 198 - len(str(prefix)) - 1
+    assert padding > 0
+    relative = 'runtime/ocr/' + 'p' * padding + '/cache_grad_op_symbolic_shape.h'
+    modules = [module_payload(), module_payload('migrator', 'apps/migrator/PicSyncra-Migrator.exe'),
+               module_payload('ocr_runtime', relative)]
+    selected = make_module_set(1, 5, parse_module_manifest(release_payload(5, modules)).modules)
+    destination = module_set_root(context, selected) / relative
+    assert len(str(destination)) == 229
+    assert len(str(destination.with_name('.' + destination.name + '.' + 'a' * 32 + '.part'))) == 268
+    original = module_content.shutil.copyfile
+    created = []
+    def legacy_copy(source, target):
+        created.append(Path(target))
+        if len(str(target)) >= 260: raise FileNotFoundError(2, 'No such file or directory', str(target))
+        return original(source, target)
+    monkeypatch.setattr(module_content.shutil, 'copyfile', legacy_copy)
+    try:
+        store = ModuleContentStore(context, fetch=lambda *args: pytest.fail('verified content must be reused'))
+        digest = store.import_bytes(b'code')
+        store.assemble(selected)
+        verify_module_set_files(context, selected)
+        assert destination.read_bytes() == b'code'
+        assert all(len(str(path)) < 260 for path in created)
+        assert not list(program.rglob('*.part'))
+        destination.write_bytes(b'evil')
+        assert (store.root / digest).read_bytes() == b'code'
+    finally:
+        shutil.rmtree(program)
+
+
+def test_failed_assembly_cleans_scratch_and_retry_reuses_verified_content(context, monkeypatch):
+    from pathlib import Path
+    from picsyncra.installation import module_content
+    store = ModuleContentStore(context, fetch=lambda *args: pytest.fail('must reuse downloaded content'))
+    digest = store.import_bytes(b'code')
+    selected = make_module_set(1, 5, parse_module_manifest(release_payload()).modules)
+    root = module_set_root(context, selected)
+    original = module_content.shutil.copyfile
+    def interrupted(source, target):
+        Path(target).write_bytes(b'co')
+        raise OSError('copy interrupted')
+    monkeypatch.setattr(module_content.shutil, 'copyfile', interrupted)
+    with pytest.raises(OSError, match='copy interrupted'): store.assemble(selected)
+    assert not list(root.rglob('*.part'))
+    assert not (root / 'module-set.json').exists()
+    assert (store.root / digest).read_bytes() == b'code'
+    monkeypatch.setattr(module_content.shutil, 'copyfile', original)
+    store.assemble(selected)
+    verify_module_set_files(context, selected)
