@@ -45,6 +45,13 @@ def catalog_message(snapshot):
     return 'Wybierz moduły i zatwierdź operację.'
 
 
+def available_version_message(module, snapshot):
+    latest = module.get('latest')
+    if snapshot.get('offline'):
+        return latest + ' (katalog lokalny)' if latest else 'nie sprawdzono — katalog niedostępny'
+    return latest or 'brak podpisanego wydania'
+
+
 class ModuleLauncherModel:
     def __init__(self, client):
         self.client = client
@@ -207,7 +214,7 @@ class ModuleLauncherWindow:
         for widget in self.rows.winfo_children(): widget.destroy()
         for index,module in enumerate(snapshot.get('modules',[])):
             self.ttk.Label(self.rows,text=module['label']).grid(row=index,column=0,padx=5,pady=10,sticky='w')
-            text=f"Obecna: {module['current']}  Dostępna: {module['latest'] or 'brak podpisanego wydania'}"
+            text=f"Obecna: {module['current']}  Dostępna: {available_version_message(module, snapshot)}"
             if module['pinned']: text+='  [wyłączony z aktualizacji]'
             if module['module_id'] in self.model.selected: text+='  [wybrany do cofnięcia; pomijany w aktualizacji]'
             chosen=self.model.selected.get(module['module_id'])

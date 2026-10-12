@@ -153,6 +153,10 @@ class ModuleService:
     def prepare(self, *, action, selected, excluded, restore_backup_id=None):
         active = read_module_set(self.context)
         releases = self._catalog()
+        if not releases and self.source.offline:
+            error = (getattr(self.source, 'error', None) or {}).get('message')
+            raise ModuleExecutionError((error or 'Nie udało się pobrać katalogu GitHuba.') +
+                                       ' Brak lokalnego katalogu pozwalającego przygotować operację. Ponów sprawdzenie wersji.')
         environment = self._environment(restore_backup_id)
         plan = plan_module_operation(active, releases, environment, action=action,
                                       selected=selected, excluded=frozenset(excluded),

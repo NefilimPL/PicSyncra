@@ -29,6 +29,19 @@ def test_catalog_exposes_fetch_failure_even_when_no_release_is_cached(context):
     assert snapshot['catalog_error'] == OfflineSource.error
 
 
+def test_ocr_preparation_reports_catalog_connection_failure_without_creating_plan(context):
+    _, store, _ = prepare(context)
+    class OfflineSource:
+        offline = True
+        error = {'code': 'certificate_error', 'message': 'Nie udało się zweryfikować certyfikatu GitHuba.'}
+        def load(self, channel): return ()
+    service = ModuleService(context, Controller(), source=OfflineSource(), content=store)
+    with pytest.raises(RuntimeError, match='certyfikatu GitHuba'):
+        service.prepare(action='install_ocr', selected={}, excluded=[])
+    assert not (context.state_root / 'module-plans').exists()
+    assert service.busy is False
+
+
 def test_catalog_and_planning_are_read_only_and_execution_is_deferred(context):
     active, store, _ = prepare(context)
     jobs = []

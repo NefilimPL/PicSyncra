@@ -1,6 +1,14 @@
 from picsyncra.installation.module_launcher import ModuleLauncherModel
 
 
+def test_available_version_distinguishes_unknown_offline_from_missing_signed_release():
+    from picsyncra.installation.module_launcher import available_version_message
+    assert available_version_message({'latest': None}, {'offline': True}) == 'nie sprawdzono — katalog niedostępny'
+    assert available_version_message({'latest': None}, {'offline': False}) == 'brak podpisanego wydania'
+    assert available_version_message({'latest': '1.abc'}, {'offline': True}) == '1.abc (katalog lokalny)'
+    assert available_version_message({'latest': '1.abc'}, {'offline': False}) == '1.abc'
+
+
 def test_launcher_explains_offline_empty_catalog_instead_of_generic_instruction():
     from picsyncra.installation import module_launcher
     snapshot={'offline':True,'catalog_error':{'code':'rate_limit','message':'GitHub: przekroczono limit zapytań.'}}

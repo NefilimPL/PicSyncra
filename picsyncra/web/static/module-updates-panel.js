@@ -120,7 +120,9 @@
         for (const module of snapshot.modules || []) {
           const row = node('div', undefined, 'module-update-row');
           const label = node('strong', module.label);
-          const versions = node('span', `Obecna: ${module.current} · Dostępna: ${module.latest || 'brak podpisanego wydania'}`);
+          const available = snapshot.offline ? (module.latest ? `${module.latest} (katalog lokalny)` : 'nie sprawdzono — katalog niedostępny') :
+            module.latest || 'brak podpisanego wydania';
+          const versions = node('span', `Obecna: ${module.current} · Dostępna: ${available}`);
           const dropdown = node('select'); dropdown.setAttribute('aria-label', `Wersja modułu ${module.label}`);
           const unchanged = node('option', 'Bez zmiany'); unchanged.value = ''; dropdown.append(unchanged);
           for (const version of module.versions || []) {

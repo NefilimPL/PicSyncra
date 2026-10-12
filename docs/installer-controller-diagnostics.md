@@ -303,3 +303,38 @@ Final validation: **2026 Python tests passed**, 3 skipped, 66 subtests passed;
 **46 JavaScript tests passed**. Installation Python compileall, module-panel
 JavaScript syntax and git diff checks passed. The full OCR EXE build remains
 to be run in Actions from the new commit.
+
+## Installed version mismatch and offline OCR preparation — 2026-10-12
+
+Setup infrastructure repair deliberately retains an existing schema-2 active
+module set and its pins. Installing dev.2 over dev.1 therefore does not itself
+update the selected WEB UI, settings or core module. The reported core version
+`1.004321f94424` belongs to dev.1; dev.2's core is `1.a66c7618c667`.
+The old WEB still includes portable build comparison diagnostics above the
+installed panel. Current installed routing bypasses that comparison, but its
+new code must become active through a module update after the stable controller
+can retrieve the catalog.
+
+The released dev.2 commit is `2c10ec4`; it does not contain the later HTTPS trust
+and downloader-source corrections (`6638bdb` and `1a86104`). A new Setup built
+from the current branch is needed for those infrastructure corrections. Repair
+must not reset pinned modules or overwrite the user's selected versions.
+
+An unknown online version was also incorrectly labelled "brak podpisanego
+wydania" while the controller was offline. Both UIs now say the catalog was
+unavailable, or explicitly identify a cached version. Preparing OCR without any
+accepted cached catalog now returns the bounded catalog failure cause rather
+than asserting the signed releases do not exist. No plan is stored or operation
+started in that case. WEB regressions cover the pending preparation indicator,
+visible preflight errors and preservation of a terminal download error after
+automatic refresh.
+
+Read-only verification of the released signed manifests produced compatible
+OCR plans for both dev.1 and dev.2 (schema 17), adding only OCR runtime and models.
+Each needs 5138 distinct missing files, about 813.4 MB, when base files are
+already present. This verifies catalog and planning, not a full production OCR
+download or inference run. The portable WEB-OCR EXE is not required by these
+module plans: they reference the signed content pack instead.
+
+Validation: **51 targeted Python tests passed**, **49 JavaScript tests passed**;
+both signed release catalogs and OCR plans passed the independent diagnostic.
