@@ -8,6 +8,14 @@ z Release odpowiadającego aktywnemu wydaniu aplikacji. Wymaga opublikowanego
 pakietu OCR oraz publicznego klucza podpisu wbudowanego w instalowaną aplikację.
 Samo lokalne wygenerowanie EXE nie zapewnia źródła tego pakietu.
 
+Pobieranie łączy sąsiadujące brakujące pliki z tego samego zasobu wydania
+w zakresy do 8 MiB i 256 plików (większy pojedynczy plik pobierany jest osobno).
+Ogranicza to narzut tysięcy małych żądań przy pobieraniu silnika OCR.
+Każdy plik przechodzi osobną kontrolę SHA-256. Ponowienie korzysta już ze
+zweryfikowanej zawartości; nie pobiera ponownie poprawnych plików ani luk
+między brakującymi zakresami. Wskazanie czasu jest szacunkiem na podstawie
+dotychczasowej średniej prędkości całej operacji pobierania.
+
 ## Dane i konfiguracja
 
 Podczas instalacji można wskazać istniejącą bazę. Import konfiguracji portable

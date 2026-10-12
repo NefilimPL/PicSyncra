@@ -20,6 +20,30 @@ from .downloads import _TrustedGithubRedirect, _trusted_url
 from .https import verified_https_context
 from .module_download_diagnostics import download_failure
 
+_RANGE_BATCH_BYTES = 8 * 1024 * 1024
+_RANGE_BATCH_FILES = 256
+
+
+def _range_batches(entries):
+    """Combine only adjacent signed ranges from the same release asset."""
+    entries = sorted(entries, key=lambda entry: (entry[0].source_tag, entry[1].asset_name,
+                                                entry[1].asset_size, entry[1].asset_offset))
+    batch, length = [], 0
+    for entry in entries:
+        module, file = entry
+        if batch:
+            previous_module, previous_file = batch[-1]
+            adjacent = (module.source_tag, file.asset_name, file.asset_size, file.asset_offset) == (
+                previous_module.source_tag, previous_file.asset_name, previous_file.asset_size,
+                previous_file.asset_offset + previous_file.size)
+            if not adjacent or length + file.size > _RANGE_BATCH_BYTES or len(batch) >= _RANGE_BATCH_FILES:
+                yield batch
+                batch, length = [], 0
+        batch.append(entry)
+        length += file.size
+    if batch:
+        yield batch
+
 
 class ModuleContentError(RuntimeError):
     def __init__(self, message, *, code='content_error', retryable=False, details=None):
@@ -143,49 +167,92 @@ class ModuleContentStore:
                 self.sleep(delay)
 
     def _acquire_once(self, file, destination, url, on_progress):
-        temporary = safe_path(self.root, uuid4().hex + '.part')
+        self._transfer_range([file], url, lambda current, count: on_progress(count) if on_progress else None)
+        return destination
+
+    def _transfer_range(self, files, url, on_progress):
+        """Stream one bounded range, verifying/publishing every file separately."""
+        file = files[0]
+        size = sum(item.size for item in files)
         operation = 'fetch_range'
         try:
-            with self.fetch(url, file.asset_offset, file.size, file.asset_size) as response:
-                expected = f'bytes {file.asset_offset}-{file.asset_offset + file.size - 1}/{file.asset_size}'
+            with self.fetch(url, file.asset_offset, size, file.asset_size) as response:
+                expected = f'bytes {file.asset_offset}-{file.asset_offset + size - 1}/{file.asset_size}'
                 if response.status != 206 or response.headers.get('Content-Range') != expected:
                     raise ModuleContentError('Serwer nie potwierdził zakresu pliku; pobranie całej paczki zostało wstrzymane.', code='range_mismatch')
                 length = response.headers.get('Content-Length')
-                if length is not None and length != str(file.size):
+                if length is not None and length != str(size):
                     raise ModuleContentError('Nieprawidłowy rozmiar pobieranego zakresu.', code='size_mismatch')
-                remaining = file.size
-                digest = hashlib.sha256()
-                operation = 'create_cache_file'
-                with temporary.open('xb') as stream:
-                    while remaining:
-                        operation = 'read_remote'
-                        chunk = response.read(min(1024 * 1024, remaining))
-                        if not chunk or len(chunk) > remaining:
-                            raise ModuleContentError('Przerwane pobieranie pliku modułu.', code='interrupted_download', retryable=True)
-                        digest.update(chunk)
-                        operation = 'write_cache_file'
-                        stream.write(chunk)
-                        remaining -= len(chunk)
-                        if on_progress:
-                            operation = 'report_progress'
-                            on_progress(file.size - remaining)
-                    operation = 'read_remote'
-                    if response.read(1) or digest.hexdigest() != file.sha256:
-                        raise ModuleContentError('Suma kontrolna pobranego pliku modułu jest niezgodna.', code='hash_mismatch')
-                    operation = 'flush_cache_file'
-                    stream.flush()
-                    os.fsync(stream.fileno())
-            operation = 'publish_cache_file'
-            replace_file(temporary, destination)
-            return destination
-        except OSError as exc:
-            if operation in {'fetch_range', 'read_remote'}:
-                raise
-            details = download_failure(exc)
-            details.update(operation=operation, storage='content_cache' if operation.endswith('_cache_file') else None)
-            raise ModuleContentError(details['message'], details=details) from exc
-        finally:
-            temporary.unlink(missing_ok=True)
+                for file in files:
+                    temporary = safe_path(self.root, uuid4().hex + '.part')
+                    try:
+                        remaining = file.size
+                        digest = hashlib.sha256()
+                        operation = 'create_cache_file'
+                        with temporary.open('xb') as stream:
+                            while remaining:
+                                operation = 'read_remote'
+                                chunk = response.read(min(1024 * 1024, remaining))
+                                if not chunk or len(chunk) > remaining:
+                                    raise ModuleContentError('Przerwane pobieranie pliku modułu.', code='interrupted_download', retryable=True)
+                                digest.update(chunk)
+                                operation = 'write_cache_file'
+                                stream.write(chunk)
+                                remaining -= len(chunk)
+                                operation = 'report_progress'
+                                on_progress(file, file.size - remaining)
+                            if digest.hexdigest() != file.sha256:
+                                raise ModuleContentError('Suma kontrolna pobranego pliku modułu jest niezgodna.', code='hash_mismatch')
+                            if file is files[-1]:
+                                operation = 'read_remote'
+                                if response.read(1):
+                                    raise ModuleContentError('Nieprawidłowy rozmiar pobieranego zakresu.', code='size_mismatch')
+                            operation = 'flush_cache_file'
+                            stream.flush()
+                            os.fsync(stream.fileno())
+                        operation = 'publish_cache_file'
+                        replace_file(temporary, safe_path(self.root, file.sha256))
+                    finally:
+                        temporary.unlink(missing_ok=True)
+        except (ModuleContentError, OSError, ValueError, http.client.HTTPException) as exc:
+            details = dict(exc.details) if isinstance(exc, ModuleContentError) else download_failure(exc)
+            details.update(file=file.path)
+            if operation not in {'fetch_range', 'read_remote'}:
+                details.update(operation=operation, storage='content_cache' if operation.endswith('_cache_file') else None)
+            error = ModuleContentError(details['message'], details=details)
+            error.headers = getattr(exc, 'headers', None)
+            raise error from exc
+
+    def _acquire_batch(self, entries, on_progress):
+        """Retry the missing suffix, retaining already verified cache files."""
+        for attempt in range(1, 4):
+            missing = [(module, file) for module, file in entries
+                       if not self._cached(file)]
+            if not missing:
+                return
+            try:
+                for group in _range_batches(missing):
+                    module, first = group[0]
+                    url = f'https://github.com/NefilimPL/PicSyncra/releases/download/{quote(module.source_tag, safe="")}/{quote(first.asset_name, safe="")}'
+                    owners = {file.path: owner for owner, file in group}
+                    self._transfer_range([file for owner, file in group], url,
+                                         lambda file, count: on_progress(owners[file.path], file, count))
+                return
+            except ModuleContentError as exc:
+                details = dict(exc.details)
+                module, file = next((entry for entry in missing if entry[1].path == details['file']))
+                details.update(module_id=module.module_id, asset=file.asset_name,
+                               source_tag=module.source_tag, attempts=attempt)
+                if not details['retryable'] or attempt == 3:
+                    raise ModuleContentError(f"{details['message']} [{details['code']}] Moduł: {module.module_id}; plik: {file.path}.", details=details) from exc
+                on_progress(module, file, 0)
+                retry_after = exc.headers.get('Retry-After', '') if exc.headers else ''
+                delay = min(15, max(attempt, int(retry_after))) if retry_after.isdecimal() else attempt
+                self.sleep(delay)
+
+    def _cached(self, file):
+        destination = safe_path(self.root, file.sha256)
+        return destination.is_file() and destination.stat().st_size == file.size and _digest(destination) == file.sha256
 
     def assemble(self, selected: ActiveModuleSet, *, on_progress=None) -> None:
         root = module_set_root(self.context, selected)
@@ -195,24 +262,31 @@ class ModuleContentStore:
         missing = set()
         module_totals = {}
         owners = {}
-        if on_progress:
-            cached = self.available_hashes()
-            for module in selected.modules:
-                for file in module.files:
-                    if file.sha256 not in cached and file.sha256 not in missing and file.size:
-                        missing.add(file.sha256)
-                        owners[file.sha256] = module.module_id
-                        module_totals[module.module_id] = module_totals.get(module.module_id, 0) + file.size
-                        total += file.size
-            on_progress(dict(downloaded_bytes=0, total_bytes=total, module_id=None))
+        entries = []
+        cached = self.available_hashes()
         for module in selected.modules:
             for file in module.files:
-                def report(count):
-                    downloaded[file.sha256] = count
-                    on_progress(dict(downloaded_bytes=sum(downloaded.values()), total_bytes=total, module_id=module.module_id,
-                        module_downloaded_bytes=sum(value for digest, value in downloaded.items() if owners.get(digest) == module.module_id),
-                        module_total_bytes=module_totals.get(module.module_id, 0)))
-                source = self.acquire(module, file, on_progress=report if on_progress else None)
+                if file.sha256 not in cached and file.sha256 not in missing and file.size:
+                    missing.add(file.sha256)
+                    entries.append((module, file))
+                    owners[file.sha256] = module.module_id
+                    module_totals[module.module_id] = module_totals.get(module.module_id, 0) + file.size
+                    total += file.size
+        if on_progress:
+            on_progress(dict(downloaded_bytes=0, total_bytes=total, module_id=None))
+
+        def report(module, file, count):
+            if on_progress:
+                downloaded[file.sha256] = count
+                on_progress(dict(downloaded_bytes=sum(downloaded.values()), total_bytes=total, module_id=module.module_id,
+                    module_downloaded_bytes=sum(value for digest, value in downloaded.items() if owners.get(digest) == module.module_id),
+                    module_total_bytes=module_totals.get(module.module_id, 0)))
+
+        for batch in _range_batches(entries):
+            self._acquire_batch(batch, report)
+        for module in selected.modules:
+            for file in module.files:
+                source = self.acquire(module, file, on_progress=lambda count: report(module, file, count))
                 destination = safe_path(root, file.path)
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 if destination.exists():

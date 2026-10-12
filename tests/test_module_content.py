@@ -255,3 +255,137 @@ def test_failed_assembly_cleans_scratch_and_retry_reuses_verified_content(contex
     monkeypatch.setattr(module_content.shutil, 'copyfile', original)
     store.assemble(selected)
     verify_module_set_files(context, selected)
+
+
+def packed_files(context, contents):
+    import hashlib
+    from dataclasses import replace
+    module = parse_module_manifest(release_payload()).modules[0]
+    template = module.files[0]
+    raw = b''.join(contents)
+    files = []
+    offset = 0
+    for index, content in enumerate(contents):
+        files.append(replace(template, path=f'runtime/ocr/header{index}.h', size=len(content),
+            sha256=hashlib.sha256(content).hexdigest(), asset_offset=offset, asset_size=len(raw)))
+        offset += len(content)
+    from picsyncra.installation.module_manifest import module_version_id
+    module = replace(module, module_id='ocr_runtime', files=tuple(files))
+    return replace(module, version_id=module_version_id(module)), raw
+
+
+def packed_selection(context, module, store):
+    required = parse_module_manifest(release_payload(5, [module_payload(),
+        module_payload('migrator', 'apps/migrator/PicSyncra-Migrator.exe')])).modules
+    store.import_bytes(b'code')
+    return make_module_set(1, 5, required + (module,))
+
+
+def test_adjacent_missing_ocr_files_share_one_verified_range_request(context):
+    module, raw = packed_files(context, [b'header'+bytes([index]) for index in range(20)])
+    calls, progress = [], []
+    def fetch(url, start, size, total):
+        calls.append((start, size, total))
+        return Response(raw[start:start+size], start, total)
+    store = ModuleContentStore(context, fetch=fetch)
+    selected = packed_selection(context, module, store)
+    store.assemble(selected, on_progress=lambda value: progress.append(dict(value)))
+    assert calls == [(0, len(raw), len(raw))]
+    verify_module_set_files(context, selected)
+    assert progress[-1]['downloaded_bytes'] == progress[-1]['total_bytes'] == len(raw)
+
+
+def test_batched_ranges_do_not_download_cached_gaps_and_deduplicate_hashes(context):
+    from dataclasses import replace
+    module, raw = packed_files(context, [b'first', b'cached', b'third', b'fourth'])
+    module = replace(module, files=module.files + (replace(module.files[0], path='runtime/ocr/same.h'),))
+    from picsyncra.installation.module_manifest import module_version_id
+    module = replace(module, version_id=module_version_id(module))
+    calls = []
+    def fetch(url, start, size, total):
+        calls.append((start, size))
+        return Response(raw[start:start+size], start, total)
+    store = ModuleContentStore(context, fetch=fetch)
+    store.import_bytes(b'cached')
+    selected = packed_selection(context, module, store)
+    store.assemble(selected)
+    assert calls == [(0, 5), (11, 11)]
+    verify_module_set_files(context, selected)
+
+
+def test_batch_retry_reuses_verified_prefix_and_discards_interrupted_file(context):
+    module, raw = packed_files(context, [b'first', b'second', b'third'])
+    calls, waits = [], []
+    class Interrupted(Response):
+        def read(self, size=-1):
+            if self.tell() >= 5: raise ConnectionResetError('interrupted')
+            return super().read(size)
+    def fetch(url, start, size, total):
+        calls.append((start, size))
+        return (Interrupted if len(calls)==1 else Response)(raw[start:start+size], start, total)
+    store = ModuleContentStore(context, fetch=fetch, sleep=waits.append)
+    selected = packed_selection(context, module, store)
+    progress = []
+    store.assemble(selected, on_progress=lambda value: progress.append(dict(value)))
+    assert calls == [(0, len(raw)), (5, len(raw)-5)]
+    assert waits == [1]
+    assert not list(store.root.glob('*.part'))
+    assert progress[-1]['downloaded_bytes'] == len(raw)
+    verify_module_set_files(context, selected)
+
+
+def test_bad_file_in_batch_cannot_be_published_or_activate_a_set(context):
+    module, raw = packed_files(context, [b'first', b'second', b'third'])
+    corrupted = raw[:5] + b'xxxxxx' + raw[11:]
+    calls = []
+    def fetch(url, start, size, total):
+        calls.append((start, size))
+        return Response(corrupted[start:start+size], start, total)
+    store = ModuleContentStore(context, fetch=fetch)
+    selected = packed_selection(context, module, store)
+    with pytest.raises(ModuleContentError) as caught: store.assemble(selected)
+    assert caught.value.details['code'] == 'hash_mismatch'
+    assert caught.value.details['file'] == module.files[1].path
+    assert calls == [(0, len(raw))]
+    assert (store.root / module.files[0].sha256).read_bytes() == b'first'
+    assert not (store.root / module.files[1].sha256).exists()
+    assert not (module_set_root(context, selected) / 'module-set.json').exists()
+    assert not list(store.root.glob('*.part'))
+
+
+def test_batches_respect_size_and_count_limits_and_release_boundaries(context, monkeypatch):
+    from dataclasses import replace
+    from picsyncra.installation import module_content
+    module, raw = packed_files(context, [b'first', b'second', b'third', b'fourth'])
+    calls = []
+    def fetch(url, start, size, total):
+        calls.append((url, start, size))
+        return Response(raw[start:start+size], start, total)
+    store = ModuleContentStore(context, fetch=fetch)
+    monkeypatch.setattr(module_content, '_RANGE_BATCH_BYTES', 12)
+    monkeypatch.setattr(module_content, '_RANGE_BATCH_FILES', 2)
+    store.assemble(packed_selection(context, module, store))
+    assert [(start,size) for _,start,size in calls] == [(0,11), (11,11)]
+    # Adjacent offsets from different tags/assets must remain independent.
+    entries = [(module, module.files[0]), (replace(module, source_tag='v2'), module.files[1])]
+    assert len(list(module_content._range_batches(entries))) == 2
+    entries = [(module, module.files[0]), (module, replace(module.files[1], asset_name='other.bin'))]
+    assert len(list(module_content._range_batches(entries))) == 2
+
+
+@pytest.mark.parametrize('kind', ['status', 'range', 'length', 'trailing'])
+def test_batch_rejects_unconfirmed_or_overlong_ranges_before_activation(context, kind):
+    module, raw = packed_files(context, [b'first', b'second'])
+    def fetch(url, start, size, total):
+        response = Response(raw + (b'extra' if kind=='trailing' else b''), start, total)
+        response.headers.update({'Content-Length':str(size), 'Content-Range':f'bytes {start}-{start+size-1}/{total}'})
+        if kind=='status': response.status=200
+        if kind=='range': response.headers['Content-Range']='bytes 1-2/3'
+        if kind=='length': response.headers['Content-Length']=str(size+1)
+        return response
+    store = ModuleContentStore(context, fetch=fetch)
+    selected = packed_selection(context, module, store)
+    with pytest.raises(ModuleContentError): store.assemble(selected)
+    assert not (module_set_root(context, selected)/'module-set.json').exists()
+    assert not (store.root/module.files[-1].sha256).exists()
+    assert not list(store.root.glob('*.part'))
