@@ -23,7 +23,11 @@ def download_failure(exc):
         return dict(code='connection_error', message='Połączenie podczas pobierania zostało przerwane.', retryable=True,
                     **({'system_code': reason.errno} if isinstance(getattr(reason, 'errno', None), int) else {}))
     if isinstance(reason, OSError):
+        system_code = getattr(reason, 'winerror', None) or reason.errno
+        if reason.errno in {errno.EACCES, errno.EPERM} or getattr(reason, 'winerror', None) == 5:
+            return dict(code='permission_denied', message='Windows odmówił dostępu do pliku lokalnego.',
+                        retryable=False, system_code=system_code)
         return dict(code='disk_full' if reason.errno == errno.ENOSPC else 'local_io_error',
                     message='Brak miejsca na dysku.' if reason.errno == errno.ENOSPC else 'Nie udało się zapisać lub odczytać pliku lokalnego.',
-                    retryable=False, system_code=getattr(reason, 'winerror', None) or reason.errno)
+                    retryable=False, system_code=system_code)
     return dict(code='invalid_source', message='Nieprawidłowe źródło pobierania modułu.', retryable=False)

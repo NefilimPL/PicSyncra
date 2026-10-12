@@ -271,8 +271,12 @@ class ModuleService:
             # silently execute a plan whose live preflight may have changed.
             result.update(state='failed', error='Kontroler został uruchomiony ponownie przed rozpoczęciem operacji. Przygotuj i zatwierdź nowy plan.')
         progress_path = safe_path(self.context.state_root, 'module-progress/' + operation_id + '.json')
-        if result is not None and progress_path.exists():
-            result['progress'] = json.loads(progress_path.read_text(encoding='utf-8'))
+        if result is not None:
+            snapshot = self.executor.progress_snapshot(operation_id)
+            if snapshot is not None:
+                result['progress'] = snapshot
+            elif progress_path.exists():
+                result['progress'] = json.loads(progress_path.read_text(encoding='utf-8'))
         return result
 
     def _healthy(self):

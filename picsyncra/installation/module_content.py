@@ -12,7 +12,7 @@ from urllib.request import Request, build_opener, HTTPSHandler
 from uuid import uuid4
 from .contracts import InstallContext
 from .module_contracts import ActiveModuleSet, ModuleFile, ModuleVersion
-from .module_filesystem import safe_path
+from .module_filesystem import safe_path, replace_file
 from .module_state import module_set_root, publish_module_set
 from .downloads import _TrustedGithubRedirect, _trusted_url
 from .https import verified_https_context
@@ -58,7 +58,7 @@ class ModuleContentStore:
                 stream.write(data)
                 stream.flush()
                 os.fsync(stream.fileno())
-            os.replace(temporary, destination)
+            replace_file(temporary, destination)
         finally:
             temporary.unlink(missing_ok=True)
         return digest
@@ -93,7 +93,7 @@ class ModuleContentStore:
                 temporary = safe_path(self.root, uuid4().hex + '.part')
                 try:
                     shutil.copyfile(source, temporary)
-                    os.replace(temporary, destination)
+                    replace_file(temporary, destination)
                 finally:
                     temporary.unlink(missing_ok=True)
 
@@ -123,6 +123,7 @@ class ModuleContentStore:
 
     def _acquire_once(self, file, destination, url, on_progress):
         temporary = safe_path(self.root, uuid4().hex + '.part')
+        operation = 'fetch_range'
         try:
             with self.fetch(url, file.asset_offset, file.size, file.asset_size) as response:
                 expected = f'bytes {file.asset_offset}-{file.asset_offset + file.size - 1}/{file.asset_size}'
@@ -133,21 +134,35 @@ class ModuleContentStore:
                     raise ModuleContentError('Nieprawidłowy rozmiar pobieranego zakresu.', code='size_mismatch')
                 remaining = file.size
                 digest = hashlib.sha256()
+                operation = 'create_cache_file'
                 with temporary.open('xb') as stream:
                     while remaining:
+                        operation = 'read_remote'
                         chunk = response.read(min(1024 * 1024, remaining))
                         if not chunk or len(chunk) > remaining:
                             raise ModuleContentError('Przerwane pobieranie pliku modułu.', code='interrupted_download', retryable=True)
                         digest.update(chunk)
+                        operation = 'write_cache_file'
                         stream.write(chunk)
                         remaining -= len(chunk)
-                        if on_progress: on_progress(file.size - remaining)
+                        if on_progress:
+                            operation = 'report_progress'
+                            on_progress(file.size - remaining)
+                    operation = 'read_remote'
                     if response.read(1) or digest.hexdigest() != file.sha256:
                         raise ModuleContentError('Suma kontrolna pobranego pliku modułu jest niezgodna.', code='hash_mismatch')
+                    operation = 'flush_cache_file'
                     stream.flush()
                     os.fsync(stream.fileno())
-            os.replace(temporary, destination)
+            operation = 'publish_cache_file'
+            replace_file(temporary, destination)
             return destination
+        except OSError as exc:
+            if operation in {'fetch_range', 'read_remote'}:
+                raise
+            details = download_failure(exc)
+            details.update(operation=operation, storage='content_cache' if operation.endswith('_cache_file') else None)
+            raise ModuleContentError(details['message'], details=details) from exc
         finally:
             temporary.unlink(missing_ok=True)
 

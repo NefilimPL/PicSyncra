@@ -63,6 +63,55 @@ def test_download_failure_journals_error_details_and_preserves_verified_cache(co
     assert store.available_hashes()
 
 
+@pytest.mark.parametrize('during_transfer', [False, True])
+def test_progress_write_failure_does_not_cancel_verified_ocr(context, monkeypatch, caplog, during_transfer):
+    from picsyncra.installation import module_executor
+    from tests.module_fixtures import module_payload
+    from tests.test_module_content import Response
+    active, store, _ = prepare(context)
+    release = parse_module_manifest(release_payload(modules=[module_payload(),
+        module_payload('migrator', 'apps/migrator/PicSyncra-Migrator.exe'),
+        module_payload('ocr_models', 'models/ocr/model.bin', b'model'),
+        module_payload('ocr_runtime', 'runtime/ocr/engine.bin', b'engine')]))
+    plan = plan_module_operation(active, (release,), ENV, action='install_ocr', selected={},
+        excluded=frozenset(), available_hashes=store.available_hashes())
+    downloaded = []
+    def fetch(url, start, size, total):
+        downloaded.append(url)
+        return Response(b'model' if size == 5 else b'engine', start, total)
+    store.fetch = fetch
+    original = module_executor.atomic_json
+    def write(path, value, **kwargs):
+        if path.parent.name == 'module-progress' and (not during_transfer or value['downloaded_bytes'] > 0):
+            error = PermissionError(13, 'private Windows path')
+            error.winerror = 5
+            raise error
+        return original(path, value, **kwargs)
+    monkeypatch.setattr(module_executor, 'atomic_json', write)
+    executor = ModuleExecutor(context, Controller(), content=store, quiesce=lambda op: None, healthy=lambda: True)
+    result = executor.execute(plan)
+    assert result['state'] == 'committed'
+    assert read_module_set(context) == plan.target
+    assert len(downloaded) == 2
+    snapshot = executor.progress_snapshot(plan.plan_id)
+    assert snapshot['downloaded_bytes'] == snapshot['total_bytes'] == 11
+    snapshot['downloaded_bytes'] = -1
+    assert executor.progress_snapshot(plan.plan_id)['downloaded_bytes'] == 11
+    assert executor.progress_snapshot('different-operation') is None
+    assert 'progress' in caplog.text.lower() and 'private Windows path' not in caplog.text
+
+
+def test_durable_journal_write_failure_still_blocks_installation(context, monkeypatch):
+    from picsyncra.installation import module_executor
+    active, store, plan = prepare(context)
+    def denied(*args, **kwargs): raise PermissionError(13, 'journal write denied')
+    monkeypatch.setattr(module_executor, 'atomic_json', denied)
+    store.assemble = lambda *args, **kwargs: pytest.fail('must not download without a durable transaction journal')
+    executor = ModuleExecutor(context, Controller(), content=store, quiesce=lambda op: None, healthy=lambda: True)
+    with pytest.raises(PermissionError): executor.execute(plan)
+    assert read_module_set(context) == active
+
+
 def test_failed_health_and_crash_recovery_restore_exact_previous_pins(context):
     active, store, plan = prepare(context)
     health_results = iter((False, True))

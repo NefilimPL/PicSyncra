@@ -55,6 +55,36 @@ def test_bad_hash_is_diagnosed_without_retry_or_accepting_content(context):
     assert len(calls) == 1 and not list(store.root.iterdir())
 
 
+def test_cache_permission_failure_identifies_operation_without_network_retry(context, monkeypatch):
+    from pathlib import Path
+    store = ModuleContentStore(context, fetch=lambda url, start, size, total: Response(b'code', start, total),
+        sleep=lambda _: pytest.fail('permanent permission failure must not restart the download'))
+    original = Path.open
+    def open_file(path, *args, **kwargs):
+        if path.suffix == '.part':
+            error = PermissionError(13, 'private Windows path')
+            error.winerror = 5
+            raise error
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(Path, 'open', open_file)
+    module = parse_module_manifest(release_payload()).modules[0]
+    with pytest.raises(ModuleContentError) as caught: store.acquire(module, module.files[0])
+    details = caught.value.details
+    assert details['code'] == 'permission_denied' and details['system_code'] == 5
+    assert details['operation'] == 'create_cache_file'
+    assert details['storage'] == 'content_cache'
+    assert details['attempts'] == 1 and details['retryable'] is False
+    assert 'private Windows path' not in str(details)
+
+
+def test_errno_io_failure_is_not_mistaken_for_windows_access_denial():
+    import errno
+    from picsyncra.installation.module_download_diagnostics import download_failure
+    details = download_failure(OSError(errno.EIO, 'private local path'))
+    assert details['code'] == 'local_io_error'
+    assert details['retryable'] is False
+
+
 def test_retry_after_interrupted_read_resets_progress_and_discards_partial_bytes(context):
     calls, progress = [], []
     class Interrupted(Response):

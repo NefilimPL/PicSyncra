@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import stat
+from time import sleep
 from uuid import uuid4
 from .module_definition import validate_payload_path
 
@@ -29,6 +30,18 @@ def safe_path(root: Path, relative: str = '') -> Path:
     return path
 
 
+def replace_file(source: Path, destination: Path) -> None:
+    """Keep atomic replacement while allowing brief Windows reader locks to close."""
+    for attempt in range(8):
+        try:
+            os.replace(source, destination)
+            return
+        except OSError as exc:
+            if getattr(exc, 'winerror', None) not in {5, 32, 33} or attempt == 7:
+                raise
+            sleep(min(.15, .025 * (attempt + 1)))
+
+
 def atomic_json(path: Path, value: object, *, replace: bool = False) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name('.' + path.name + '.' + uuid4().hex + '.tmp')
@@ -38,7 +51,7 @@ def atomic_json(path: Path, value: object, *, replace: bool = False) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         if replace:
-            os.replace(temporary, path)
+            replace_file(temporary, path)
         else:
             os.link(temporary, path)
     finally:

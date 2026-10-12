@@ -375,3 +375,40 @@ content; it does not verify a full production Paddle OCR download or inference.
 Python compileall, JavaScript syntax and diff checks passed. A new Setup is
 required to replace the stable controller/launcher, and the updated WEB module
 must become active for its UI changes to appear. No release was published.
+
+## Windows progress-reader interference during OCR download — 2026-10-12
+
+The user reported `local_io_error`, `system_code: 5`, one attempt, and an
+`inference.pdiparams` model path after a small part of the OCR download. A real
+Windows reproduction demonstrated that replacing the progress JSON while a
+normal reader holds it open raises exactly `PermissionError [WinError 5]`.
+Previously, this exception escaped the progress callback inside the content
+reader, deleted the partial model, and was incorrectly attributed to that
+model's download. The old diagnostic has no operation field, so it cannot
+prove that this was the only cause on the user's particular installation.
+
+Atomic file replacement now permits eight bounded attempts for Windows errors
+5, 32 and 33, allowing a short reader lock to close. Persistent access denial
+still fails; no permissions or validation requirements change. Live progress
+is held as an operation-specific controller snapshot and returned as a copy,
+avoiding repeated file reads during download polling. An OSError while saving
+the progress snapshot logs only a bounded system code and does not abort the
+verified transfer. Transaction journals, active markers and content publication
+remain mandatory writes. Real cache access errors now identify the operation
+(create, write, flush or publish) and storage role, with `permission_denied`
+distinguished from other local I/O failures.
+
+Native Tk acceptance with the real authenticated controller pipe held the
+progress JSON open for 1.3 seconds, exceeding the replacement retry window.
+It recorded system code 5 but continued live progress and committed OCR.
+The existing HTTP 503 rollback/manual retry/cache-reuse scenario also passed.
+Regression tests cover a real Windows reader lock, persistent access denial,
+unavailable telemetry at startup and during transfer, snapshot isolation, and
+refusal to download without a durable transaction journal. The stable controller
+must be rebuilt and replaced through Setup for an existing installation to use
+this correction; a WEB/module update alone does not replace it.
+
+Validation: **2044 Python tests passed**, three skipped, 66 subtests passed in
+the full run. Final focused runs passed **58 tests** and **44 tests**, including
+the added journal-write and precise errno regressions. Python compileall and
+diff checks passed. The final code review reported no blocking findings.

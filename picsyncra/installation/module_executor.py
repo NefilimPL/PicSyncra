@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 import shutil
@@ -115,6 +116,11 @@ class ModuleExecutor:
         self.migrate = migrate
         self.revalidate = revalidate
         self.path = safe_path(context.state_root, 'module-operation.json')
+        self._progress = None
+
+    def progress_snapshot(self, operation_id):
+        snapshot = self._progress
+        return dict(snapshot[1]) if snapshot and snapshot[0] == operation_id else None
 
     def status(self):
         return json.loads(self.path.read_text(encoding='utf-8')) if self.path.exists() else None
@@ -157,14 +163,25 @@ class ModuleExecutor:
                 last_report = 0.0
                 from .module_progress import DownloadProgress
                 measurements = DownloadProgress()
+                progress_warning = False
                 def report_progress(value):
-                    nonlocal last_progress, last_report
+                    nonlocal last_progress, last_report, progress_warning
                     now = monotonic()
                     if last_progress is None or last_progress['downloaded_bytes'] == 0 or value['downloaded_bytes'] == value['total_bytes'] or now - last_report >= 0.25:
                         # Keep small progress snapshots separate from the full
                         # transaction journal, which may include many OCR files.
                         value = measurements.update(value)
-                        atomic_json(progress_path, value, replace=True)
+                        self._progress = (plan.plan_id, value)
+                        try:
+                            atomic_json(progress_path, value, replace=True)
+                            progress_warning = False
+                        except OSError as exc:
+                            # Progress is telemetry, not a transaction boundary.
+                            # Keep the live snapshot; durable journals still fail closed.
+                            if not progress_warning:
+                                logging.getLogger(__name__).warning('Module progress snapshot could not be saved (system code %s).',
+                                    getattr(exc, 'winerror', None) or exc.errno)
+                            progress_warning = True
                         last_progress, last_report = value, now
                 self.content.assemble(plan.target, on_progress=report_progress)
                 self._write(record, 'draining')
