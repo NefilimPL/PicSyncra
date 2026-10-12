@@ -6,6 +6,8 @@ import re
 import threading
 import time
 from urllib.parse import quote
+from contextlib import nullcontext
+from uuid import uuid4
 from .controller_version import CONTROLLER_VERSION
 from .database import inspect_database
 from .module_content import ModuleContentStore
@@ -13,14 +15,14 @@ from .module_configuration import inspect_configuration
 from .module_contracts import ModuleEnvironment, ModulePlan, MigrationStep
 from .module_definition import module_definitions
 from .module_compatibility import check_module_compatibility
-from .module_executor import ModuleExecutor, ModuleExecutionError, verified_backup
+from .module_executor import ModuleExecutor, ModuleExecutionError, verified_backup, backup_receipt_metadata
 from .module_filesystem import atomic_json, safe_path
 from .module_migrations import migration_path
 from .module_planner import plan_module_operation
 from .module_source import ModuleReleaseSource
 from .module_state import read_module_set, module_set_payload, parse_module_set
 
-LAUNCHER_VERSION = 2
+LAUNCHER_VERSION = 3
 RUNTIME_ABI = 'cp313-win-amd64'
 
 
@@ -38,6 +40,9 @@ class ModuleService:
         self.busy = False
         self.current_operation_id = None
         self.entries = ()
+        self._authorization_lock = threading.RLock()
+        self._authorization_requests = {}
+        self._authorizations = {}
         self.executor = ModuleExecutor(context, controller, content=self.content,
                                        quiesce=quiesce or self._quiesce, healthy=healthy or self._healthy,
                                        revalidate=self._revalidate, migrate=self._migrate)
@@ -103,31 +108,27 @@ class ModuleService:
             config_schema = inspect_configuration(self.context.config_root)
         return ModuleEnvironment(schema, config_schema, RUNTIME_ABI, CONTROLLER_VERSION, LAUNCHER_VERSION)
 
-    def _catalog(self, channel=None):
-        self.entries = self.source.load(channel or self._channel())
+    def _catalog(self, channel=None, *, refresh=False):
+        loader = self.source.load if refresh else getattr(self.source, 'snapshot', self.source.load)
+        self.entries = loader(channel or self._channel())
         return tuple(entry.release for entry in self.entries if entry.release and not entry.blocked_reason)
 
     def catalog(self):
         active = read_module_set(self.context)
         channel=self._channel()
-        releases = self._catalog(channel)
+        releases = self._catalog(channel, refresh=True)
         latest = max(releases, key=lambda r: r.published_at, default=None)
         labels = {item.module_id: item.label for item in module_definitions()}
         rows = []
-        from datetime import datetime
-        def published(release): return datetime.fromisoformat(release.published_at.replace('Z', '+00:00'))
-        version_dates = {}
         release_dates = {entry.release_id: entry.published_at for entry in self.entries}
         def provenance(module):
             return dict(tag=module.source_tag, published_at=release_dates.get(module.source_release_id),
                         release_url=release_link(module.source_tag))
-        for release in sorted(releases, key=published):
-            for item in release.modules: version_dates.setdefault((item.module_id, item.version_id), published(release))
         for module in active.modules:
             versions = {}
             for release in sorted(releases, key=lambda r: r.published_at, reverse=True):
                 for item in release.modules:
-                    if item.module_id == module.module_id and (module.module_id, module.version_id) in version_dates and version_dates[(item.module_id, item.version_id)] <= version_dates[(module.module_id, module.version_id)]:
+                    if item.module_id == module.module_id:
                         versions.setdefault(item.version_id, dict(version_id=item.version_id, display_version=item.display_version,
                             release_id=item.source_release_id, **provenance(item), available=True))
             # Installed version stays visible, even before the first signed
@@ -145,8 +146,7 @@ class ModuleService:
             for path in sorted(backup_root.iterdir(), reverse=True):
                 if path.name.startswith('.'): continue
                 try:
-                    _, schema = verified_backup(self.context, path.name)
-                    backups.append(dict(backup_id=path.name, schema_version=schema))
+                    backups.append(backup_receipt_metadata(self.context, path.name))
                 except (RuntimeError, OSError, ValueError): continue
                 if len(backups) >= 100: break
         operation = self.operation(self.current_operation_id) if self.busy and self.current_operation_id else None
@@ -156,6 +156,14 @@ class ModuleService:
                     blocked_releases=[dict(release_id=e.release_id, tag=e.tag, reason=e.blocked_reason) for e in self.entries if e.blocked_reason][:50])
 
     def prepare(self, *, action, selected, excluded, restore_backup_id=None):
+        inventory = getattr(self.content, 'inventory_scope', nullcontext)
+        with inventory():
+            return self._prepare(action=action, selected=selected, excluded=excluded, restore_backup_id=restore_backup_id)
+
+    def _prepare(self, *, action, selected, excluded, restore_backup_id=None):
+        from .module_preflight import check_update_access
+        if self.busy: raise ModuleExecutionError('Inna operacja modułów jest w toku.')
+        check_update_access(self.context)
         active = read_module_set(self.context)
         releases = self._catalog()
         if not releases and self.source.offline:
@@ -183,16 +191,101 @@ class ModuleService:
         payload = dict(plan_id=plan.plan_id, action=plan.action, expected_revision=plan.expected_revision,
                        target=module_set_payload(plan.target), conflicts=[asdict(c) for c in plan.conflicts],
                        download_bytes=plan.download_bytes, migration_ids=list(plan.migration_ids), environment=asdict(environment),
-                       restore_backup_id=restore_backup_id, migrations=migrations)
+                       restore_backup_id=restore_backup_id, migrations=migrations,
+                       has_changes=({m.module_id: m.version_id for m in active.modules} !=
+                                    {m.module_id: m.version_id for m in plan.target.modules} or
+                                    active.pinned != plan.target.pinned or bool(restore_backup_id)))
         atomic_json(safe_path(self.context.state_root, 'module-plans/' + plan.plan_id + '.json'), payload)
         old = {m.module_id: m for m in active.modules}
         return dict(plan_id=plan.plan_id, action=plan.action, expected_revision=plan.expected_revision,
                     conflicts=payload['conflicts'], download_bytes=plan.download_bytes,
                     restore_backup_id=restore_backup_id,
+                    has_changes=payload['has_changes'],
                     changes=[dict(module_id=m.module_id, current=old[m.module_id].display_version if m.module_id in old else None,
                                   target=m.display_version, release_url=release_link(m.source_tag)) for m in plan.target.modules
                              if m.module_id not in old or m.version_id != old[m.module_id].version_id],
                     pinned=sorted(plan.target.pinned))
+
+    def authorization_request(self, **payload):
+        """Create a short-lived, nonsecret request for the native host launcher."""
+        from .module_preflight import check_update_access, ModuleAccessError
+        from .module_authorization import AuthorizationError
+        from .control_protocol import validate_module_payload
+        validate_module_payload('module_plan', payload)
+        if self.busy: raise ModuleExecutionError('Inna operacja modułów jest w toku.')
+        try: check_update_access(self.context)
+        except ModuleAccessError as exc:
+            if exc.details['code'] != 'permission_required': raise
+        else: raise AuthorizationError('Konto kontrolera ma dostęp. Przygotuj zwykły plan aktualizacji.')
+        with self._authorization_lock:
+            if len(self._authorization_requests) >= 8:
+                raise AuthorizationError('Zbyt wiele oczekujących logowań. Anuluj poprzednią próbę lub zaczekaj na jej wygaśnięcie.')
+            identifier = uuid4().hex
+            timer = threading.Timer(300, lambda: self._expire_authorization(identifier))
+            timer.daemon = True
+            self._authorization_requests[identifier] = dict(payload=payload, state='pending', timer=timer,
+                                                          expires_at=time.monotonic() + 300)
+            timer.start()
+        return dict(request_id=identifier, state='pending',
+                    launch_url=f'picsyncra-update://authorize/{self.context.installation_id}/{identifier}')
+
+    def _expire_authorization(self, request_id):
+        with self._authorization_lock:
+            request = self._authorization_requests.pop(request_id, None)
+            if request:
+                request['timer'].cancel()
+                token = self._authorizations.pop(request.get('plan_id'), None)
+                if token: token.close()
+
+    def _authorization_request(self, request_id):
+        from .module_authorization import AuthorizationError
+        request = self._authorization_requests.get(request_id)
+        if request and request['state'] != 'executing' and time.monotonic() >= request['expires_at']:
+            self._expire_authorization(request_id)
+            request = None
+        if request is None: raise AuthorizationError('Jednorazowe logowanie wygasło. Ponów aktualizację.')
+        return request
+
+    def authorization_status(self, request_id):
+        from .module_authorization import AuthorizationError
+        with self._authorization_lock:
+            request = self._authorization_request(request_id)
+            return dict(request_id=request_id, state=request['state'], action=request['payload']['action'],
+                        operation_id=request.get('operation_id'), plan_id=request.get('plan_id'))
+
+    def cancel_authorization(self, request_id):
+        with self._authorization_lock:
+            request = self._authorization_requests.get(request_id)
+            if request:
+                if request['state'] == 'executing':
+                    raise ModuleExecutionError('Instalacja już trwa; logowanie zostanie zwolnione po jej zakończeniu.')
+                token = self._authorizations.pop(request.get('plan_id'), None)
+                if token: token.close()
+                request['state'] = 'cancelled'
+        return dict(state='cancelled')
+
+    def authorize(self, request_id, credential_blob):
+        from .module_authorization import logon_credentials, AuthorizationError
+        with self._authorization_lock:
+            request = self._authorization_request(request_id)
+            if request['state'] != 'pending':
+                raise AuthorizationError('Jednorazowe logowanie wygasło lub zostało już użyte.')
+            # Never retain the supplied blob in the request, plan or journal.
+            token = logon_credentials(self.context.installation_id, request_id, credential_blob)
+            try:
+                with token.scope():
+                    plan = self.prepare(**request['payload'])
+                    path = safe_path(self.context.state_root, 'module-plans/' + plan['plan_id'] + '.json')
+                    payload = self._load_plan(plan['plan_id'])
+                    payload['requires_authorization'] = True
+                    atomic_json(path, payload, replace=True)
+                self._authorization_request(request_id)
+                request.update(state='prepared', plan_id=plan['plan_id'])
+                self._authorizations[plan['plan_id']] = token
+                return plan
+            except Exception:
+                token.close()
+                raise
 
     def _load_plan(self, plan_id):
         if not isinstance(plan_id, str) or not re.fullmatch('[a-f0-9]{32}', plan_id): raise ModuleExecutionError('Nieprawidłowy plan.')
@@ -226,7 +319,43 @@ class ModuleService:
         if result.returncode: raise ModuleExecutionError('Migracja nie przeszła kontroli; przywracanie danych z kopii.')
 
     def execute(self, plan_id, *, restore_backup_id=None, acknowledge_data_loss=False):
+        with self._authorization_lock:
+            for identifier, request in tuple(self._authorization_requests.items()):
+                if request.get('plan_id') == plan_id:
+                    self._authorization_request(identifier)
+            token = self._authorizations.pop(plan_id, None)
+        try:
+            with token.scope() if token else nullcontext():
+                accepted, work = self._accept_execution(plan_id, restore_backup_id=restore_backup_id,
+                    acknowledge_data_loss=acknowledge_data_loss, authorized=token is not None)
+            with self._authorization_lock:
+                for request in self._authorization_requests.values():
+                    if request.get('plan_id') == plan_id:
+                        request.update(state='executing', operation_id=plan_id)
+            if work is None:
+                if token: token.close()
+                return accepted
+            def authorized_work():
+                try:
+                    with token.scope() if token else nullcontext(): work()
+                finally:
+                    if token: token.close()
+            try: self.schedule(authorized_work)
+            except Exception:
+                with self._lock: self.busy = False
+                with self._authorization_lock:
+                    for request in self._authorization_requests.values():
+                        if request.get('plan_id') == plan_id: request['state'] = 'cancelled'
+                raise
+            return accepted
+        except Exception:
+            if token: token.close()
+            raise
+
+    def _accept_execution(self, plan_id, *, restore_backup_id, acknowledge_data_loss, authorized):
         payload = self._load_plan(plan_id)
+        if payload.get('requires_authorization') and not authorized:
+            raise ModuleExecutionError('Jednorazowe logowanie wygasło lub zostało już użyte. Przygotuj nowy plan.')
         if payload['restore_backup_id'] != restore_backup_id:
             raise ModuleExecutionError('Wybrana kopia bazy wymaga osobnego planu zgodności.')
         if payload['conflicts']: raise ModuleExecutionError('Plan zawiera konflikty zgodności.')
@@ -235,6 +364,10 @@ class ModuleService:
         target = parse_module_set(payload['target'])
         if read_module_set(self.context).revision != payload['expected_revision']:
             raise ModuleExecutionError('Instalacja zmieniła się. Przygotuj nowy plan; zachowaj swoje wybory.')
+        if payload.get('has_changes') is False:
+            result = dict(operation_id=plan_id, state='committed', action=payload['action'], error=None, unchanged=True)
+            atomic_json(safe_path(self.context.state_root, 'module-operations/' + plan_id + '.json'), result, replace=True)
+            return result, None
         plan = ModulePlan(plan_id, payload['action'], payload['expected_revision'], target, (), (), payload['download_bytes'], tuple(payload['migration_ids']))
         with self._lock:
             if self.busy: raise ModuleExecutionError('Inna operacja modułów jest w toku.')
@@ -242,20 +375,32 @@ class ModuleService:
             self.current_operation_id = plan_id
         accepted = dict(operation_id=plan_id, state='accepted', action=plan.action, error=None)
         operation_path = safe_path(self.context.state_root, 'module-operations/' + plan_id + '.json')
-        atomic_json(operation_path, accepted, replace=True)
+        try: atomic_json(operation_path, accepted, replace=True)
+        except Exception:
+            with self._lock: self.busy = False
+            raise
         def work():
             try:
                 result = self.executor.execute(plan, restore_backup_id=restore_backup_id, acknowledge_data_loss=acknowledge_data_loss)
             except Exception as exc:
-                result = dict(operation_id=plan_id, state='failed', action=plan.action, error=str(exc))
+                result = dict(operation_id=plan_id, state='failed', action=plan.action, error=str(exc), error_details=getattr(exc, 'details', None))
             finally:
-                status = self.executor.status()
-                if not status or status['state'] in {'committed', 'rolled_back', 'failed'}:
-                    self.executor.clear_maintenance()
-                with self._lock: self.busy = False
+                status = None
+                try:
+                    status = self.executor.status()
+                    if not status or status['state'] in {'committed', 'rolled_back', 'failed'}:
+                        self.executor.clear_maintenance()
+                except OSError as exc:
+                    from .module_preflight import ModuleAccessError
+                    error = ModuleAccessError('maintenance_ready', exc)
+                    result = dict(operation_id=plan_id, state='recovery_required', action=plan.action,
+                                  error=str(error), error_details=error.details)
+                    if status:
+                        self.executor._write(status, 'recovery_required', error=str(error), error_details=error.details)
+                finally:
+                    with self._lock: self.busy = False
             atomic_json(operation_path, result, replace=True)
-        self.schedule(work)
-        return accepted
+        return accepted, work
 
     def operation(self, operation_id):
         self._load_plan(operation_id)

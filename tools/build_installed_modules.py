@@ -84,7 +84,7 @@ def generate_module_release_manifest(*, release_metadata, modules, migrations=()
         payload=asdict(module)
         for key in ('files','requirements','conflicts'): payload[key]=list(payload[key])
         versions.append(payload)
-    payload=dict(release_metadata,schema=2,platform='windows-x64',minimum_controller=2,minimum_launcher=2,
+    payload=dict(release_metadata,schema=2,platform='windows-x64',minimum_controller=3,minimum_launcher=3,
                  modules=versions,migrations=list(migrations))
     parse_module_manifest(payload)
     return json.dumps(payload,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()

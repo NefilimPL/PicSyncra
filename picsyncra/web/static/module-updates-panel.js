@@ -21,7 +21,7 @@
   function create({requestJson, onChanged = () => {}, confirm = message => window.confirm(message)}) {
     const element = node('section', undefined, 'settings-block module-updates-panel');
     const title = node('h3', 'Wersje zainstalowanych modułów');
-    const note = node('p', 'Wybór wersji przygotowuje cofnięcie i wyłącza ten moduł z bieżącej aktualizacji. Zmiany zatwierdza wspólny przycisk.', 'settings-note');
+    const note = node('p', 'Aktualizuj zatwierdza wybrane wersje i aktualizuje pozostałe niezablokowane moduły. Bez zmiany oznacza najnowszą dostępną wersję, z zachowaniem blokady.', 'settings-note');
     const status = node('p', '', 'settings-note');
     status.setAttribute('role', 'status');
     const progressbar = node('progress');
@@ -54,25 +54,34 @@
     const selected = new Map(), rows = new Map(), selectedVersions = new Map();
     let busy = false, timer = null, operationId = null, restoreBackupId = null, terminalMessage = null;
     let lastOperation = null, retryAction = null;
+    let authorizationId = null;
     function button(label, action) {
       const item = node('button', label); item.type = 'button';
       item.addEventListener('click', () => action()); return item;
     }
-    const rollback = button('Cofnij wersję modułu', () => prepare('rollback_modules'));
-    const update = button('Aktualizuj moduły', () => prepare('update'));
+    const update = button('Aktualizuj', () => prepare('apply'));
     const ocr = button('Pobierz OCR', () => prepare('install_ocr'));
     const retry = button('Ponów pobieranie', () => prepare(retryAction)); retry.hidden = true;
-    operationBox.append(status, progressbar, errorDetails, retry);
+    const authorizationLink = node('a', 'Otwórz jednorazowe logowanie Windows'); authorizationLink.hidden = true;
+    const authorizationCancel = button('Anuluj logowanie', async () => {
+      const identifier = authorizationId;
+      if (!identifier) return;
+      try {
+        await post(`/api/installation/module-authorization/${identifier}/cancel`, {});
+        if (authorizationId !== identifier) return;
+        endAuthorization('Logowanie anulowane przed instalacją.');
+      } catch (error) { if (authorizationId === identifier) status.textContent = error.message; }
+    }); authorizationCancel.hidden = true;
+    operationBox.append(status, progressbar, errorDetails, retry, authorizationLink, authorizationCancel);
     const ocrSection = node('div', undefined, 'module-ocr-install');
     ocrSection.append(node('strong', 'Silnik i modele OCR'), ocr);
     const refreshButton = button('Sprawdź wersje', () => refresh());
-    const updateAll = button('Aktualizuj wszystko', () => prepare('update_all'));
-    controls.append(update, rollback, updateAll, refreshButton);
+    controls.append(update, refreshButton);
     const backupLabel = node('label', 'Awaryjne odtworzenie bazy: ');
     const backups = node('select'); backups.setAttribute('aria-label', 'Kopia bazy do odtworzenia');
     backups.addEventListener('change', () => { restoreBackupId = backups.value || null; });
     backupLabel.append(backups);
-    element.append(title, note, channelLabel, table, ocrSection, operationBox, controls, backupLabel, conflicts);
+    element.append(title, controls, note, channelLabel, operationBox, table, ocrSection, backupLabel, conflicts);
     function placeProgress(action, moduleId) {
       const row = rows.get(action === 'install_ocr' ? 'ocr' : moduleId);
       const target = row?.element || (action === 'install_ocr' ? ocrSection : element);
@@ -115,8 +124,7 @@
       retryAction = canRetry ? operation.action : null;
     }
     function synchronize() {
-      rollback.disabled = busy || !selected.size;
-      update.disabled = updateAll.disabled = ocr.disabled = refreshButton.disabled = busy;
+      update.disabled = ocr.disabled = refreshButton.disabled = busy;
       for (const row of rows.values()) row.select.disabled = busy;
       backups.disabled = busy;
       channel.disabled = busy;
@@ -135,12 +143,57 @@
       if (url) row.link.href = url; else row.link.removeAttribute('href');
       row.link.hidden = !versionId || !url;
       row.link.textContent = `Wybrana: ${releaseCaption(draft?.display_version || '', draft)}`;
-      row.status.textContent = versionId ? (!version || !version.available ? 'Wybrana wersja jest niedostępna w tym kanale; moduł pomijany w aktualizacji.' : 'Wybrany do cofnięcia; pomijany w aktualizacji.') :
+      row.status.textContent = versionId ? (!version || !version.available ? 'Wybrana wersja jest niedostępna w tym kanale; zmień wybór przed aktualizacją.' : 'Wybrana konkretna wersja; zostanie zatwierdzona razem z aktualizacją.') :
         row.module.pinned ? 'Wyłączony z aktualizacji po cofnięciu.' : 'Aktualizacje włączone.';
       synchronize();
     }
     function post(url, payload) {
       return requestJson(url, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+    }
+    function endAuthorization(message) {
+      clearTimeout(timer);
+      authorizationId = null; busy = false;
+      authorizationLink.hidden = authorizationCancel.hidden = true;
+      progressbar.hidden = true; status.textContent = message;
+      try { window.sessionStorage?.removeItem('picsyncra-module-authorization'); } catch (_) {}
+      synchronize();
+    }
+    async function pollAuthorization() {
+      const identifier = authorizationId;
+      if (!identifier) return;
+      try {
+        const request = await requestJson(`/api/installation/module-authorization/${identifier}`);
+        if (authorizationId !== identifier) return;
+        if (request.state === 'executing' && /^[a-f0-9]{32}$/.test(request.operation_id || '')) {
+          const nextOperationId = request.operation_id;
+          endAuthorization('Logowanie zaakceptowane. Rozpoczynanie instalacji…');
+          busy = true; operationId = nextOperationId;
+          try { window.sessionStorage?.setItem('picsyncra-module-operation', operationId); } catch (_) {}
+          synchronize(); poll(); return;
+        }
+        if (request.state === 'cancelled') { endAuthorization('Logowanie lub plan instalacji anulowano.'); return; }
+      } catch (error) {
+        if (authorizationId === identifier) endAuthorization(error.message);
+        return;
+      }
+      timer = setTimeout(pollAuthorization, 1500);
+    }
+    async function requestAuthorization(action) {
+      const request = await post('/api/installation/module-authorization', {action,
+        selected:['apply','rollback_modules'].includes(action) ? Object.fromEntries(selected) : {},
+        excluded:action === 'update' ? [...selected.keys()] : [], restore_backup_id:restoreBackupId});
+      if (!/^[a-f0-9]{32}$/.test(request.request_id || '') ||
+          !/^picsyncra-update:\/\/authorize\/[A-Za-z0-9][A-Za-z0-9._-]{0,63}\/[a-f0-9]{32}$/.test(request.launch_url || '')) {
+        throw new Error('Nieprawidłowe żądanie jednorazowego logowania Windows.');
+      }
+      authorizationId = request.request_id; busy = true;
+      authorizationLink.href = request.launch_url;
+      authorizationLink.hidden = authorizationCancel.hidden = false;
+      status.textContent = 'Dokończ logowanie Windows i zatwierdź plan w launcherze na komputerze hostującym PicSyncra. Konto zostanie użyte tylko do tej instalacji.';
+      progressbar.hidden = true;
+      try { window.sessionStorage?.setItem('picsyncra-module-authorization', authorizationId); } catch (_) {}
+      pollAuthorization();
+      window.location.href = request.launch_url;
     }
     async function refresh() {
       if (!operationId) status.textContent = 'Pobieranie katalogu wersji z GitHuba…';
@@ -209,9 +262,9 @@
     function conflictDialog(plan) {
       conflicts.replaceChildren(node('h4', 'Konflikty zgodności'));
       for (const item of plan.conflicts) conflicts.append(node('p', `${item.module_id} ${item.selected_version || ''}${item.dependency_id ? ` ↔ ${item.dependency_id} ${item.dependency_version || 'brak'}` : ''}: ${item.requirement}`));
-      const all = button('Aktualizuj wszystko', () => prepare('update_all'));
+      conflicts.append(node('p', 'Zmień wybory wersji wskazanych modułów i ponów aktualizację. Blokady pozostają zachowane.'));
       const cancel = button('Nie aktualizuj', () => conflicts.replaceChildren());
-      conflicts.append(all, cancel);
+      conflicts.append(cancel);
     }
     async function prepare(action) {
       if (busy) return;
@@ -222,9 +275,10 @@
       status.textContent = action === 'install_ocr' ? 'Sprawdzanie zgodności i przygotowanie instalacji OCR…' : 'Sprawdzanie zgodności i przygotowanie planu…';
       try {
         const plan = await post('/api/installation/module-plans', {action,
-          selected: action === 'rollback_modules' ? Object.fromEntries(selected) : {},
+          selected: ['apply','rollback_modules'].includes(action) ? Object.fromEntries(selected) : {},
           excluded: action === 'update' ? [...selected.keys()] : [], restore_backup_id:restoreBackupId});
         if (plan.conflicts.length) { status.textContent = 'Plan zawiera konflikty zgodności.'; conflictDialog(plan); return plan; }
+        if (plan.has_changes === false) { status.textContent = 'Wszystkie wybrane moduły są aktualne. Blokady zostały zachowane.'; return plan; }
         let changes = (plan.changes || []).map(item => `${item.module_id}: ${item.current || 'brak'} → ${item.target}`).join('\n');
         if (action === 'update_all') {
           const overridden = new Set([...selected.keys(), ...[...rows.values()].filter(row => row.module.pinned).map(row => row.module.module_id)]);
@@ -245,9 +299,13 @@
         poll(); return plan;
       } catch (error) {
         status.textContent = error.message;
+        if (error.detail?.code === 'permission_required') {
+          try { await requestAuthorization(action); }
+          catch (authorizationError) { status.textContent = authorizationError.message; }
+        }
         retryAction = action; retry.hidden = action !== 'install_ocr';
       }
-      finally { if (!operationId) { busy = false; progressbar.hidden = true; } synchronize(); }
+      finally { if (!operationId && !authorizationId) { busy = false; progressbar.hidden = true; } synchronize(); }
     }
     async function poll() {
       if (!operationId) return;
@@ -267,6 +325,13 @@
     try {
       const stored = window.sessionStorage?.getItem('picsyncra-module-operation');
       if (/^[a-f0-9]{32}$/.test(stored || '')) { operationId = stored; busy = true; poll(); }
+      const pending = window.sessionStorage?.getItem('picsyncra-module-authorization');
+      if (!operationId && /^[a-f0-9]{32}$/.test(pending || '')) {
+        authorizationId = pending; busy = true;
+        authorizationCancel.hidden = false;
+        status.textContent = 'Oczekiwanie na jednorazowe logowanie i zatwierdzenie planu w launcherze…';
+        pollAuthorization();
+      }
     } catch (_) {}
     synchronize();
     return {element, refresh, select, prepare, selected, rows, dispose:() => clearTimeout(timer)};

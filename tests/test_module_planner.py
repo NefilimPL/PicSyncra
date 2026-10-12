@@ -21,6 +21,31 @@ def by_id(selected):
     return {module.module_id: module for module in selected.modules}
 
 
+def test_apply_combines_explicit_versions_with_latest_and_preserves_locks():
+    old, latest = releases()
+    active = make_module_set(1, 1, old.modules, frozenset({'ftp', 'core'}))
+    plan = plan_module_operation(active, (old, latest), ENV, action='apply',
+                                 selected={}, excluded=frozenset(), available_hashes=frozenset())
+    assert by_id(plan.target)['ftp'] == by_id(active)['ftp']
+    assert plan.target.pinned == active.pinned
+    chosen = by_id(make_module_set(1, 5, latest.modules))['ftp'].version_id
+    plan = plan_module_operation(active, (old, latest), ENV, action='apply',
+                                 selected={'ftp': chosen}, excluded=frozenset(), available_hashes=frozenset())
+    assert by_id(plan.target)['ftp'].version_id == chosen
+    assert plan.target.pinned == frozenset({'core'})
+
+
+def test_apply_keeps_explicit_older_version_while_updating_other_modules():
+    old, latest = releases()
+    active = make_module_set(1, 5, latest.modules)
+    chosen = by_id(make_module_set(1, 1, old.modules))['ftp'].version_id
+    plan = plan_module_operation(active, (old, latest), ENV, action='apply',
+                                 selected={'ftp': chosen}, excluded=frozenset(), available_hashes=frozenset())
+    assert by_id(plan.target)['ftp'].version_id == chosen
+    assert plan.target.pinned == frozenset({'ftp'})
+    assert by_id(plan.target)['sql'] == by_id(active)['sql']
+
+
 def test_rollback_batch_preserves_unselected_sql():
     old, latest = releases()
     active = make_module_set(4, 5, latest.modules)

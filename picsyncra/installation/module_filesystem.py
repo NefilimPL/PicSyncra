@@ -42,6 +42,17 @@ def replace_file(source: Path, destination: Path) -> None:
             sleep(min(.15, .025 * (attempt + 1)))
 
 
+def remove_file(path: Path) -> None:
+    """A backend may briefly hold its maintenance acknowledgement open."""
+    for attempt in range(8):
+        try:
+            path.unlink(missing_ok=True)
+            return
+        except OSError as exc:
+            if getattr(exc, 'winerror', None) not in {5, 32, 33} or attempt == 7: raise
+            sleep(min(.15, .025 * (attempt + 1)))
+
+
 def atomic_json(path: Path, value: object, *, replace: bool = False) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name('.' + path.name + '.' + uuid4().hex + '.tmp')

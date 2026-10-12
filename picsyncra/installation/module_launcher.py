@@ -102,16 +102,17 @@ class ModuleLauncherModel:
 
     def prepare(self, action, *, restore_backup_id=None):
         return self.client.module_plan(action=action,
-            selected=dict(self.selected) if action == 'rollback_modules' else {},
+            selected=dict(self.selected) if action in {'apply', 'rollback_modules'} else {},
             excluded=list(self.selected) if action == 'update' else [], restore_backup_id=restore_backup_id)
 
     def execute(self, plan_id, *, restore_backup_id=None, acknowledge_data_loss=False):
         return self.client.module_execute(plan_id, restore_backup_id=restore_backup_id, acknowledge_data_loss=acknowledge_data_loss)
 
 
-def _elevate(installation_id, app):
+def _elevate(installation_id, app, authorize_url=None):
     if sys.platform != 'win32' or ctypes.windll.shell32.IsUserAnAdmin(): return False
     arguments = ['--installation-id', installation_id, '--app', app]
+    if authorize_url: arguments += ['--authorize-url', authorize_url]
     if not getattr(sys, 'frozen', False): arguments.insert(0, str(Path(sys.argv[0]).absolute()))
     result = ctypes.windll.shell32.ShellExecuteW(None, 'runas', sys.executable, subprocess.list2cmdline(arguments), None, 1)
     if result <= 32: raise RuntimeError('Launcher wymaga uprawnień administratora do sterowania instalacją.')
@@ -119,7 +120,7 @@ def _elevate(installation_id, app):
 
 
 class ModuleLauncherWindow:
-    def __init__(self, root, context, model, *, app='web'):
+    def __init__(self, root, context, model, *, app='web', authorization_request_id=None):
         import tkinter as tk
         from tkinter import ttk, messagebox
         self.root, self.context, self.model = root, context, model
@@ -131,22 +132,21 @@ class ModuleLauncherWindow:
         self.last_operation = None
         self.progress_rows = {}
         self.retry_action = None
+        self.authorization_request_id = None
+        self.pending_authorization = authorization_request_id
         self.app = app
         root.title('PicSyncra — launcher i odzyskiwanie modułów')
         root.geometry('1060x740')
-        ttk.Label(root, text='Wybór wersji przygotowuje cofnięcie. Zatwierdza je jeden wspólny przycisk.', wraplength=1000).pack(padx=12, pady=12)
+        ttk.Label(root, text='Aktualizuj zatwierdza wybrane wersje i aktualizuje pozostałe niezablokowane moduły. Bez zmiany oznacza najnowszą dostępną wersję, z zachowaniem blokady.', wraplength=1000).pack(padx=12, pady=12)
         toolbar = ttk.Frame(root); toolbar.pack(fill='x', padx=12)
         self.buttons=[]
         actions = [('Uruchom panel', self.open_panel), ('Uruchom Migrator', lambda: self.open_app('migrator')),
                               ('Uruchom LOCAL', lambda: self.open_app('local')), ('Sprawdź wersje', self.refresh),
-                              ('Aktualizuj moduły', lambda: self.prepare('update')),
-                              ('Aktualizuj wszystko', lambda: self.prepare('update_all')),
-                              ('Cofnij wersję modułu', lambda: self.prepare('rollback_modules')), ('Pobierz OCR', lambda: self.prepare('install_ocr')),
+                              ('Aktualizuj', lambda: self.prepare('apply')), ('Pobierz OCR', lambda: self.prepare('install_ocr')),
                               ('Ponów odzyskiwanie', lambda: self._run(self.model.client.module_recover, self.accepted))]
         for index, (label, action) in enumerate(actions):
             button=ttk.Button(toolbar,text=label,command=action)
             button.grid(row=index//3,column=index%3,padx=3,pady=3,sticky='ew'); self.buttons.append(button)
-            if label == 'Cofnij wersję modułu': self.rollback_button = button
         for column in range(3): toolbar.columnconfigure(column,weight=1)
         channel_frame=ttk.Frame(root); channel_frame.pack(fill='x',padx=12,pady=6)
         ttk.Label(channel_frame,text='Kanał aktualizacji:').pack(side='left')
@@ -173,7 +173,17 @@ class ModuleLauncherWindow:
         self.backup_ids={'Zachowaj obecną bazę': None}
         self.conflicts=ttk.Frame(root); self.conflicts.pack(fill='x',padx=12,pady=8)
         root.after(100,self._callbacks)
-        self.refresh()
+        root.protocol('WM_DELETE_WINDOW', self.close)
+        if authorization_request_id:
+            self.pending_authorization = None
+            root.after(1, lambda: self.begin_authorization(authorization_request_id))
+        else: self.refresh()
+
+    def close(self):
+        if self.authorization_request_id and not self.operation_id:
+            try: self.model.client.module_authorization_cancel(self.authorization_request_id)
+            except RuntimeError: pass
+        self.root.destroy()
 
     def _callbacks(self):
         while True:
@@ -182,7 +192,7 @@ class ModuleLauncherWindow:
             callback()
         self.root.after(100,self._callbacks)
 
-    def _run(self, work, finished):
+    def _run(self, work, finished, *, on_error=None):
         self.busy=True
         for button in self.buttons: button.configure(state='disabled')
         for widget in self.rows.winfo_children():
@@ -194,18 +204,24 @@ class ModuleLauncherWindow:
                 result=work()
                 self.callbacks.put(lambda: self._finish(finished,result))
             except Exception as exc:
-                message=str(exc)
+                failure=(str(exc), getattr(exc, 'details', None))
                 def failed(value):
-                    self.status.set(value)
+                    if on_error:
+                        on_error(*value)
+                        return
+                    self.status.set(value[0])
                     self.channel.set('Dev' if self.model.snapshot.get('channel') == 'dev' else 'Stable')
                     if self.operation_id: self.root.after(2000,self.poll)
-                self.callbacks.put(lambda: self._finish(failed,message))
+                self.callbacks.put(lambda: self._finish(failed,failure))
         threading.Thread(target=worker,daemon=True,name='PicSyncraLauncherIO').start()
 
     def _finish(self, callback, result):
         self.busy=False
         callback(result)
         self._synchronize_controls()
+        if self.pending_authorization:
+            identifier, self.pending_authorization = self.pending_authorization, None
+            self.root.after(1, lambda: self.begin_authorization(identifier))
         if not self.busy and not self.operation_id: self.progressbar.stop()
 
     def _synchronize_controls(self):
@@ -215,7 +231,6 @@ class ModuleLauncherWindow:
             if isinstance(widget,self.ttk.Combobox): widget.configure(state='disabled' if locked else 'readonly')
         self.backup.configure(state='disabled' if locked else 'readonly')
         self.channel.configure(state='disabled' if locked else 'readonly')
-        self.rollback_button.configure(state='disabled' if locked or not self.model.selected else 'normal')
 
     def refresh(self):
         self.status.set('Pobieranie katalogu wersji z GitHuba…')
@@ -255,7 +270,7 @@ class ModuleLauncherWindow:
                     label.bind('<Return>',lambda event, value=url: self.open_release(value))
             text=''
             if module['pinned']: text+='  [wyłączony z aktualizacji]'
-            if module['module_id'] in self.model.selected: text+='  [wybrany do cofnięcia; pomijany w aktualizacji]'
+            if module['module_id'] in self.model.selected: text+='  [wybrana konkretna wersja]'
             chosen=self.model.selected.get(module['module_id'])
             if chosen and not any(v['version_id']==chosen and v['available'] for v in module['versions']):
                 text+='  [wybrana wersja niedostępna w tym kanale]'
@@ -347,28 +362,79 @@ class ModuleLauncherWindow:
         self.progressbar.configure(mode='indeterminate',value=0)
         self.progressbar.start()
         restore=self.backup_ids.get(self.backup.get())
-        self._run(lambda: self.model.prepare(action,restore_backup_id=restore),lambda plan:self.confirm_plan(plan,restore))
+        self._run(lambda: self.model.prepare(action,restore_backup_id=restore),lambda plan:self.confirm_plan(plan,restore),
+                  on_error=lambda message, details: self.prepare_failed(action, restore, message, details))
+
+    def prepare_failed(self, action, restore, message, details):
+        self.status.set(message)
+        if (details or {}).get('code') == 'permission_required':
+            selected = dict(self.model.selected) if action in {'apply', 'rollback_modules'} else {}
+            excluded = list(self.model.selected) if action == 'update' else []
+            self._run(lambda: self.model.client.module_authorization_request(action=action, selected=selected,
+                        excluded=excluded, restore_backup_id=restore),
+                      lambda request: self.begin_authorization(request['request_id'], restore))
+
+    def begin_authorization(self, request_id, restore=None):
+        def ready(request):
+            self.authorization_request_id = request_id
+            if request['state'] != 'pending':
+                self.status.set('Ta próba logowania wygasła lub została już użyta.')
+                return
+            from .module_authorization import prompt_credentials
+            try:
+                blob = prompt_credentials(self.context.installation_id, request_id, parent=self.root.winfo_id())
+            except RuntimeError as exc:
+                self.status.set(str(exc)); self.cancel_authorization(); return
+            if blob is None:
+                self.status.set('Logowanie anulowane przed pobieraniem.'); self.cancel_authorization(); return
+            # Keep the encrypted credential buffer only in this worker closure.
+            # The controller checks the selected account before any download.
+            self._run(lambda: self.model.client.module_authorize(request_id, blob),
+                      lambda plan: self.confirm_plan(plan, plan.get('restore_backup_id', restore)),
+                      on_error=lambda message, details: self.authorization_failed(message, details))
+        self._run(lambda: self.model.client.module_authorization_status(request_id), ready)
+
+    def authorization_failed(self, message, details):
+        self.status.set(message + (f" (kod {details['system_code']})" if (details or {}).get('system_code') else ''))
+        self.cancel_authorization()
+
+    def cancel_authorization(self):
+        identifier, self.authorization_request_id = self.authorization_request_id, None
+        if identifier:
+            self._run(lambda: self.model.client.module_authorization_cancel(identifier), lambda _: None)
 
     def confirm_plan(self,plan,restore):
         for widget in self.conflicts.winfo_children(): widget.destroy()
         if plan['conflicts']:
+            self.cancel_authorization()
             text='\n'.join(f"{c['module_id']} {c['selected_version']} ↔ {c['dependency_id'] or 'baza/runtime'} {c['dependency_version'] or ''}: {c['requirement']}" for c in plan['conflicts'])
             self.ttk.Label(self.conflicts,text=text,wraplength=1000).pack(anchor='w')
-            self.ttk.Button(self.conflicts,text='Aktualizuj wszystko',command=lambda:self.prepare('update_all')).pack(side='left')
+            self.ttk.Label(self.conflicts,text='Zmień wybory wersji wskazanych modułów i ponów aktualizację. Blokady pozostają zachowane.').pack(anchor='w')
             self.ttk.Button(self.conflicts,text='Nie aktualizuj',command=lambda:[widget.destroy() for widget in self.conflicts.winfo_children()]).pack(side='left')
+            return
+        if plan.get('has_changes') is False:
+            self.status.set('Wszystkie wybrane moduły są aktualne. Blokady zostały zachowane.')
+            self.cancel_authorization()
             return
         changes='\n'.join(f"{c['module_id']}: {c['current'] or 'brak'} → {c['target']}" for c in plan['changes'])
         if plan['action'] == 'update_all':
             overridden = set(self.model.selected) | {m['module_id'] for m in (self.model.snapshot or {}).get('modules',[]) if m['pinned']}
             if overridden: changes += '\nAktualizacje zostaną włączone, a wybory cofnięcia pominięte dla: ' + ', '.join(sorted(overridden)) + '.'
-        if not self.messagebox.askyesno('Zatwierdź plan',f"{changes or 'Zgodny zestaw modułów.'}\nDo pobrania: {plan['download_bytes']:,} bajtów.\nZatwierdzić operację?",parent=self.root): return
+        if not self.messagebox.askyesno('Zatwierdź plan',f"{changes or 'Zgodny zestaw modułów.'}\nDo pobrania: {plan['download_bytes']:,} bajtów.\nZatwierdzić operację?",parent=self.root):
+            self.cancel_authorization(); return
         acknowledge=False
         if restore:
             acknowledge=self.messagebox.askyesno('Utrata nowszych danych','Odtworzenie starszej bazy usunie dane zapisane po wykonaniu kopii. Potwierdzasz utratę tych nowszych danych?',parent=self.root)
-            if not acknowledge: return
-        self._run(lambda:self.model.execute(plan['plan_id'],restore_backup_id=restore,acknowledge_data_loss=acknowledge),self.accepted)
+            if not acknowledge:
+                self.cancel_authorization(); return
+        self._run(lambda:self.model.execute(plan['plan_id'],restore_backup_id=restore,acknowledge_data_loss=acknowledge),self.accepted,
+                  on_error=self.authorization_failed)
 
     def accepted(self,result):
+        self.authorization_request_id = None
+        if result.get('unchanged'):
+            self.status.set('Wszystkie wybrane moduły są aktualne.')
+            return
         self.terminal_message=None
         self.operation_id=result['operation_id']
         self._show_progress(result)
@@ -429,17 +495,28 @@ class ModuleLauncherWindow:
         self._run(launch,lambda result:self.status.set('Aplikacja została uruchomiona.'))
 
 
+def parse_authorization_url(value):
+    matched = re.fullmatch(r'picsyncra-update://authorize/([A-Za-z0-9][A-Za-z0-9._-]{0,63})/([a-f0-9]{32})', value)
+    if not matched: raise ValueError('Nieprawidłowe żądanie jednorazowego logowania.')
+    return matched.groups()
+
+
 def main(argv=None):
     parser=argparse.ArgumentParser(prog='PicSyncra-Launcher')
     parser.add_argument('--installation-id',default='primary-installation')
     parser.add_argument('--app',choices=('web','migrator','local'),default='web')
+    parser.add_argument('--authorize-url')
     args=parser.parse_args(argv)
-    if _elevate(args.installation_id,args.app): return 0
+    authorization_request_id = None
+    if args.authorize_url:
+        args.installation_id, authorization_request_id = parse_authorization_url(args.authorize_url)
+    if _elevate(args.installation_id,args.app,args.authorize_url): return 0
     from ..install_paths import load_registered_install_context
     context=load_registered_install_context(args.installation_id)
     if context is None: raise RuntimeError('Brak poprawnej rejestracji instalacji PicSyncra.')
     import tkinter as tk
     root=tk.Tk()
-    ModuleLauncherWindow(root,context,ModuleLauncherModel(InstallationControlClient(args.installation_id)),app=args.app)
+    ModuleLauncherWindow(root,context,ModuleLauncherModel(InstallationControlClient(args.installation_id)),app=args.app,
+                         authorization_request_id=authorization_request_id)
     root.mainloop()
     return 0

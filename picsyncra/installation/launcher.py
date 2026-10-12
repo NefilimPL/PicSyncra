@@ -93,7 +93,9 @@ class InstallationControlClient:
         if not isinstance(response, dict) or not isinstance(response.get("ok"), bool):
             raise LauncherError("The controller returned an invalid response.")
         if require_ok and not response["ok"]:
-            raise LauncherError(str(response.get('error') or "The controller could not perform the requested action."))
+            error = LauncherError(str(response.get('error') or "The controller could not perform the requested action."))
+            error.details = response.get('error_details')
+            raise error
         return response
 
     def module_catalog(self):
@@ -113,6 +115,18 @@ class InstallationControlClient:
 
     def module_operation(self, operation_id):
         return self._module_request('module_operation', dict(operation_id=operation_id))
+
+    def module_authorization_request(self, **payload):
+        return self._module_request('module_authorization_request', payload)
+
+    def module_authorization_status(self, request_id):
+        return self._module_request('module_authorization_status', dict(request_id=request_id))
+
+    def module_authorization_cancel(self, request_id):
+        return self._module_request('module_authorization_cancel', dict(request_id=request_id))
+
+    def module_authorize(self, request_id, credential_blob):
+        return self._module_request('module_authorize', dict(request_id=request_id, credential_blob=credential_blob))
 
     def _module_request(self, command, payload):
         validate_module_payload(command, payload)

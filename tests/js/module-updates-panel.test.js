@@ -164,6 +164,78 @@ function setup({differentChannels=false} = {}) {
   });
   return {panel, calls};
 }
+test('one update button is at top and submits explicit versions together', async () => {
+  const {panel, calls} = setup();
+  const controls = panel.element.children[1];
+  assert.equal(controls.className, 'module-updates-controls');
+  assert.deepEqual(controls.children.map(item => item.textContent), ['Aktualizuj', 'Sprawdź wersje']);
+  await panel.refresh(); panel.select('ftp', 'old');
+  await controls.children[0].events.click();
+  assert.deepEqual(calls[1][1], {action:'apply', selected:{ftp:'old'}, excluded:[], restore_backup_id:null});
+});
+
+test('permission failure opens only native host authorization and stops before download', async t => {
+  resetBrowserGlobals(); global.document = {createElement:tag => new Element(tag)};
+  window.location = {};
+  loadBrowserScript('picsyncra/web/static/module-updates-panel.js');
+  const calls = [], id = 'a'.repeat(32);
+  const panel = window.PicSyncra.ModuleUpdatesPanel.create({requestJson:async (url, options) => {
+    calls.push([url, options?.body ? JSON.parse(options.body) : null]);
+    if (url.endsWith('/module-plans')) {
+      const error = new Error('Brak dostępu'); error.detail = {code:'permission_required'}; throw error;
+    }
+    if (url.endsWith('/module-authorization')) return {request_id:id,launch_url:`picsyncra-update://authorize/test/${id}`};
+    if (url.endsWith('/cancel')) return {state:'cancelled'};
+    return {state:'pending'};
+  }});
+  t.after(() => panel.dispose());
+  await panel.prepare('apply');
+  assert.equal(window.location.href, `picsyncra-update://authorize/test/${id}`);
+  assert.deepEqual(calls[1][1], {action:'apply',selected:{},excluded:[],restore_backup_id:null});
+  assert.equal(calls.some(([url]) => url.endsWith('/execute')), false);
+  const cancel = find(panel.element, child => child.textContent === 'Anuluj logowanie');
+  assert.equal(cancel.hidden, false);
+  await cancel.events.click();
+  assert.equal(cancel.hidden, true);
+  assert.match(find(panel.element, child => child.role === 'status').textContent, /anulowane/);
+});
+
+test('late authorization response cannot replace a newer login request', async t => {
+  for (const outcome of ['cancelled', 'executing', 'error']) {
+    await t.test(outcome, async t => {
+      resetBrowserGlobals(); global.document = {createElement:tag => new Element(tag)};
+      window.location = {};
+      loadBrowserScript('picsyncra/web/static/module-updates-panel.js');
+      const first = deferred(), calls = [], ids = ['a'.repeat(32), 'b'.repeat(32)];
+      let requests = 0;
+      const panel = window.PicSyncra.ModuleUpdatesPanel.create({requestJson:async url => {
+        calls.push(url);
+        if (url.endsWith('/module-plans')) {
+          const error = new Error('Brak dostępu'); error.detail = {code:'permission_required'}; throw error;
+        }
+        if (url.endsWith('/module-authorization')) {
+          const id = ids[requests++];
+          return {request_id:id,launch_url:`picsyncra-update://authorize/test/${id}`};
+        }
+        if (url.endsWith('/cancel')) return {state:'cancelled'};
+        if (url.endsWith(ids[0])) return first.promise;
+        return {state:'pending'};
+      }});
+      t.after(() => panel.dispose());
+      await panel.prepare('apply');
+      const cancel = find(panel.element, child => child.textContent === 'Anuluj logowanie');
+      await cancel.events.click();
+      await panel.prepare('apply');
+      if (outcome === 'error') first.reject(new Error('Wygasło stare logowanie'));
+      else first.resolve({state:outcome,operation_id:'c'.repeat(32)});
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(cancel.hidden, false);
+      assert.match(find(panel.element, child => child.role === 'status').textContent, /Dokończ logowanie/);
+      assert.equal(calls.some(url => url.includes('/operations/')), false);
+      assert.equal(panel.element.children[1].children[0].disabled, true);
+    });
+  }
+});
 test('selection is draft, shared rollback submits all, update excludes drafts', async () => {
   const {panel,calls} = setup();
   await panel.refresh();

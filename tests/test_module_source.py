@@ -8,6 +8,20 @@ from tests.test_module_state import context
 from tests.module_fixtures import signed, release_payload
 
 
+def test_verified_snapshot_avoids_repeated_network_but_invalidates_changed_cache(context):
+    calls = []
+    source = ModuleReleaseSource(context, keys={}, fetch_json=lambda path: calls.append(path) or [])
+    source.load('dev')
+    source.snapshot('dev')
+    source.snapshot('dev')
+    assert len(calls) == 1
+    (context.state_root / 'module-catalog-dev.json').write_text('{"records":[],"manifests":{},"changed":true}')
+    source.snapshot('dev')
+    assert len(calls) == 2
+    source.load('dev')
+    assert len(calls) == 3
+
+
 def test_offline_catalog_reverifies_signature(context):
     raw, signature, key = signed(release_payload())
     names = {MANIFEST_NAME: raw, MANIFEST_NAME + '.sig': signature, MANIFEST_NAME + '.key-id': b'test'}

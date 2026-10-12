@@ -4,6 +4,8 @@ import base64
 import json
 import socket
 import ssl
+import threading
+import time
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, build_opener, HTTPSHandler
 from .repository import fetch_release_json, GITHUB_REPOSITORY
@@ -47,8 +49,32 @@ class ModuleReleaseSource:
         self.fetch_json, self.fetch_asset = fetch_json, fetch_asset
         self.offline = False
         self.error = None
+        self._snapshot = None
+        self._lock = threading.RLock()
+
+    def _fingerprint(self, channel):
+        path = safe_path(self.context.state_root, 'module-catalog-' + channel + '.json')
+        if not path.exists(): return None
+        stat = path.stat()
+        return stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
+
+    def snapshot(self, channel):
+        # Reuse only an already verified, immutable in-memory catalog. A disk
+        # change or expiration requires signature verification again. Explicit
+        # refresh still calls load(), including its network check.
+        with self._lock:
+            cached = self._snapshot
+            if cached and cached[0] == channel and time.monotonic() < cached[1] and cached[2] == self._fingerprint(channel):
+                return cached[3]
+            return self.load(channel)
 
     def load(self, channel):
+        with self._lock:
+            entries = self._load(channel)
+            self._snapshot = (channel, time.monotonic() + 60, self._fingerprint(channel), entries)
+            return entries
+
+    def _load(self, channel):
         path = safe_path(self.context.state_root, 'module-catalog-' + channel + '.json')
         cached = json.loads(path.read_text(encoding='utf-8')) if path.exists() else {'records': [], 'manifests': {}}
         records = []

@@ -6,6 +6,8 @@ from pathlib import Path
 import re
 import shutil
 import http.client
+import threading
+from contextlib import contextmanager
 from time import sleep as _sleep
 from urllib.parse import quote
 from urllib.request import Request, build_opener, HTTPSHandler
@@ -43,11 +45,30 @@ class ModuleContentStore:
         self.sleep = sleep
         self.root = safe_path(context.program_root, 'content')
         self.root.mkdir(exist_ok=True)
+        self._inventory = threading.local()
+
+    @contextmanager
+    def inventory_scope(self):
+        previous = getattr(self._inventory, 'cache', None)
+        self._inventory.cache = previous if previous is not None else {}
+        try: yield
+        finally: self._inventory.cache = previous
+
+    def _inventory_digest(self, path):
+        cache = getattr(self._inventory, 'cache', None)
+        if cache is None: return _digest(path)
+        stat = path.stat()
+        identity = (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+        cached = cache.get(path)
+        if cached and cached[0] == identity: return cached[1]
+        digest = _digest(path)
+        cache[path] = identity, digest
+        return digest
 
     def available_hashes(self) -> frozenset[str]:
         return frozenset(path.name for path in self.root.iterdir()
                          if re.fullmatch('[a-f0-9]{64}', path.name) and path.is_file()
-                         and _digest(safe_path(self.root, path.name)) == path.name)
+                         and self._inventory_digest(safe_path(self.root, path.name)) == path.name)
 
     def import_bytes(self, data: bytes) -> str:
         digest = hashlib.sha256(data).hexdigest()
@@ -70,7 +91,7 @@ class ModuleContentStore:
             for file in module.files:
                 try:
                     source = safe_path(root, file.path)
-                    if source.is_file() and source.stat().st_size == file.size and _digest(source) == file.sha256:
+                    if source.is_file() and source.stat().st_size == file.size and self._inventory_digest(source) == file.sha256:
                         verified.add(file.sha256)
                 except (OSError, ValueError): continue
         return frozenset(verified)
@@ -80,13 +101,13 @@ class ModuleContentStore:
         root = module_set_root(self.context, selected)
         for module in selected.modules:
             for file in module.files:
+                destination = safe_path(self.root, file.sha256)
+                if destination.is_file() and destination.stat().st_size == file.size and _digest(destination) == file.sha256:
+                    continue
                 try:
                     source = safe_path(root, file.path)
                     valid = source.is_file() and source.stat().st_size == file.size and _digest(source) == file.sha256
                 except (OSError, ValueError): valid = False
-                destination = safe_path(self.root, file.sha256)
-                if destination.is_file() and destination.stat().st_size == file.size and _digest(destination) == file.sha256:
-                    continue
                 if not valid:
                     if allow_incomplete: continue
                     raise ModuleContentError('Lokalny plik modułu został zmieniony.')

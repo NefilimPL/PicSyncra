@@ -412,3 +412,63 @@ Validation: **2044 Python tests passed**, three skipped, 66 subtests passed in
 the full run. Final focused runs passed **58 tests** and **44 tests**, including
 the added journal-write and precise errno regressions. Python compileall and
 diff checks passed. The final code review reported no blocking findings.
+
+## Unified updates and temporary Windows authorization — 2026-10-12
+
+Launcher and WEB now have one top-level `Aktualizuj` action. It applies explicit
+dropdown selections and updates other installed, unpinned modules to the latest
+compatible signed version. `Bez zmiany` retains existing pins. Selecting an older
+version pins that module; explicitly selecting the latest version removes its
+pin. Equal module identities produce a terminal no-change result without a
+backup, download or backend restart. Legacy controller commands remain accepted
+for older API clients. Optional OCR installation keeps its separate action.
+
+Permission checks run under the account performing the operation, before fetching
+the catalog or downloading content, and repeat during execution. They probe
+directories and existing maintenance, journal, active-marker, database and
+configuration files without changing their contents. File-specific ACL denial
+is distinguished from sharing violations and other I/O failures. Directory
+write access alone is insufficient to update an existing file with its own ACL.
+The maintenance watcher writes its acknowledgment only when it changes, and
+execution clears the old handshake before starting the new backend.
+
+On access denial, the native launcher opens the Windows credential dialog for
+a local or domain account. The controller validates the credentials and keeps
+a temporary impersonation token for one confirmed signed plan. Credentials are
+cleared from native buffers; a machine-DPAPI encrypted, installation/request-bound
+blob travels only through the existing authenticated local administrator pipe.
+No password, encrypted blob or token is persisted in plans, journals, settings,
+URLs or command-line arguments. Cancellation, a 300-second authorization deadline,
+operation completion and failures release unused tokens. Expiry is checked
+directly as well as by timer. An executing operation retains its own token until
+its worker finishes. No permanent filesystem ACL changes are made.
+
+WEB sends only a bounded request identifier. Its fixed `picsyncra-update` link
+opens the native launcher on the hosting computer; browser use from another
+computer cannot open a credential dialog on the server. WEB resumes progress
+once the native launcher confirms and starts the plan. Stale responses from a
+cancelled authorization cannot replace a newer request. The private pipe ACL,
+administrator-only WEB endpoints and CSRF checks remain enforced.
+
+Preparation reuses a verified in-memory catalog snapshot for up to 60 seconds
+unless its cache file changes. Explicit refresh still fetches and verifies the
+catalog. Content hashes are reused only within one preparation scope; acquisition
+rehashes content before use. Backup lists read bounded receipt metadata instead
+of hashing every historical database. A selected backup is fully verified before
+it is accepted or restored. These changes remove repeated network and disk work;
+they do not claim a measured production download speed increase.
+
+Controller and launcher compatibility is now version 3. **Existing installations
+need a new full Setup to replace the stable controller/launcher and register the
+native authorization protocol; a WEB/module update alone is insufficient.**
+The Inno Setup script compiled using a compiler-only fixture with stub payloads;
+this is not a production installer. Native Windows checks covered DPAPI binding,
+temporary token impersonation/reversion and rejection of a synthetic nonexistent
+account. No real local/domain password was supplied, so successful authorization
+with another real account still needs acceptance on the target installation.
+
+Validation: **2074 Python tests passed**, three skipped and 66 subtests passed;
+all **59 JavaScript tests passed**. Native Tk acceptance through an authenticated
+pipe passed OCR progress, HTTP 503/manual retry/cache reuse, and a real Windows
+progress-reader lock without aborting OCR. Compileall, JavaScript syntax and
+diff checks passed. Final review found no remaining blocking issues.

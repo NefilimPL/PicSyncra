@@ -55,6 +55,10 @@ _COMMAND_PAYLOADS: dict[str, frozenset[str]] = {
     "module_plan": frozenset({'action', 'selected', 'excluded', 'restore_backup_id'}),
     "module_execute": frozenset({'plan_id', 'restore_backup_id', 'acknowledge_data_loss'}),
     "module_operation": frozenset({'operation_id'}),
+    "module_authorization_request": frozenset({'action', 'selected', 'excluded', 'restore_backup_id'}),
+    "module_authorization_status": frozenset({'request_id'}),
+    "module_authorize": frozenset({'request_id', 'credential_blob'}),
+    "module_authorization_cancel": frozenset({'request_id'}),
 }
 
 
@@ -63,6 +67,16 @@ def validate_module_payload(command, payload):
     if command not in _COMMAND_PAYLOADS or not isinstance(payload, dict) or set(payload) != _COMMAND_PAYLOADS[command]:
         _reject('Invalid module command payload.')
     if command in {'module_catalog', 'module_recover'}: return
+    if command == 'module_authorization_request':
+        return validate_module_payload('module_plan', payload)
+    if command in {'module_authorization_status', 'module_authorization_cancel', 'module_authorize'}:
+        if not isinstance(payload['request_id'], str) or not re.fullmatch('[a-f0-9]{32}', payload['request_id']):
+            _reject('Invalid authorization request identifier.')
+        if command == 'module_authorize':
+            blob = payload['credential_blob']
+            if not isinstance(blob, str) or not 16 <= len(blob) <= 6144 or not re.fullmatch('[A-Za-z0-9+/]+={0,2}', blob):
+                _reject('Invalid protected credential buffer.')
+        return
     if command == 'module_channel':
         if not isinstance(payload['channel'],str) or payload['channel'] not in {'stable','dev'}:
             _reject('Invalid module release channel.')
@@ -73,7 +87,7 @@ def validate_module_payload(command, payload):
     if command == 'module_plan':
         names = {item.module_id for item in module_definitions()}
         selected, excluded = payload['selected'], payload['excluded']
-        if payload['action'] not in {'update', 'update_all', 'rollback_modules', 'install_ocr'} or not isinstance(selected, dict) or not set(selected) <= names or not all(isinstance(v, str) and re.fullmatch('[a-f0-9]{64}', v) for v in selected.values()):
+        if payload['action'] not in {'apply', 'update', 'update_all', 'rollback_modules', 'install_ocr'} or not isinstance(selected, dict) or not set(selected) <= names or not all(isinstance(v, str) and re.fullmatch('[a-f0-9]{64}', v) for v in selected.values()):
             _reject('Invalid selected module versions.')
         if not isinstance(excluded, list) or not all(isinstance(v, str) and v in names for v in excluded) or len(set(excluded)) != len(excluded):
             _reject('Invalid excluded modules.')
@@ -165,10 +179,14 @@ class ControlDispatcher:
                 elif request.command == 'module_channel': result = service.change_channel(**request.payload)
                 elif request.command == 'module_plan': result = service.prepare(**request.payload)
                 elif request.command == 'module_execute': result = service.execute(**request.payload)
+                elif request.command == 'module_authorization_request': result = service.authorization_request(**request.payload)
+                elif request.command == 'module_authorization_status': result = service.authorization_status(**request.payload)
+                elif request.command == 'module_authorization_cancel': result = service.cancel_authorization(**request.payload)
+                elif request.command == 'module_authorize': result = service.authorize(**request.payload)
                 else: result = service.operation(request.payload['operation_id'])
                 return {'ok': True, 'result': result}
             except (RuntimeError, ValueError, OSError) as exc:
-                return {'ok': False, 'error': str(exc)}
+                return {'ok': False, 'error': str(exc), 'error_details': getattr(exc, 'details', None)}
         if self._module_service is not None and self._module_service.busy and request.command in {'start_backend', 'stop_backend', 'restart_backend'}:
             return {'ok': False, 'error': 'Trwa operacja modułów.'}
         if self._module_service is not None and request.command in {'start_backend', 'restart_backend'} and not self._module_service.backend_start_allowed():

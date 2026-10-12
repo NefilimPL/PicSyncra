@@ -102,7 +102,11 @@ class InstalledOperationService:
                             self._module_maintenance_id = operation_id
                         if self._module_maintenance_id == operation_id:
                             phase = self._maintenance.advance()
-                            atomic_json(ack_path, dict(operation_id=operation_id, ready=phase['state'] == 'ready'), replace=True)
+                            acknowledgement = dict(operation_id=operation_id, ready=phase['state'] == 'ready')
+                            # Replacing an identical acknowledgement every 200 ms
+                            # races controller reads and cleanup.
+                            if not ack_path.exists() or json.loads(ack_path.read_text(encoding='utf-8')) != acknowledgement:
+                                atomic_json(ack_path, acknowledgement, replace=True)
                     elif self._module_maintenance_id and self._maintenance_gate.wait_for_drain(timeout=0):
                         self._maintenance_gate.complete(self._module_maintenance_id)
                         self._maintenance = MaintenanceCoordinator(self._maintenance_gate, self._presence)

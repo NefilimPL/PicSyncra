@@ -42,6 +42,35 @@ def restart_request(request_id: str = "restart-1") -> OperationRequest:
     return OperationRequest(request_id, "restart", None, None, False)
 
 
+def test_module_watch_publishes_only_changed_acknowledgement_and_clears_completed_drain(tmp_path, monkeypatch):
+    from picsyncra.installation.operation_service import InstalledOperationService
+    from picsyncra.installation import module_filesystem
+    service = InstalledOperationService(context(tmp_path), Controller())
+    request = service._context.state_root / 'module-maintenance-request.json'
+    ack = service._context.state_root / 'module-maintenance-ready.json'
+    writes = []
+    original = module_filesystem.atomic_json
+    def publish(path, value, **kwargs):
+        writes.append((path, value)); original(path, value, **kwargs)
+    monkeypatch.setattr(module_filesystem, 'atomic_json', publish)
+    class Stop:
+        cycles = 0
+        def wait(self, delay):
+            self.cycles += 1
+            if self.cycles == 2: request.write_text('{"operation_id":"test-operation"}')
+            if self.cycles == 5: request.unlink()
+            return self.cycles >= 7
+    service._module_maintenance_stop = Stop()
+    class Thread:
+        def __init__(self, target, **kwargs): self.target = target
+        def start(self): self.target()
+    monkeypatch.setattr('picsyncra.installation.operation_service.threading.Thread', Thread)
+    service.start_module_maintenance_watch()
+    assert len(writes) == 1 and writes[0][0] == ack
+    assert writes[0][1]['ready'] is True
+    assert not ack.exists() and service._module_maintenance_id is None
+
+
 def test_remote_restart_uses_only_controller_and_advances_session_epoch(tmp_path: Path) -> None:
     from picsyncra.installation.operation_service import InstalledOperationService
 

@@ -71,6 +71,24 @@ class Client:
     def module_channel(self, channel): self.calls.append(('channel',channel)); return {'channel':channel}
 
 
+def test_unified_update_submits_selected_versions_without_exclusions():
+    client = Client(); model = ModuleLauncherModel(client)
+    model.select('ftp', 'a' * 64)
+    model.prepare('apply')
+    assert client.calls[-1][1]['selected'] == {'ftp': 'a' * 64}
+    assert client.calls[-1][1]['excluded'] == []
+
+
+def test_authorization_url_accepts_only_installation_and_request_nonce():
+    import pytest
+    from picsyncra.installation.module_launcher import parse_authorization_url
+    assert parse_authorization_url('picsyncra-update://authorize/primary-installation/' + 'a' * 32) == ('primary-installation', 'a' * 32)
+    for value in ('https://attacker/test', 'picsyncra-update://authorize/../' + 'a' * 32,
+                  'picsyncra-update://authorize/test/' + 'a' * 32 + '?password=secret',
+                  'picsyncra-update://authorize/test/' + 'a' * 32 + '" --app local'):
+        with pytest.raises(ValueError): parse_authorization_url(value)
+
+
 def test_selection_is_draft_until_shared_button_and_update_skips_choices():
     client=Client(); model=ModuleLauncherModel(client)
     model.select('ftp','a'*64); model.select('sql','b'*64)

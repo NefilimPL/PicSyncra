@@ -90,6 +90,39 @@ def build_installation_router(dependencies: InstallationApiDependencies) -> APIR
             validate_module_payload('module_plan', payload)
             return client.module_plan(**payload)
         except ValueError as exc: raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            detail = dict(message=str(exc), **(getattr(exc, 'details', None) or {}))
+            raise HTTPException(status_code=409, detail=detail) from exc
+
+    @router.post('/api/installation/module-authorization')
+    async def installation_module_authorization(request: Request):
+        client = modules(request, mutation=True)
+        from ..installation.control_protocol import validate_module_payload
+        try:
+            payload = await request.json()
+            validate_module_payload('module_authorization_request', payload)
+            return client.module_authorization_request(**payload)
+        except ValueError as exc: raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc: raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @router.get('/api/installation/module-authorization/{request_id}')
+    def installation_module_authorization_status(request: Request, request_id: str):
+        client = modules(request)
+        from ..installation.control_protocol import validate_module_payload
+        try:
+            validate_module_payload('module_authorization_status', dict(request_id=request_id))
+            return client.module_authorization_status(request_id)
+        except ValueError as exc: raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc: raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @router.post('/api/installation/module-authorization/{request_id}/cancel')
+    def installation_module_authorization_cancel(request: Request, request_id: str):
+        client = modules(request, mutation=True)
+        from ..installation.control_protocol import validate_module_payload
+        try:
+            validate_module_payload('module_authorization_cancel', dict(request_id=request_id))
+            return client.module_authorization_cancel(request_id)
+        except ValueError as exc: raise HTTPException(status_code=400, detail=str(exc)) from exc
         except RuntimeError as exc: raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @router.post('/api/installation/module-plans/{plan_id}/execute')

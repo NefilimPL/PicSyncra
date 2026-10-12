@@ -15,7 +15,7 @@ def plan_module_operation(active: ActiveModuleSet, releases: tuple[ModuleRelease
                           environment: ModuleEnvironment, *, action: str,
                           selected: Mapping[str, str], excluded: frozenset[str],
                           available_hashes: frozenset[str]) -> ModulePlan:
-    if action not in {'update', 'update_all', 'rollback_modules', 'install_ocr'}:
+    if action not in {'apply', 'update', 'update_all', 'rollback_modules', 'install_ocr'}:
         raise ValueError('Nieznana operacja modułów.')
     if not releases:
         raise ValueError('Brak kompletnych podpisanych wydań modułów.')
@@ -52,7 +52,7 @@ def plan_module_operation(active: ActiveModuleSet, releases: tuple[ModuleRelease
         release_id = active.release_id
         source = next((r for r in releases if r.release_id == active.release_id), newest)
     else:
-        if selected:
+        if selected and action != 'apply':
             raise ValueError('Aktualizacja nie zatwierdza przygotowanych cofnięć.')
         release_id = newest.release_id
         if action == 'install_ocr':
@@ -76,6 +76,18 @@ def plan_module_operation(active: ActiveModuleSet, releases: tuple[ModuleRelease
                 for module_id, version in proposed.items():
                     if module_id not in (pinned | excluded):
                         target[module_id] = version
+            if action == 'apply':
+                available = {(module.module_id, module.version_id): module
+                             for release in sorted(releases, key=published) for module in release.modules}
+                for module_id, version_id in selected.items():
+                    chosen = available.get((module_id, version_id))
+                    if chosen is None:
+                        raise ValueError(f'Wybrana wersja modułu {module_id} jest niedostępna.')
+                    target[module_id] = chosen
+                    if module_id in proposed and version_id == proposed[module_id].version_id:
+                        pinned = pinned - {module_id}
+                    else:
+                        pinned = pinned | {module_id}
     selected_set = make_module_set(active.revision + 1, release_id, tuple(target.values()), pinned)
     steps = migration_path(environment.database_schema,
                            max(m.database_min for m in selected_set.modules),

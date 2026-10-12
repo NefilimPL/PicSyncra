@@ -1,4 +1,5 @@
 import pytest
+import sys
 from picsyncra.installation.module_service import ModuleService
 from picsyncra.installation.module_catalog import ModuleCatalogEntry
 from picsyncra.installation.module_manifest import parse_module_manifest
@@ -13,6 +14,137 @@ class Source:
     def load(self, channel):
         release = parse_module_manifest(release_payload())
         return (ModuleCatalogEntry(5, 'v5', release.published_at, release),)
+
+
+def test_access_failure_precedes_catalog_download_and_has_structured_details(context, monkeypatch):
+    _, store, _ = prepare(context)
+    from pathlib import Path
+    original = Path.open
+    ack = context.state_root / 'module-maintenance-ready.json'
+    ack.write_text('{}')
+    def deny(path, *args, **kwargs):
+        if path == ack: raise PermissionError(13, 'denied')
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(Path, 'open', deny)
+    source = Source()
+    source.load = lambda channel: pytest.fail('must check permissions before network')
+    service = ModuleService(context, Controller(), source=source, content=store)
+    with pytest.raises(RuntimeError) as failure:
+        service.prepare(action='apply', selected={}, excluded=[])
+    assert failure.value.details['code'] == 'permission_required'
+    assert failure.value.details['location'] == 'maintenance_ready'
+    assert not service.busy
+
+
+@pytest.mark.parametrize('role', ['database', 'configuration'])
+def test_existing_data_file_access_is_checked_before_network(context, monkeypatch, role):
+    from pathlib import Path
+    _, store, _ = prepare(context)
+    path = context.database_path if role == 'database' else context.config_root / 'config.json'
+    if role == 'configuration': path.write_text('{}')
+    original = Path.open
+    def deny(candidate, *args, **kwargs):
+        if candidate == path and args and args[0] == 'r+b': raise PermissionError(13, 'denied')
+        return original(candidate, *args, **kwargs)
+    monkeypatch.setattr(Path, 'open', deny)
+    source = Source()
+    source.load = lambda channel: pytest.fail('must check data file permissions before network')
+    service = ModuleService(context, Controller(), source=source, content=store)
+    with pytest.raises(RuntimeError) as failure:
+        service.prepare(action='apply', selected={}, excluded=[])
+    assert failure.value.details['code'] == 'permission_required'
+    assert failure.value.details['location'] == role
+
+
+def test_unchanged_apply_does_not_restart_or_create_backup(context):
+    active, store, _ = prepare(context)
+    jobs = []
+    service = ModuleService(context, Controller(), source=Source(), content=store, schedule=jobs.append)
+    plan = service.prepare(action='apply', selected={}, excluded=[])
+    assert plan['changes'] == []
+    assert plan['has_changes'] is False
+    result = service.execute(plan['plan_id'])
+    assert result['state'] == 'committed' and result['unchanged'] is True
+    assert jobs == [] and read_module_set(context) == active
+    assert not (context.state_root / 'backups/operations').exists()
+
+
+def test_new_tag_with_identical_module_identities_is_not_an_update(context):
+    from dataclasses import replace
+    active, store, _ = prepare(context)
+    class SameContent(Source):
+        def load(self, channel):
+            release = parse_module_manifest(release_payload())
+            release = replace(release, modules=tuple(replace(m, source_release_id=5, source_tag='v5') for m in release.modules))
+            return (ModuleCatalogEntry(5, 'v5', release.published_at, release),)
+    jobs = []
+    service = ModuleService(context, Controller(), source=SameContent(), content=store, schedule=jobs.append)
+    plan = service.prepare(action='apply', selected={}, excluded=[])
+    assert not plan['has_changes'] and plan['changes'] == []
+    service.execute(plan['plan_id'])
+    assert jobs == [] and read_module_set(context) == active
+
+
+def test_unreadable_cleanup_status_publishes_terminal_result_and_releases_busy(context, monkeypatch):
+    import json
+    _, store, _ = prepare(context)
+    jobs = []
+    service = ModuleService(context, Controller(), source=Source(), content=store, schedule=jobs.append)
+    plan = service.prepare(action='update_all', selected={}, excluded=[])
+    service.execute(plan['plan_id'])
+    monkeypatch.setattr(service.executor, 'execute', lambda *args, **kwargs: dict(state='failed'))
+    monkeypatch.setattr(service.executor, 'status', lambda: (_ for _ in ()).throw(PermissionError(13, 'denied')))
+    jobs[0]()
+    result = json.loads((context.state_root / 'module-operations' / (plan['plan_id'] + '.json')).read_text())
+    assert result['state'] == 'recovery_required' and service.busy is False
+    assert result['error_details']['code'] == 'permission_required'
+
+
+def test_catalog_lists_backup_receipts_but_selected_backup_is_fully_verified(context, monkeypatch):
+    from picsyncra.installation.backups import create_operation_backup
+    from picsyncra.installation import module_service
+    _, store, _ = prepare(context)
+    create_operation_backup(context, 'candidate')
+    database = context.state_root / 'backups/operations/candidate/database.sqlite'
+    database.write_bytes(b'corrupt database')
+    service = ModuleService(context, Controller(), source=Source(), content=store)
+    original = module_service.verified_backup
+    monkeypatch.setattr(module_service, 'verified_backup', lambda *args: pytest.fail('catalog must not hash historical DB'))
+    assert service.catalog()['backups'] == [dict(backup_id='candidate', schema_version=1, verification_pending=True)]
+    monkeypatch.setattr(module_service, 'verified_backup', original)
+    with pytest.raises(RuntimeError):
+        service.prepare(action='apply', selected={}, excluded=[], restore_backup_id='candidate')
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Native Windows file ACL')
+def test_real_windows_ack_acl_denial_is_detected_before_network(context):
+    security = pytest.importorskip('win32security')
+    import win32api
+    import win32con
+    _, store, _ = prepare(context)
+    path = context.state_root / 'module-maintenance-ready.json'
+    path.write_text('{}')
+    original = security.GetFileSecurity(str(path), security.DACL_SECURITY_INFORMATION)
+    token = security.OpenProcessToken(win32api.GetCurrentProcess(), win32con.TOKEN_QUERY)
+    try: identity = security.GetTokenInformation(token, security.TokenUser)[0]
+    finally: token.Close()
+    denied = security.SECURITY_DESCRIPTOR()
+    acl = security.ACL()
+    acl.AddAccessDeniedAce(security.ACL_REVISION, 0x10003, identity)
+    acl.AddAccessAllowedAce(security.ACL_REVISION, 0x1f01ff, identity)
+    denied.SetSecurityDescriptorDacl(True, acl, False)
+    source = Source()
+    source.load = lambda channel: pytest.fail('must not download with denied ACK access')
+    service = ModuleService(context, Controller(), source=source, content=store)
+    try:
+        security.SetFileSecurity(str(path), security.DACL_SECURITY_INFORMATION, denied)
+        with pytest.raises(RuntimeError) as failure:
+            service.prepare(action='apply', selected={}, excluded=[])
+        assert failure.value.details['code'] == 'permission_required'
+        assert failure.value.details['system_code'] in {5, 13}
+        assert failure.value.details['location'] == 'maintenance_ready'
+    finally:
+        security.SetFileSecurity(str(path), security.DACL_SECURITY_INFORMATION, original)
 
 
 def test_catalog_exposes_fetch_failure_even_when_no_release_is_cached(context):

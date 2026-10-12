@@ -56,6 +56,9 @@ Source: "{#BuildRoot}\module-initial-layout.json"; DestDir: "{app}"; Flags: igno
 Source: "{#BuildRoot}\PicSyncra-Launcher\*"; DestDir: "{app}\launcher"; Flags: recursesubdirs createallsubdirs ignoreversion
 
 [Registry]
+Root: HKLM64; Subkey: "SOFTWARE\Classes\picsyncra-update"; ValueType: string; ValueData: "URL:PicSyncra one-time update authorization"; Flags: uninsdeletekey
+Root: HKLM64; Subkey: "SOFTWARE\Classes\picsyncra-update"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""
+Root: HKLM64; Subkey: "SOFTWARE\Classes\picsyncra-update\shell\open\command"; ValueType: string; ValueData: """{app}\launcher\PicSyncra-Launcher.exe"" --authorize-url ""%1"""
 Root: HKLM64; Subkey: "SOFTWARE\PicSyncra\Installations\primary-installation"; ValueType: string; ValueName: "InstallationId"; ValueData: "primary-installation"
 Root: HKLM64; Subkey: "SOFTWARE\PicSyncra\Installations\primary-installation"; ValueType: string; ValueName: "ProgramRoot"; ValueData: "{app}"
 Root: HKLM64; Subkey: "SOFTWARE\PicSyncra\Installations\primary-installation"; ValueType: string; ValueName: "StateRoot"; ValueData: "{commonappdata}\PicSyncra\primary-installation"

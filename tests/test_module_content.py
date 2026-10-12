@@ -7,6 +7,24 @@ from tests.module_fixtures import module_payload, release_payload
 from tests.test_module_state import context
 
 
+def test_planning_inventory_reuses_unchanged_hash_but_transfer_still_verifies(context, monkeypatch):
+    from picsyncra.installation import module_content
+    store = ModuleContentStore(context)
+    digest = store.import_bytes(b'code')
+    calls = []
+    original = module_content._digest
+    monkeypatch.setattr(module_content, '_digest', lambda path: calls.append(path) or original(path))
+    with store.inventory_scope():
+        assert digest in store.available_hashes()
+        assert digest in store.available_hashes()
+    assert len(calls) == 1
+    module = parse_module_manifest(release_payload()).modules[0]
+    store.acquire(module, module.files[0])
+    assert len(calls) == 2
+    (store.root / digest).write_bytes(b'bad!')
+    assert digest not in store.available_hashes()
+
+
 def test_transient_http_failure_is_retried_and_only_verified_files_are_reused(context):
     from urllib.error import HTTPError
     calls, waits = [], []

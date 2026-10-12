@@ -72,6 +72,26 @@ def test_module_plan_is_admin_csrf_protected_and_execution_is_separate():
     assert result.status_code == 202
 
 
+def test_web_authorization_exposes_nonce_only_and_requires_csrf():
+    class Client:
+        calls = []
+        def module_authorization_request(self, **payload): self.calls.append(payload); return {'request_id':'a' * 32}
+        def module_authorization_status(self, request_id): return {'state':'pending'}
+        def module_authorization_cancel(self, request_id): return {'state':'cancelled'}
+    client = Client(); routes, _ = app_with_dependencies(module_client=client)
+    payload = dict(action='apply', selected={}, excluded=[], restore_backup_id=None)
+    with pytest.raises(HTTPException) as failure:
+        asyncio.run(routes['/api/installation/module-authorization'](RequestStub(payload)))
+    assert failure.value.status_code == 403
+    result = asyncio.run(routes['/api/installation/module-authorization'](RequestStub(payload, csrf='valid')))
+    assert result == {'request_id': 'a' * 32} and client.calls == [payload]
+    with pytest.raises(HTTPException):
+        asyncio.run(routes['/api/installation/module-authorization'](RequestStub(dict(payload, password='secret'), csrf='valid')))
+    assert not any('credential' in route for route in routes)
+    with pytest.raises(HTTPException):
+        routes['/api/installation/module-authorization/{request_id}/cancel'](RequestStub(), 'a' * 32)
+
+
 def test_portable_runtime_does_not_expose_installed_update_endpoints() -> None:
     routes, _calls = app_with_dependencies(installed=False)
     with pytest.raises(HTTPException) as error:

@@ -13,7 +13,7 @@ from uuid import uuid4
 from .backups import create_operation_backup
 from .database import inspect_database
 from .module_content import ModuleContentStore
-from .module_filesystem import atomic_json, safe_path
+from .module_filesystem import atomic_json, safe_path, remove_file
 from .module_state import read_module_set, module_set_payload, parse_module_set, activate_module_set
 
 
@@ -53,13 +53,42 @@ def verified_backup(context, backup_id):
         raise ModuleExecutionError('Nieprawidłowy identyfikator kopii bazy.')
     root = safe_path(context.state_root, 'backups/operations/' + backup_id)
     receipt = json.loads(safe_path(root, 'receipt.json').read_text(encoding='utf-8'))
+    if not isinstance(receipt, dict): raise ModuleExecutionError('Nieprawidłowy zapis kopii bazy.')
     database = safe_path(root, 'database.sqlite')
     with database.open('rb') as stream:
         digest = hashlib.file_digest(stream, 'sha256').hexdigest()
-    inspection = inspect_database(database)
-    if receipt.get('backup_id') != backup_id or receipt.get('verified') is not True or receipt.get('database_sha256') != digest or receipt.get('config_sha256') != _config_digest(safe_path(root, 'config')) or not inspection.integrity_ok or not inspection.is_picsyncra or receipt.get('schema_version') != inspection.schema_version:
+    if receipt.get('backup_id') != backup_id or receipt.get('verified') is not True or receipt.get('database_sha256') != digest or receipt.get('config_sha256') != _config_digest(safe_path(root, 'config')):
+        raise ModuleExecutionError('Kopia bazy lub konfiguracji nie przeszła weryfikacji.')
+    try: inspection = inspect_database(database)
+    except sqlite3.DatabaseError as exc:
+        raise ModuleExecutionError('Kopia bazy nie przeszła sprawdzania spójności.') from exc
+    if not inspection.integrity_ok or not inspection.is_picsyncra or receipt.get('schema_version') != inspection.schema_version:
         raise ModuleExecutionError('Kopia bazy lub konfiguracji nie przeszła weryfikacji.')
     return root, inspection.schema_version
+
+
+def backup_receipt_metadata(context, backup_id):
+    """List restoration candidates without hashing every historical database.
+
+    This is metadata only. selected backups are fully verified by
+    verified_backup() during planning, execution and restoration.
+    """
+    import re
+    if not re.fullmatch('[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}', backup_id): raise ValueError('Invalid backup identifier.')
+    root = safe_path(context.state_root, 'backups/operations/' + backup_id)
+    path = safe_path(root, 'receipt.json')
+    if path.stat().st_size > 16 * 1024: raise ValueError('Invalid backup receipt.')
+    receipt = json.loads(path.read_text(encoding='utf-8'))
+    if not isinstance(receipt, dict) or receipt.get('schema') != 1 or receipt.get('backup_id') != backup_id or receipt.get('verified') is not True:
+        raise ValueError('Invalid backup receipt.')
+    schema = receipt.get('schema_version')
+    if type(schema) is not int or schema < 1: raise ValueError('Invalid backup schema.')
+    if not all(isinstance(receipt.get(key), str) and re.fullmatch('[a-f0-9]{64}', receipt[key])
+               for key in ('database_sha256', 'config_sha256')):
+        raise ValueError('Invalid backup receipt hashes.')
+    if not safe_path(root, 'database.sqlite').is_file() or not safe_path(root, 'config').is_dir():
+        raise ValueError('Incomplete backup.')
+    return dict(backup_id=backup_id, schema_version=schema, verification_pending=True)
 
 
 def _assert_database_idle(path):
@@ -131,7 +160,7 @@ class ModuleExecutor:
 
     def clear_maintenance(self):
         for name in ('module-maintenance-request.json', 'module-maintenance-ready.json'):
-            safe_path(self.context.state_root, name).unlink(missing_ok=True)
+            remove_file(safe_path(self.context.state_root, name))
 
     def execute(self, plan, *, restore_backup_id=None, acknowledge_data_loss=False):
         if plan.conflicts:
@@ -202,13 +231,16 @@ class ModuleExecutor:
                     self._write(record, 'migrating', data_changed=True)
                     self.migrate(plan)
                 activate_module_set(self.context, plan.target, expected_revision=plan.expected_revision)
+                # The old backend is stopped, so it can no longer replace the
+                # acknowledgement. Clear the handshake before the new backend
+                # starts, otherwise its watcher may inherit a completed drain.
+                self.clear_maintenance()
                 # Starting selected code can itself migrate the DB. Journal the
                 # need to restore data before launching any application code.
                 self._write(record, 'validating', data_changed=True)
                 self.controller.start_backend()
                 if not self.healthy(): raise ModuleExecutionError('Nowy backend nie przeszedł kontroli działania.')
                 self._write(record, 'committed')
-                self.clear_maintenance()
             except Exception as exc:
                 record['error_details'] = getattr(exc, 'details', None)
                 self._rollback(record, str(exc))
