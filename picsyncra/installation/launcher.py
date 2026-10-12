@@ -44,10 +44,13 @@ class InstallationControlClient:
         snapshot = response.get("snapshot")
         if not isinstance(snapshot, dict):
             raise LauncherError("The controller returned an invalid snapshot.")
-        return {
+        result = {
             "backend_running": bool(snapshot.get("backend_running", False)),
             "autostart": bool(snapshot.get("autostart", False)),
         }
+        if type(snapshot.get('backend_pid')) is int and snapshot['backend_pid'] > 0:
+            result['backend_pid'] = snapshot['backend_pid']
+        return result
 
     def start_backend(self) -> None:
         self._request("start_backend", {})

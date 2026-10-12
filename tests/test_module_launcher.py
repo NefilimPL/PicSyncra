@@ -1,6 +1,61 @@
 from picsyncra.installation.module_launcher import ModuleLauncherModel
 
 
+def test_closing_launcher_with_ready_tray_keeps_backend_controls_available():
+    from picsyncra.installation.module_launcher import ModuleLauncherWindow
+    from types import SimpleNamespace
+    calls = []
+    window = object.__new__(ModuleLauncherWindow)
+    window.root = SimpleNamespace(withdraw=lambda: calls.append('hide'), destroy=lambda: calls.append('destroy'))
+    window.tray_ready = True
+    window.close()
+    assert calls == ['hide']
+
+
+def test_stopping_backend_reports_refusal_without_claiming_success():
+    from picsyncra.installation.module_launcher import ModuleLauncherWindow
+    from types import SimpleNamespace
+    import pytest
+    calls = []
+    window = object.__new__(ModuleLauncherWindow)
+    window.busy = False; window.operation_id = None
+    window.model = SimpleNamespace(client=SimpleNamespace(stop_backend=lambda **kwargs: False))
+    window._run = lambda work, finished: finished(work())
+    with pytest.raises(RuntimeError, match='zatrzymać'):
+        window.stop_backend()
+
+
+def test_infrastructure_conflicts_require_setup_instead_of_changing_module_selection():
+    from picsyncra.installation.module_launcher import conflict_guidance
+    assert 'Setup' in conflict_guidance([{'code':'controller_outdated'}])
+    assert 'Setup' in conflict_guidance([{'code':'launcher_outdated'}])
+    assert 'Zmień wybory' in conflict_guidance([{'code':'dependency_incompatible'}])
+
+
+def test_restart_waits_for_new_process_instead_of_accepting_old_health(monkeypatch):
+    from picsyncra.installation import module_launcher, controller_host
+    from types import SimpleNamespace
+    states = iter([{'backend_running': True, 'backend_pid': 41},
+                   {'backend_running': True, 'backend_pid': 41},
+                   {'backend_running': False},
+                   {'backend_running': True, 'backend_pid': 42},
+                   {'backend_running': True, 'backend_pid': 42}])
+    calls = []
+    client = SimpleNamespace(snapshot=lambda: next(states), restart_backend=lambda: calls.append('restart') or True)
+    monkeypatch.setattr(module_launcher.time, 'sleep', lambda _: calls.append('wait'))
+    monkeypatch.setattr(controller_host, '_backend_ready', lambda _: calls.append('health') or True)
+    assert module_launcher.restart_and_wait(client)['backend_pid'] == 42
+    assert calls == ['restart', 'wait', 'wait', 'health']
+
+
+def test_local_app_cannot_race_with_accepted_update():
+    from picsyncra.installation.module_launcher import ModuleLauncherWindow
+    window = object.__new__(ModuleLauncherWindow)
+    window.busy = False; window.operation_id = 'accepted'
+    window._run = lambda *args: (_ for _ in ()).throw(AssertionError('must not start a standalone app'))
+    window.open_app('local')
+
+
 def test_release_caption_includes_tag_date_and_module_identity():
     from picsyncra.installation.module_launcher import release_caption
     caption = release_caption('1.abc', {'tag':'v0.5.6-dev.3','published_at':'2026-10-12T07:15:12Z'})

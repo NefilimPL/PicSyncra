@@ -243,6 +243,24 @@ class FakeController:
 
     def snapshot(self) -> dict[str, bool]:
         return {"backend_running": True, "autostart": True}
+
+
+def test_owned_backend_pid_reaches_launcher_through_controller_and_pipe_dispatcher(tmp_path):
+    from picsyncra.installation.controller import InstallationController
+    from picsyncra.installation.control_protocol import ControlDispatcher
+    from picsyncra.installation.launcher import InstallationControlClient
+    from picsyncra.installation.contracts import InstallContext
+    from types import SimpleNamespace
+    import json
+    context = InstallContext('test', tmp_path, tmp_path, tmp_path / 'config', tmp_path / 'db.sqlite')
+    adapter = SimpleNamespace(snapshot=lambda: {'backend_running': True, 'autostart': False, 'backend_pid': 123})
+    controller = InstallationController(context, adapter, backend_port=8010)
+    dispatcher = ControlDispatcher(controller, installation_id='test', authorized_identities={'admin'})
+    class Pipe:
+        def request(self, message):
+            return dispatcher.dispatch(message, peer_identity='admin')
+    client = InstallationControlClient('test', pipe_client=Pipe())
+    assert client.snapshot()['backend_pid'] == 123
 def test_active_backend_uses_verified_schema_two_set(tmp_path):
     from picsyncra.installation.controller_host import active_web_executable
     from picsyncra.installation.module_content import ModuleContentStore

@@ -273,6 +273,8 @@ def main(argv: list[str] | None = None, *, registry: RegistryWriter | None = Non
     inspect_parser.add_argument("--request", type=Path, required=True)
     module_parser = subparsers.add_parser('initialize-modules')
     module_parser.add_argument('--request', type=Path, required=True)
+    for command in ('prepare-upgrade', 'configure-startup', 'verify-startup', 'rollback-upgrade', 'resume-previous'):
+        subparsers.add_parser(command).add_argument('--request', type=Path, required=True)
     import_parser = subparsers.add_parser("import-config")
     import_parser.add_argument("--request", type=Path, required=True)
     register_parser = subparsers.add_parser("register")
@@ -288,6 +290,10 @@ def main(argv: list[str] | None = None, *, registry: RegistryWriter | None = Non
         elif args.command == 'initialize-modules':
             from .module_setup import initialize_module_layout
             initialize_module_layout(json.loads(args.request.read_text(encoding='utf-8')))
+            response = {'ok': True}
+        elif args.command in {'prepare-upgrade', 'configure-startup', 'verify-startup', 'rollback-upgrade', 'resume-previous'}:
+            from .setup_lifecycle import run_lifecycle_command
+            run_lifecycle_command(args.command, json.loads(args.request.read_text(encoding='utf-8')))
             response = {'ok': True}
         elif args.command == "import-config":
             _import_config(args.request)
@@ -306,6 +312,10 @@ def main(argv: list[str] | None = None, *, registry: RegistryWriter | None = Non
         else:  # pragma: no cover - argparse keeps this unreachable
             parser.error("Unsupported setup helper command.")
     except (OSError, ValueError, RuntimeError) as exc:
+        try:
+            args.request.with_suffix('.error.txt').write_text(str(exc), encoding='utf-8')
+        except OSError:
+            pass
         print(f"Setup helper failed: {exc}", file=sys.stderr)
         return 1
     print(json.dumps(response), flush=True)

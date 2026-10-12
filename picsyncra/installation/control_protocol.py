@@ -193,12 +193,13 @@ class ControlDispatcher:
             return {'ok': False, 'error': 'Najpierw odzyskaj przerwaną operację modułów; uruchomienie backendu jest zablokowane.'}
         if request.command == "snapshot":
             snapshot = self._controller.snapshot()
+            state = {"backend_running": bool(snapshot.get("backend_running", False)),
+                     "autostart": bool(snapshot.get("autostart", False))}
+            if type(snapshot.get('backend_pid')) is int and snapshot['backend_pid'] > 0:
+                state['backend_pid'] = snapshot['backend_pid']
             return {
                 "ok": True,
-                "snapshot": {
-                    "backend_running": bool(snapshot.get("backend_running", False)),
-                    "autostart": bool(snapshot.get("autostart", False)),
-                },
+                "snapshot": state,
             }
         if request.command == "start_backend":
             self._controller.start_backend()

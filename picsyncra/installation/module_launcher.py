@@ -8,6 +8,7 @@ import re
 import subprocess
 import sys
 import threading
+import time
 import webbrowser
 from .launcher import InstallationControlClient
 
@@ -54,6 +55,33 @@ def catalog_message(snapshot):
     return 'Wybierz moduły i zatwierdź operację.'
 
 
+def conflict_guidance(conflicts):
+    if any(c.get('code') in {'controller_outdated', 'launcher_outdated'} for c in conflicts):
+        return ('To wydanie wymaga nowszego launchera i kontrolera. Pobierz pełny instalator Setup z wydania GitHub '
+                'i uruchom go na istniejącej instalacji. Setup zachowa bazę, konfigurację i blokady modułów. '
+                'Sama aktualizacja modułów nie wymienia kontrolera.')
+    return 'Zmień wybory wersji wskazanych modułów i ponów aktualizację. Blokady pozostają zachowane.'
+
+
+def restart_and_wait(client, *, timeout=45):
+    previous = client.snapshot()
+    old_pid = previous.get('backend_pid')
+    if previous['backend_running'] and old_pid is None:
+        raise RuntimeError('Starszy kontroler nie potwierdza zmiany procesu. Zaktualizuj launcher i kontroler pełnym Setup.')
+    if not client.restart_backend():
+        raise RuntimeError('Nie udało się uruchomić ponownie backendu.')
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        state = client.snapshot()
+        if state['backend_running'] and state.get('backend_pid') is not None and state['backend_pid'] != old_pid:
+            from .controller_host import _backend_ready
+            if _backend_ready(client):
+                return client.snapshot()
+            break
+        time.sleep(0.2)
+    raise RuntimeError('Nowy proces backendu nie potwierdził gotowości po ponownym uruchomieniu.')
+
+
 def available_version_message(module, snapshot):
     latest = module.get('latest')
     if snapshot.get('offline'):
@@ -80,6 +108,8 @@ class ModuleLauncherModel:
 
     def refresh(self):
         self.snapshot = self.client.module_catalog()
+        if hasattr(self.client, 'snapshot'):
+            self.snapshot['backend'] = self.client.snapshot()
         return self.snapshot
 
     def change_channel(self, channel):
@@ -111,7 +141,8 @@ class ModuleLauncherModel:
 
 def _elevate(installation_id, app, authorize_url=None):
     if sys.platform != 'win32' or ctypes.windll.shell32.IsUserAnAdmin(): return False
-    arguments = ['--installation-id', installation_id, '--app', app]
+    arguments = ['--installation-id', installation_id]
+    if app: arguments += ['--app', app]
     if authorize_url: arguments += ['--authorize-url', authorize_url]
     if not getattr(sys, 'frozen', False): arguments.insert(0, str(Path(sys.argv[0]).absolute()))
     result = ctypes.windll.shell32.ShellExecuteW(None, 'runas', sys.executable, subprocess.list2cmdline(arguments), None, 1)
@@ -120,7 +151,7 @@ def _elevate(installation_id, app, authorize_url=None):
 
 
 class ModuleLauncherWindow:
-    def __init__(self, root, context, model, *, app='web', authorization_request_id=None):
+    def __init__(self, root, context, model, *, app=None, authorization_request_id=None):
         import tkinter as tk
         from tkinter import ttk, messagebox
         self.root, self.context, self.model = root, context, model
@@ -135,6 +166,11 @@ class ModuleLauncherWindow:
         self.authorization_request_id = None
         self.pending_authorization = authorization_request_id
         self.app = app
+        self.tray = None
+        self.closed = False
+        self.tray_ready = False
+        self.backend_status = tk.StringVar(value='Odczyt stanu backendu…')
+        self.autostart = tk.BooleanVar(value=False)
         root.title('PicSyncra — launcher i odzyskiwanie modułów')
         root.geometry('1060x740')
         ttk.Label(root, text='Aktualizuj zatwierdza wybrane wersje i aktualizuje pozostałe niezablokowane moduły. Bez zmiany oznacza najnowszą dostępną wersję, z zachowaniem blokady.', wraplength=1000).pack(padx=12, pady=12)
@@ -143,11 +179,20 @@ class ModuleLauncherWindow:
         actions = [('Uruchom panel', self.open_panel), ('Uruchom Migrator', lambda: self.open_app('migrator')),
                               ('Uruchom LOCAL', lambda: self.open_app('local')), ('Sprawdź wersje', self.refresh),
                               ('Aktualizuj', lambda: self.prepare('apply')), ('Pobierz OCR', lambda: self.prepare('install_ocr')),
+                              ('Zatrzymaj backend', self.stop_backend), ('Uruchom ponownie backend', self.restart_backend),
                               ('Ponów odzyskiwanie', lambda: self._run(self.model.client.module_recover, self.accepted))]
         for index, (label, action) in enumerate(actions):
             button=ttk.Button(toolbar,text=label,command=action)
             button.grid(row=index//3,column=index%3,padx=3,pady=3,sticky='ew'); self.buttons.append(button)
         for column in range(3): toolbar.columnconfigure(column,weight=1)
+        backend_frame = ttk.Frame(root); backend_frame.pack(fill='x', padx=12, pady=6)
+        ttk.Label(backend_frame, textvariable=self.backend_status).pack(side='left')
+        self.autostart_control = ttk.Checkbutton(backend_frame, text='Uruchamiaj WEB w tle po starcie Windows',
+            variable=self.autostart, command=self.change_autostart)
+        self.autostart_control.pack(side='left', padx=12)
+        ttk.Button(backend_frame, text='Zamknij launcher', command=self.quit_launcher).pack(side='right')
+        self.tray_status = tk.StringVar(value='Zamknięcie okna ukrywa je w trayu. Backend zatrzymasz przyciskiem powyżej lub z menu ikony.')
+        ttk.Label(root, textvariable=self.tray_status, wraplength=1000).pack(fill='x', padx=12)
         channel_frame=ttk.Frame(root); channel_frame.pack(fill='x',padx=12,pady=6)
         ttk.Label(channel_frame,text='Kanał aktualizacji:').pack(side='left')
         self.channel=ttk.Combobox(channel_frame,state='readonly',values=['Stable','Dev'],width=12)
@@ -174,31 +219,91 @@ class ModuleLauncherWindow:
         self.conflicts=ttk.Frame(root); self.conflicts.pack(fill='x',padx=12,pady=8)
         root.after(100,self._callbacks)
         root.protocol('WM_DELETE_WINDOW', self.close)
+        root.bind('<Destroy>', self._destroyed, add='+')
+        self._init_tray()
+        root.after(5000, self.refresh_backend)
         if authorization_request_id:
             self.pending_authorization = None
             root.after(1, lambda: self.begin_authorization(authorization_request_id))
         else: self.refresh()
 
     def close(self):
+        if self.tray_ready:
+            self.root.withdraw()
+            return
+        self.quit_launcher()
+
+    def _destroyed(self, event):
+        if event.widget is self.root and not self.closed:
+            self.closed = True
+            if self.tray:
+                self.tray.visible = False
+                self.tray.stop()
+
+    def quit_launcher(self):
+        if self.busy or self.operation_id:
+            self.messagebox.showinfo('PicSyncra', 'Poczekaj na zakończenie operacji. Okno możesz schować w trayu.', parent=self.root)
+            return
         if self.authorization_request_id and not self.operation_id:
             try: self.model.client.module_authorization_cancel(self.authorization_request_id)
             except RuntimeError: pass
+        if self.tray:
+            self.tray.visible = False
+            self.tray.stop()
+        self.closed = True
         self.root.destroy()
+
+    def show_from_tray(self):
+        self.root.deiconify(); self.root.lift()
+
+    def _init_tray(self):
+        try:
+            import pystray
+            from PIL import Image
+            icon_path = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parents[2])) / 'local.ico'
+            if not icon_path.is_file():
+                icon_path = Path(__file__).resolve().parents[2] / 'pic/PIC9_LOCAL.png'
+            with Image.open(icon_path) as source:
+                image = source.convert('RGBA')
+            def invoke(action):
+                return lambda *_: self.callbacks.put(action)
+            self.tray = pystray.Icon('PicSyncra-' + self.context.installation_id, image, 'PicSyncra — launcher',
+                menu=pystray.Menu(
+                    pystray.MenuItem('Otwórz launcher', invoke(self.show_from_tray), default=True),
+                    pystray.MenuItem('Otwórz panel WEB', invoke(self.open_panel)),
+                    pystray.MenuItem('Zatrzymaj backend', invoke(self.stop_backend)),
+                    pystray.MenuItem('Uruchom ponownie backend', invoke(self.restart_backend)),
+                    pystray.MenuItem('Zatrzymaj backend i zamknij launcher', invoke(lambda: self.stop_backend(quit_after=True))),
+                    pystray.MenuItem('Zamknij tylko launcher (backend pozostaje)', invoke(self.quit_launcher))))
+            def ready(icon):
+                icon.visible = True
+                self.callbacks.put(lambda: setattr(self, 'tray_ready', True))
+            self.tray.run_detached(setup=ready)
+        except Exception:
+            self.tray_ready = False
+            if self.tray:
+                self.tray.stop()
+            self.tray = None
+            self.tray_status.set('Ikona w trayu jest niedostępna. Backend możesz zatrzymać przyciskiem „Zatrzymaj backend” w tym oknie.')
 
     def _callbacks(self):
         while True:
             try: callback=self.callbacks.get_nowait()
             except queue.Empty: break
             callback()
+            if self.closed: return
         self.root.after(100,self._callbacks)
 
     def _run(self, work, finished, *, on_error=None):
+        if self.busy:
+            return
         self.busy=True
         for button in self.buttons: button.configure(state='disabled')
         for widget in self.rows.winfo_children():
             if isinstance(widget,self.ttk.Combobox): widget.configure(state='disabled')
         self.backup.configure(state='disabled')
         self.channel.configure(state='disabled')
+        self.autostart_control.configure(state='disabled')
         def worker():
             try:
                 result=work()
@@ -218,6 +323,7 @@ class ModuleLauncherWindow:
     def _finish(self, callback, result):
         self.busy=False
         callback(result)
+        if self.closed: return
         self._synchronize_controls()
         if self.pending_authorization:
             identifier, self.pending_authorization = self.pending_authorization, None
@@ -231,6 +337,7 @@ class ModuleLauncherWindow:
             if isinstance(widget,self.ttk.Combobox): widget.configure(state='disabled' if locked else 'readonly')
         self.backup.configure(state='disabled' if locked else 'readonly')
         self.channel.configure(state='disabled' if locked else 'readonly')
+        self.autostart_control.configure(state='disabled' if locked else 'normal')
 
     def refresh(self):
         self.status.set('Pobieranie katalogu wersji z GitHuba…')
@@ -246,6 +353,8 @@ class ModuleLauncherWindow:
         self._run(work,self.render)
 
     def render(self,snapshot):
+        if snapshot.get('backend'):
+            self.render_backend(snapshot['backend'])
         if snapshot.get('operation') and not self.operation_id:
             self.accepted(snapshot['operation'])
         self.channel.set('Dev' if snapshot.get('channel') == 'dev' else 'Stable')
@@ -253,6 +362,9 @@ class ModuleLauncherWindow:
         self.progressbar = self.catalog_progressbar
         for widget in self.rows.winfo_children(): widget.destroy()
         self.progress_rows.clear()
+        if self.app and not self.authorization_request_id and not self.operation_id:
+            app, self.app = self.app, None
+            self.callbacks.put(self.open_panel if app == 'web' else lambda: self.open_app(app))
         for index,module in enumerate(snapshot.get('modules',[])):
             row_index = index * 2
             self.ttk.Label(self.rows,text=module['label']).grid(row=row_index,column=0,padx=5,pady=10,sticky='w')
@@ -409,7 +521,10 @@ class ModuleLauncherWindow:
             self.cancel_authorization()
             text='\n'.join(f"{c['module_id']} {c['selected_version']} ↔ {c['dependency_id'] or 'baza/runtime'} {c['dependency_version'] or ''}: {c['requirement']}" for c in plan['conflicts'])
             self.ttk.Label(self.conflicts,text=text,wraplength=1000).pack(anchor='w')
-            self.ttk.Label(self.conflicts,text='Zmień wybory wersji wskazanych modułów i ponów aktualizację. Blokady pozostają zachowane.').pack(anchor='w')
+            self.ttk.Label(self.conflicts,text=conflict_guidance(plan['conflicts']),wraplength=1000).pack(anchor='w')
+            if any(c.get('code') in {'controller_outdated','launcher_outdated'} for c in plan['conflicts']):
+                self.ttk.Button(self.conflicts,text='Pobierz pełny instalator Setup',
+                    command=lambda:webbrowser.open(plan.get('setup_release_url') or 'https://github.com/NefilimPL/PicSyncra/releases')).pack(side='left')
             self.ttk.Button(self.conflicts,text='Nie aktualizuj',command=lambda:[widget.destroy() for widget in self.conflicts.winfo_children()]).pack(side='left')
             return
         if plan.get('has_changes') is False:
@@ -477,9 +592,55 @@ class ModuleLauncherWindow:
             if details: row['details'].pack(side='left',padx=4)
 
     def open_panel(self):
-        self._run(lambda:self.model.client.start_backend(),lambda result:webbrowser.open('http://127.0.0.1:8010'))
+        if self.busy or self.operation_id: return
+        def start():
+            self.model.client.start_backend()
+            from .controller_host import _backend_ready
+            if not _backend_ready(self.model.client):
+                raise RuntimeError('Backend nie potwierdził gotowości. Sprawdź logi instalacji i ponów uruchomienie.')
+            return self.model.client.snapshot()
+        def opened(result):
+            self.render_backend(result)
+            webbrowser.open('http://127.0.0.1:8010')
+        self._run(start, opened)
+
+    def render_backend(self, state):
+        self.backend_status.set('Backend: uruchomiony' if state['backend_running'] else 'Backend: zatrzymany')
+        self.autostart.set(state.get('autostart', False))
+        if self.tray:
+            self.tray.title = 'PicSyncra — ' + ('WEB uruchomiony' if state['backend_running'] else 'WEB zatrzymany')
+
+    def refresh_backend(self):
+        if self.closed: return
+        if not self.busy and not self.operation_id:
+            self._run(self.model.client.snapshot, self.render_backend)
+        self.root.after(5000, self.refresh_backend)
+
+    def stop_backend(self, *, quit_after=False):
+        if self.busy or self.operation_id: return
+        def stop():
+            if not self.model.client.stop_backend(force=False):
+                raise RuntimeError('Nie udało się zatrzymać backendu. Poczekaj na koniec operacji i ponów próbę.')
+            return self.model.client.snapshot()
+        def stopped(result):
+            self.render_backend(result)
+            if quit_after: self.quit_launcher()
+        self._run(stop, stopped)
+
+    def restart_backend(self):
+        if self.busy or self.operation_id: return
+        self._run(lambda: restart_and_wait(self.model.client), self.render_backend)
+
+    def change_autostart(self):
+        if self.busy or self.operation_id: return
+        enabled = self.autostart.get()
+        def change():
+            self.model.client.set_autostart(enabled)
+            return self.model.client.snapshot()
+        self._run(change, self.render_backend)
 
     def open_app(self,app):
+        if self.busy or self.operation_id: return
         def launch():
             from .module_sessions import standalone_session
             from .module_state import read_module_set, module_set_root, verify_module_set_files
@@ -504,7 +665,7 @@ def parse_authorization_url(value):
 def main(argv=None):
     parser=argparse.ArgumentParser(prog='PicSyncra-Launcher')
     parser.add_argument('--installation-id',default='primary-installation')
-    parser.add_argument('--app',choices=('web','migrator','local'),default='web')
+    parser.add_argument('--app',choices=('web','migrator','local'))
     parser.add_argument('--authorize-url')
     args=parser.parse_args(argv)
     authorization_request_id = None

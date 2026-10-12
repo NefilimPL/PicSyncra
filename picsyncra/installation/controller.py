@@ -83,12 +83,15 @@ class InstallationController:
         """Return controller state without exposing implementation paths."""
 
         state = self._scm.snapshot()
-        return {
+        result = {
             "installation_id": self._context.installation_id,
             "backend_port": self._backend_port,
             "backend_running": bool(state.get("backend_running", False)),
             "autostart": bool(state.get("autostart", False)),
         }
+        if type(state.get('backend_pid')) is int and state['backend_pid'] > 0:
+            result['backend_pid'] = state['backend_pid']
+        return result
 
 
 __all__ = ["InstallationController", "InstallationControllerError", "ScmAdapter"]

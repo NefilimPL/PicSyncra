@@ -262,7 +262,15 @@
     function conflictDialog(plan) {
       conflicts.replaceChildren(node('h4', 'Konflikty zgodności'));
       for (const item of plan.conflicts) conflicts.append(node('p', `${item.module_id} ${item.selected_version || ''}${item.dependency_id ? ` ↔ ${item.dependency_id} ${item.dependency_version || 'brak'}` : ''}: ${item.requirement}`));
-      conflicts.append(node('p', 'Zmień wybory wersji wskazanych modułów i ponów aktualizację. Blokady pozostają zachowane.'));
+      if (plan.conflicts.some(item => ['controller_outdated', 'launcher_outdated'].includes(item.code))) {
+        conflicts.append(node('p', 'To wydanie wymaga nowszego launchera i kontrolera. Uruchom pełny instalator Setup na istniejącej instalacji. Baza, konfiguracja i blokady modułów zostaną zachowane. Sama aktualizacja modułów nie wymienia kontrolera.'));
+        const setupLink = node('a', 'Pobierz pełny instalator Setup z wydania GitHub');
+        setupLink.href = releaseUrl(plan.setup_release_url) || 'https://github.com/NefilimPL/PicSyncra/releases';
+        setupLink.target = '_blank'; setupLink.rel = 'noopener noreferrer';
+        conflicts.append(setupLink);
+      } else {
+        conflicts.append(node('p', 'Zmień wybory wersji wskazanych modułów i ponów aktualizację. Blokady pozostają zachowane.'));
+      }
       const cancel = button('Nie aktualizuj', () => conflicts.replaceChildren());
       conflicts.append(cancel);
     }

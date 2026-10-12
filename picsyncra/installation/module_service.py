@@ -200,6 +200,7 @@ class ModuleService:
         return dict(plan_id=plan.plan_id, action=plan.action, expected_revision=plan.expected_revision,
                     conflicts=payload['conflicts'], download_bytes=plan.download_bytes,
                     restore_backup_id=restore_backup_id,
+                    setup_release_url=next((release_link(r.tag) for r in releases if r.release_id == plan.target.release_id), None),
                     has_changes=payload['has_changes'],
                     changes=[dict(module_id=m.module_id, current=old[m.module_id].display_version if m.module_id in old else None,
                                   target=m.display_version, release_url=release_link(m.source_tag)) for m in plan.target.modules

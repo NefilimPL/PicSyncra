@@ -143,6 +143,36 @@ Actions dla starego taga buduje stary kod. Dopisek `dev` w nazwie taga jest
 opcjonalny; wydanie testowe z `dev` musi mieć zaznaczone **pre-release**.
 
 Restart backendu i autostart są dostępne z WEB wyłącznie dla administratora.
+Launcher udostępnia również zatrzymanie i ponowne uruchomienie backendu oraz
+wybór autostartu. Jego ikona działa w sesji użytkownika; backend uruchomiony
+przez SYSTEM pozostaje procesem w tle. Zamknięcie okna ukrywa launcher w trayu.
+Menu ikony pozwala otworzyć panel, zatrzymać backend, zatrzymać backend i wyjść
+albo zamknąć sam launcher. Gdy tray jest niedostępny, kontrolki pozostają w oknie.
+
+Setup pyta o skróty na pulpicie i uruchamianie WEB po starcie Windows bez
+logowania użytkownika. Praca w tle korzysta z zadania kontrolera SYSTEM,
+nie z osobnej usługi SCM. Wyłączenie autostartu pozostawia możliwość ręcznego
+uruchomienia panelu w launcherze. Podczas aktualizacji Setup zachowuje wybraną
+bazę i konfigurację oraz zainstalowane opcjonalne moduły i blokady wersji.
+Aktualizuje nieprzypięte moduły obecne w pakiecie; starszy pakiet nie wykonuje
+automatycznego downgrade. Zatrzymanie kontrolera i backendu jest potwierdzane
+przed wymianą plików. LOCAL, Migrator i launcher należy wcześniej zamknąć
+(w przypadku launchera także ikonę w trayu). Przerwaną transakcję modułów należy
+najpierw odzyskać. Konwersja starego osobnego pakietu OCR ze schematu instalacji 1
+wymaga migracji i jest zatrzymywana przed zmianą plików.
+
+Po aktywowaniu modułów Setup sprawdza uruchomienie kontrolera oraz zdrowie
+backendu, jeżeli wybrano autostart lub WEB działał przed instalacją. Ręcznie
+uruchomiony WEB jest wznawiany bez włączania autostartu. Nieudany start uruchamia
+próbę cofnięcia do poprzedniego zestawu i zweryfikowanej kopii danych, przywraca
+poprzednie ustawienie autostartu i wznawia wcześniej działający backend.
+Ponowne uruchomienie Setup odzyskuje przerwaną aktywację przed nową instalacją;
+nie nadpisuje jej kopii i informacji do cofnięcia. Niepowodzenie cofnięcia jest
+pokazywane osobno; instalator nie oznacza takiej instalacji jako udanej.
+Konflikty `controller_outdated` i `launcher_outdated` wymagają pełnego Setup;
+aktualizator modułów nie zastępuje stabilnego kontrolera ani launchera.
+Starsze EXE nie otrzymają nowego komunikatu i traya przez samą wymianę modułów.
+
 Instalator rejestruje zadanie `PicSyncra Controller primary-installation`,
 które jest właścicielem tylko uruchomionego przez siebie procesu WEB. Kontroler
 najpierw potwierdza żądanie administracyjne, a następnie restartuje WEB z

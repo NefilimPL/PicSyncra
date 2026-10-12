@@ -18,6 +18,22 @@ class Element {
 }
 function find(item, predicate) { return predicate(item) ? item : item.children?.map(child => find(child, predicate)).find(Boolean); }
 
+test('infrastructure upgrade conflicts offer full Setup rather than module selection changes', async () => {
+  resetBrowserGlobals(); global.document = {createElement:tag => new Element(tag)};
+  loadBrowserScript('picsyncra/web/static/module-updates-panel.js');
+  let executions = 0;
+  const panel = window.PicSyncra.ModuleUpdatesPanel.create({requestJson:async url => {
+    if (url.endsWith('/execute')) executions++;
+    return {plan_id:'a'.repeat(32), conflicts:[{code:'controller_outdated',module_id:'core',requirement:'Wymagany kontroler 3; obecny 2.'}],
+            setup_release_url:'https://github.com/NefilimPL/PicSyncra/releases/tag/v0.5.6-dev.6'};
+  }});
+  await panel.prepare('apply');
+  const link = find(panel.element, child => child.tagName === 'a' && child.textContent.includes('Setup'));
+  assert.equal(link.href, 'https://github.com/NefilimPL/PicSyncra/releases/tag/v0.5.6-dev.6');
+  assert.equal(executions, 0);
+  panel.dispose();
+});
+
 test('missing release URLs never become links to the current WEB page', async () => {
   const {panel} = setup(); await panel.refresh();
   assert.equal(Object.hasOwn(panel.rows.get('ftp').currentLink, '_href'), false);

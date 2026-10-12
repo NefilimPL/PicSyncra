@@ -279,7 +279,10 @@ class ActiveBackendSupervisor:
     def snapshot(self) -> dict[str, bool]:
         with self._lock:
             running = self._is_running()
-        return {"backend_running": running, "autostart": self.autostart_enabled()}
+            pid = getattr(self._process, 'pid', None) if running else None
+        result = {"backend_running": running, "autostart": self.autostart_enabled()}
+        if pid is not None: result['backend_pid'] = pid
+        return result
 
     def _is_running(self) -> bool:
         return self._process is not None and self._process.poll() is None

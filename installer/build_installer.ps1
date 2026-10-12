@@ -90,7 +90,7 @@ try {
     Build-Onedir 'PicSyncra-Migrator' 'PicSyncra-Migrator.pyw' $localIconPath
     Build-Onedir 'PicSyncra' 'PicSyncra.pyw' $localIconPath
     Build-Onedir 'PicSyncra-Controller' 'PicSyncra-Controller.py' $localIconPath
-    Build-Onedir 'PicSyncra-Launcher' 'PicSyncra-Launcher.pyw' $localIconPath
+    Build-Onedir 'PicSyncra-Launcher' 'PicSyncra-Launcher.pyw' $localIconPath -ExtraArguments @('--add-data', "$localIconPath;.")
     & $Python -m PyInstaller --noconfirm --clean --distpath $distRoot --workpath $workRoot installer/installed.spec
     if ($LASTEXITCODE -ne 0) { throw 'Nie udalo sie zbudowac PicSyncra-SetupHelper.' }
     if ($BuildOcr) {
