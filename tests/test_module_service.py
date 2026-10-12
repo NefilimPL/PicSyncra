@@ -48,6 +48,10 @@ def test_catalog_and_planning_are_read_only_and_execution_is_deferred(context):
     service = ModuleService(context, Controller(), source=Source(), content=store, schedule=jobs.append,
                             quiesce=lambda op: None, healthy=lambda: True)
     rows = service.catalog()['modules']
+    assert rows[0]['current_release']['tag'] == 'v1'
+    assert rows[0]['latest_release']['tag'] == 'v1'
+    assert rows[0]['latest_release']['published_at'] is None  # source release absent in fixture
+    assert rows[0]['versions'][0]['tag'] == 'v1'
     assert rows[0]['pinned'] is True
     assert rows[0]['versions'][0]['release_url'].startswith('https://github.com/NefilimPL/PicSyncra/releases/tag/')
     planned = service.prepare(action='update_all', selected={}, excluded=[])
@@ -58,6 +62,20 @@ def test_catalog_and_planning_are_read_only_and_execution_is_deferred(context):
     jobs.pop()()
     assert service.operation(planned['plan_id'])['state'] == 'committed'
     assert not read_module_set(context).pinned
+
+
+def test_catalog_dates_come_from_the_modules_source_release(context):
+    _, store, _ = prepare(context)
+    release = parse_module_manifest(release_payload())
+    class DatedSource(Source):
+        def load(self, channel):
+            return (ModuleCatalogEntry(1, 'v1', '2026-09-01T00:00:00Z', release),
+                    ModuleCatalogEntry(5, 'v5', release.published_at, release))
+    snapshot = ModuleService(context, Controller(), source=DatedSource(), content=store).catalog()
+    row = snapshot['modules'][0]
+    assert row['current_release']['published_at'] == '2026-09-01T00:00:00Z'
+    assert row['latest_release']['published_at'] == '2026-09-01T00:00:00Z'
+    assert row['versions'][0]['published_at'] == '2026-09-01T00:00:00Z'
 
 
 def test_shared_operation_reports_download_progress_and_pending_work_after_reopen(context):

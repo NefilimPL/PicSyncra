@@ -117,6 +117,10 @@ class ModuleService:
         from datetime import datetime
         def published(release): return datetime.fromisoformat(release.published_at.replace('Z', '+00:00'))
         version_dates = {}
+        release_dates = {entry.release_id: entry.published_at for entry in self.entries}
+        def provenance(module):
+            return dict(tag=module.source_tag, published_at=release_dates.get(module.source_release_id),
+                        release_url=release_link(module.source_tag))
         for release in sorted(releases, key=published):
             for item in release.modules: version_dates.setdefault((item.module_id, item.version_id), published(release))
         for module in active.modules:
@@ -125,14 +129,15 @@ class ModuleService:
                 for item in release.modules:
                     if item.module_id == module.module_id and (module.module_id, module.version_id) in version_dates and version_dates[(item.module_id, item.version_id)] <= version_dates[(module.module_id, module.version_id)]:
                         versions.setdefault(item.version_id, dict(version_id=item.version_id, display_version=item.display_version,
-                            release_id=item.source_release_id, release_url=release_link(item.source_tag), available=True))
+                            release_id=item.source_release_id, **provenance(item), available=True))
             # Installed version stays visible, even before the first signed
             # publication. Availability for rollback requires a trusted catalog.
             versions.setdefault(module.version_id, dict(version_id=module.version_id, display_version=module.display_version,
-                release_id=module.source_release_id, release_url=release_link(module.source_tag), available=False))
+                release_id=module.source_release_id, **provenance(module), available=False))
             newest = next((m for m in latest.modules if m.module_id == module.module_id), None) if latest else None
             rows.append(dict(module_id=module.module_id, label=labels[module.module_id], current=module.display_version,
                              current_id=module.version_id, latest=newest.display_version if newest else None,
+                             current_release=provenance(module), latest_release=provenance(newest) if newest else None,
                              pinned=module.module_id in active.pinned, versions=list(versions.values())[:50]))
         backups = []
         backup_root = safe_path(self.context.state_root, 'backups/operations')
@@ -256,7 +261,7 @@ class ModuleService:
         self._load_plan(operation_id)
         current = self.executor.status()
         if current and current['operation_id'] == operation_id:
-            result = {key: current[key] for key in ('operation_id', 'state', 'action', 'error')}
+            result = {key: current.get(key) for key in ('operation_id', 'state', 'action', 'error', 'error_details')}
         else:
             path = safe_path(self.context.state_root, 'module-operations/' + operation_id + '.json')
             result = json.loads(path.read_text(encoding='utf-8')) if path.exists() else None

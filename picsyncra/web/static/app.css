@@ -5043,4 +5043,11 @@ body[data-theme="dark"] .pimcore-runtime-conflict input {
 .module-updates-controls { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0; }
 .module-updates-conflicts { margin-top: 12px; }
 .module-updates-conflicts button { margin-right: 8px; }
+.module-update-operation { grid-column: 1 / -1; width: 100%; padding: 8px 0; }
+.module-update-operation progress { width: 100%; max-width: 560px; display: block; margin: 6px 0; }
+.module-update-operation progress[hidden] { display: none; }
+.module-update-operation pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.module-version-pair { display: grid; gap: 6px; }
+.module-version-pair a { overflow-wrap: anywhere; }
+.module-ocr-install { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 12px 0; }
 @media (max-width: 800px) { .module-update-row { grid-template-columns: 1fr; } }

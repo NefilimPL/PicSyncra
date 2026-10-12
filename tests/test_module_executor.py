@@ -42,6 +42,27 @@ def test_success_atomically_commits_set_and_unpins_after_backup(context):
     assert (context.state_root / 'backups/operations' / plan.plan_id / 'database.sqlite').is_file()
 
 
+def test_download_failure_journals_error_details_and_preserves_verified_cache(context):
+    from urllib.error import HTTPError
+    from tests.module_fixtures import module_payload
+    active, store, _ = prepare(context)
+    payload = release_payload(modules=[module_payload(), module_payload('migrator', 'apps/migrator/PicSyncra-Migrator.exe'),
+                                     module_payload('ftp', 'picsyncra/services/ftp_service.py', b'new')])
+    release = parse_module_manifest(payload)
+    plan = plan_module_operation(active, (release,), ENV, action='update_all', selected={}, excluded=frozenset(), available_hashes=store.available_hashes())
+    def fail(url, *args): raise HTTPError(url, 404, 'not found', {}, None)
+    store.fetch = fail
+    controller = Controller()
+    executor = ModuleExecutor(context, controller, content=store, quiesce=lambda op: pytest.fail('must not drain'), healthy=lambda: True)
+    result = executor.execute(plan)
+    assert result['state'] == 'rolled_back'
+    assert result['error_details']['http_status'] == 404
+    assert result['error_details']['module_id'] == 'ftp'
+    assert executor.status()['error_details'] == result['error_details']
+    assert read_module_set(context) == active and controller.running
+    assert store.available_hashes()
+
+
 def test_failed_health_and_crash_recovery_restore_exact_previous_pins(context):
     active, store, plan = prepare(context)
     health_results = iter((False, True))

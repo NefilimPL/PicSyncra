@@ -155,12 +155,15 @@ class ModuleExecutor:
                 progress_path = safe_path(self.context.state_root, 'module-progress/' + plan.plan_id + '.json')
                 last_progress = None
                 last_report = 0.0
+                from .module_progress import DownloadProgress
+                measurements = DownloadProgress()
                 def report_progress(value):
                     nonlocal last_progress, last_report
                     now = monotonic()
                     if last_progress is None or last_progress['downloaded_bytes'] == 0 or value['downloaded_bytes'] == value['total_bytes'] or now - last_report >= 0.25:
                         # Keep small progress snapshots separate from the full
                         # transaction journal, which may include many OCR files.
+                        value = measurements.update(value)
                         atomic_json(progress_path, value, replace=True)
                         last_progress, last_report = value, now
                 self.content.assemble(plan.target, on_progress=report_progress)
@@ -190,8 +193,9 @@ class ModuleExecutor:
                 self._write(record, 'committed')
                 self.clear_maintenance()
             except Exception as exc:
+                record['error_details'] = getattr(exc, 'details', None)
                 self._rollback(record, str(exc))
-            return {k: record[k] for k in ('operation_id', 'state', 'action', 'error')}
+            return {k: record.get(k) for k in ('operation_id', 'state', 'action', 'error', 'error_details')}
 
     def _rollback(self, record, error):
         try:

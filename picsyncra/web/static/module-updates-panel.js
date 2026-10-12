@@ -13,6 +13,11 @@
         url.pathname.startsWith('/NefilimPL/PicSyncra/releases/tag/') ? url.href : '';
     } catch (_) { return ''; }
   }
+  function releaseCaption(version, release) {
+    if (!release?.tag) return version;
+    const date = new Date(release.published_at);
+    return release.tag + (release.published_at && Number.isFinite(date.getTime()) ? ` · ${date.toLocaleDateString('pl-PL')}` : '');
+  }
   function create({requestJson, onChanged = () => {}, confirm = message => window.confirm(message)}) {
     const element = node('section', undefined, 'settings-block module-updates-panel');
     const title = node('h3', 'Wersje zainstalowanych modułów');
@@ -22,6 +27,10 @@
     const progressbar = node('progress');
     progressbar.setAttribute('aria-label', 'Postęp pobierania i instalacji modułów');
     progressbar.hidden = true;
+    const operationBox = node('div', undefined, 'module-update-operation');
+    const errorDetails = node('details'); errorDetails.hidden = true;
+    const errorSummary = node('summary', 'Szczegóły błędu pobierania');
+    const errorText = node('pre'); errorDetails.append(errorSummary, errorText);
     const table = node('div', undefined, 'module-updates-rows');
     const controls = node('div', undefined, 'module-updates-controls');
     const channelLabel = node('label', 'Kanał aktualizacji: ');
@@ -44,6 +53,7 @@
     const conflicts = node('div', undefined, 'module-updates-conflicts');
     const selected = new Map(), rows = new Map(), selectedVersions = new Map();
     let busy = false, timer = null, operationId = null, restoreBackupId = null, terminalMessage = null;
+    let lastOperation = null, retryAction = null;
     function button(label, action) {
       const item = node('button', label); item.type = 'button';
       item.addEventListener('click', () => action()); return item;
@@ -51,15 +61,26 @@
     const rollback = button('Cofnij wersję modułu', () => prepare('rollback_modules'));
     const update = button('Aktualizuj moduły', () => prepare('update'));
     const ocr = button('Pobierz OCR', () => prepare('install_ocr'));
+    const retry = button('Ponów pobieranie', () => prepare(retryAction)); retry.hidden = true;
+    operationBox.append(status, progressbar, errorDetails, retry);
+    const ocrSection = node('div', undefined, 'module-ocr-install');
+    ocrSection.append(node('strong', 'Silnik i modele OCR'), ocr);
     const refreshButton = button('Sprawdź wersje', () => refresh());
     const updateAll = button('Aktualizuj wszystko', () => prepare('update_all'));
-    controls.append(update, rollback, updateAll, ocr, refreshButton);
+    controls.append(update, rollback, updateAll, refreshButton);
     const backupLabel = node('label', 'Awaryjne odtworzenie bazy: ');
     const backups = node('select'); backups.setAttribute('aria-label', 'Kopia bazy do odtworzenia');
     backups.addEventListener('change', () => { restoreBackupId = backups.value || null; });
     backupLabel.append(backups);
-    element.append(title, note, channelLabel, status, progressbar, table, controls, backupLabel, conflicts);
+    element.append(title, note, channelLabel, table, ocrSection, operationBox, controls, backupLabel, conflicts);
+    function placeProgress(action, moduleId) {
+      const row = rows.get(action === 'install_ocr' ? 'ocr' : moduleId);
+      const target = row?.element || (action === 'install_ocr' ? ocrSection : element);
+      if (operationBox.parentNode !== target) target.append(operationBox);
+    }
     function showProgress(operation) {
+      lastOperation = operation;
+      placeProgress(operation.action, operation.progress?.module_id);
       const labels = {accepted:'Operacja przyjęta — oczekiwanie na rozpoczęcie.', downloading:'Pobieranie',
         draining:'Oczekiwanie na zakończenie zadań.', stopping:'Zatrzymywanie backendu.',
         backing_up:'Tworzenie kopii bazy i konfiguracji.', installing:'Instalowanie',
@@ -76,8 +97,22 @@
         const mib = value => (value / 1048576).toLocaleString('pl-PL', {minimumFractionDigits:1, maximumFractionDigits:1});
         text += `: ${mib(downloaded)} / ${mib(total)} MiB (${Math.min(100, Math.floor(downloaded * 100 / total))}%)`;
         progressbar.max = total; progressbar.value = downloaded;
+        const rate = operation.progress?.bytes_per_second || 0;
+        const eta = operation.progress?.eta_seconds;
+        if (rate > 0) {
+          text += rate >= 1048576 ? ` · ${(rate / 1048576).toFixed(1)} MiB/s` : ` · ${(rate / 1024).toFixed(1)} KiB/s`;
+          if (eta !== undefined && eta !== null) text += eta >= 60 ? ` · pozostało ${Math.floor(eta / 60)} min ${eta % 60} s` : ` · pozostało ${eta} s`;
+        } else text += ' · obliczanie prędkości i czasu…';
       } else progressbar.removeAttribute('value');
       status.textContent = text + (operation.error ? ` — ${operation.error}` : '');
+      const details = operation.error_details;
+      errorDetails.hidden = !details;
+      errorText.textContent = details ? JSON.stringify(details, null, 2) : '';
+      if (details?.http_status) status.textContent += ` (HTTP ${details.http_status})`;
+      const canRetry = operation.error && ['failed', 'rolled_back'].includes(operation.state) &&
+        (operation.action === 'install_ocr' || details?.retryable === true);
+      retry.hidden = !canRetry;
+      retryAction = canRetry ? operation.action : null;
     }
     function synchronize() {
       rollback.disabled = busy || !selected.size;
@@ -85,6 +120,7 @@
       for (const row of rows.values()) row.select.disabled = busy;
       backups.disabled = busy;
       channel.disabled = busy;
+      retry.disabled = busy;
     }
     function select(moduleId, versionId) {
       const row = rows.get(moduleId);
@@ -95,8 +131,10 @@
       const version = row.module.versions.find(item => item.version_id === versionId);
       if (version) selectedVersions.set(moduleId, version);
       const draft = version || selectedVersions.get(moduleId);
-      row.link.href = releaseUrl(versionId ? draft?.release_url : row.module.versions.find(item => item.version_id === row.module.current_id)?.release_url);
-      row.link.hidden = !row.link.href;
+      const url = releaseUrl(draft?.release_url);
+      if (url) row.link.href = url; else row.link.removeAttribute('href');
+      row.link.hidden = !versionId || !url;
+      row.link.textContent = `Wybrana: ${releaseCaption(draft?.display_version || '', draft)}`;
       row.status.textContent = versionId ? (!version || !version.available ? 'Wybrana wersja jest niedostępna w tym kanale; moduł pomijany w aktualizacji.' : 'Wybrany do cofnięcia; pomijany w aktualizacji.') :
         row.module.pinned ? 'Wyłączony z aktualizacji po cofnięciu.' : 'Aktualizacje włączone.';
       synchronize();
@@ -122,11 +160,22 @@
           const label = node('strong', module.label);
           const available = snapshot.offline ? (module.latest ? `${module.latest} (katalog lokalny)` : 'nie sprawdzono — katalog niedostępny') :
             module.latest || 'brak podpisanego wydania';
-          const versions = node('span', `Obecna: ${module.current} · Dostępna: ${available}`);
+          const versions = node('div', undefined, 'module-version-pair');
+          const currentLine = node('div', 'Obecna: '), latestLine = node('div', 'Dostępna: ');
+          const currentLink = node('a', releaseCaption(module.current, module.current_release));
+          const currentUrl = releaseUrl(module.current_release?.release_url);
+          if (currentUrl) currentLink.href = currentUrl;
+          currentLink.title = module.current;
+          const latestLink = node('a', module.latest ? releaseCaption(module.latest, module.latest_release) + (snapshot.offline ? ' (katalog lokalny)' : '') : available);
+          const latestUrl = releaseUrl(module.latest_release?.release_url);
+          if (latestUrl) latestLink.href = latestUrl;
+          latestLink.title = module.latest || '';
+          for (const link of [currentLink, latestLink]) { link.target = '_blank'; link.rel = 'noopener noreferrer'; }
+          currentLine.append(currentLink); latestLine.append(latestLink); versions.append(currentLine, latestLine);
           const dropdown = node('select'); dropdown.setAttribute('aria-label', `Wersja modułu ${module.label}`);
           const unchanged = node('option', 'Bez zmiany'); unchanged.value = ''; dropdown.append(unchanged);
           for (const version of module.versions || []) {
-            const option = node('option', `${version.display_version}${version.version_id === module.current_id ? ' (obecna)' : ''}${version.available ? '' : ' — niedostępna'}`);
+            const option = node('option', `${releaseCaption(version.display_version, version)}${version.version_id === module.current_id ? ' (obecna)' : ''}${version.available ? '' : ' — niedostępna'}`);
             option.value = version.version_id; option.disabled = !version.available; dropdown.append(option);
           }
           const chosen = selected.get(module.module_id);
@@ -135,9 +184,9 @@
             const option = node('option', `${version?.display_version || chosen.slice(0,8)} — niedostępna w tym kanale`);
             option.value = chosen; option.disabled = true; dropdown.append(option);
           }
-          const link = node('a', 'Wydanie na GitHub'); link.target = '_blank'; link.rel = 'noopener noreferrer';
+          const link = node('a'); link.target = '_blank'; link.rel = 'noopener noreferrer';
           const rowStatus = node('span', '', 'settings-note');
-          rows.set(module.module_id, {module, select:dropdown, link, status:rowStatus});
+          rows.set(module.module_id, {module, element:row, currentLink, latestLink, select:dropdown, link, status:rowStatus});
           dropdown.addEventListener('change', () => select(module.module_id, dropdown.value));
           row.append(label, versions, dropdown, link, rowStatus); table.append(row);
           select(module.module_id, selected.get(module.module_id) || null);
@@ -150,6 +199,7 @@
         }
         backups.value = restoreBackupId || '';
         ocr.hidden = snapshot.ocr_installed === true;
+        if (lastOperation) placeProgress(lastOperation.action, lastOperation.progress?.module_id);
         if (!operationId) status.textContent = terminalMessage || (snapshot.offline ?
           `${snapshot.catalog_error?.message || 'Nie udało się pobrać katalogu GitHuba.'} Pokazywany jest katalog lokalny; brakujące pliki wymagają połączenia.` :
           snapshot.blocked_releases?.length && !snapshot.modules.some(m => m.latest) ? 'Brak kompletnego podpisanego wydania modułów w Release.' : '');
@@ -166,6 +216,8 @@
     async function prepare(action) {
       if (busy) return;
       busy = true; synchronize(); conflicts.replaceChildren();
+      placeProgress(action, null);
+      retry.hidden = true; errorDetails.hidden = true;
       progressbar.hidden = false; progressbar.removeAttribute('value');
       status.textContent = action === 'install_ocr' ? 'Sprawdzanie zgodności i przygotowanie instalacji OCR…' : 'Sprawdzanie zgodności i przygotowanie planu…';
       try {
@@ -191,7 +243,10 @@
         showProgress(operation);
         try { window.sessionStorage?.setItem('picsyncra-module-operation', operationId); } catch (_) {}
         poll(); return plan;
-      } catch (error) { status.textContent = error.message; }
+      } catch (error) {
+        status.textContent = error.message;
+        retryAction = action; retry.hidden = action !== 'install_ocr';
+      }
       finally { if (!operationId) { busy = false; progressbar.hidden = true; } synchronize(); }
     }
     async function poll() {

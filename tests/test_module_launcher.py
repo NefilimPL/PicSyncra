@@ -1,6 +1,41 @@
 from picsyncra.installation.module_launcher import ModuleLauncherModel
 
 
+def test_release_caption_includes_tag_date_and_module_identity():
+    from picsyncra.installation.module_launcher import release_caption
+    caption = release_caption('1.abc', {'tag':'v0.5.6-dev.3','published_at':'2026-10-12T07:15:12Z'})
+    assert 'v0.5.6-dev.3' in caption and '12.10.2026' in caption and '1.abc' in caption
+
+
+def test_launcher_download_speed_eta_and_error_code_are_readable():
+    from picsyncra.installation.module_launcher import operation_message
+    text = operation_message({'state':'downloading','action':'install_ocr',
+        'progress':{'downloaded_bytes':1048576,'total_bytes':2097152,'bytes_per_second':524288,'eta_seconds':2}})
+    assert 'KiB/s' in text and '2 s' in text
+    text = operation_message({'state':'rolled_back','error':'Pobieranie przerwane',
+        'error_details':{'code':'http_error','http_status':503}})
+    assert 'HTTP 503' in text
+
+
+def test_launcher_restores_catalog_progress_when_operation_has_no_matching_row():
+    from picsyncra.installation.module_launcher import ModuleLauncherWindow
+    class Widget:
+        def __init__(self): self.packed = False
+        def stop(self): pass
+        def grid(self): pass
+        def grid_remove(self): pass
+        def pack_forget(self): self.packed = False
+        def pack(self, **kwargs): self.packed = True
+    window = object.__new__(ModuleLauncherWindow)
+    window.catalog_progressbar = Widget()
+    window.progress_rows = {'ocr': {'bar':Widget(),'frame':Widget()}}
+    window._place_progress('install_ocr')
+    assert window.progressbar is window.progress_rows['ocr']['bar']
+    window._place_progress('update', None)
+    assert window.progressbar is window.catalog_progressbar
+    assert window.catalog_progressbar.packed is True
+
+
 def test_available_version_distinguishes_unknown_offline_from_missing_signed_release():
     from picsyncra.installation.module_launcher import available_version_message
     assert available_version_message({'latest': None}, {'offline': True}) == 'nie sprawdzono — katalog niedostępny'

@@ -7,6 +7,70 @@ from tests.module_fixtures import module_payload, release_payload
 from tests.test_module_state import context
 
 
+def test_transient_http_failure_is_retried_and_only_verified_files_are_reused(context):
+    from urllib.error import HTTPError
+    calls, waits = [], []
+    def fetch(url, start, size, total):
+        calls.append((start, size))
+        if len(calls) == 1: raise HTTPError(url, 503, 'temporary', {}, None)
+        return Response(b'code', start, total)
+    store = ModuleContentStore(context, fetch=fetch, sleep=waits.append)
+    module = parse_module_manifest(release_payload()).modules[0]
+    assert store.acquire(module, module.files[0]).read_bytes() == b'code'
+    assert len(calls) == 2 and waits == [1]
+    store.acquire(module, module.files[0])
+    assert len(calls) == 2
+
+
+def test_exhausted_http_failure_has_bounded_diagnostics_and_no_partial_cache(context):
+    from urllib.error import HTTPError
+    calls = []
+    def fetch(url, *args):
+        calls.append(url)
+        raise HTTPError(url, 429, 'secret-proxy-credential', {'Retry-After':'2'}, None)
+    waits = []
+    store = ModuleContentStore(context, fetch=fetch, sleep=waits.append)
+    module = parse_module_manifest(release_payload()).modules[0]
+    with pytest.raises(ModuleContentError) as caught: store.acquire(module, module.files[0])
+    details = caught.value.details
+    assert details['code'] == 'http_error' and details['http_status'] == 429
+    assert details['attempts'] == 3 and details['retryable'] is True
+    assert details['module_id'] == 'core' and details['file'] == 'picsyncra/data_store.py'
+    assert details['source_tag'] == 'v1'
+    assert 'secret' not in str(caught.value) and 'secret' not in str(details)
+    assert len(calls) == 3 and waits == [2, 2]
+    assert list(store.root.iterdir()) == []
+
+
+def test_bad_hash_is_diagnosed_without_retry_or_accepting_content(context):
+    calls = []
+    def fetch(url, start, size, total):
+        calls.append(url)
+        return Response(b'evil', start, total)
+    store = ModuleContentStore(context, fetch=fetch, sleep=lambda delay: pytest.fail('must not retry a bad hash'))
+    module = parse_module_manifest(release_payload()).modules[0]
+    with pytest.raises(ModuleContentError) as caught: store.acquire(module, module.files[0])
+    assert caught.value.details['code'] == 'hash_mismatch'
+    assert caught.value.details['retryable'] is False
+    assert len(calls) == 1 and not list(store.root.iterdir())
+
+
+def test_retry_after_interrupted_read_resets_progress_and_discards_partial_bytes(context):
+    calls, progress = [], []
+    class Interrupted(Response):
+        def read(self, size=-1):
+            if self.tell(): raise ConnectionResetError(10054, 'private connection detail')
+            return super().read(2)
+    def fetch(url, start, size, total):
+        calls.append(url)
+        return Interrupted(b'code', start, total) if len(calls) == 1 else Response(b'code', start, total)
+    store = ModuleContentStore(context, fetch=fetch, sleep=lambda delay: None)
+    module = parse_module_manifest(release_payload()).modules[0]
+    assert store.acquire(module, module.files[0], on_progress=progress.append).read_bytes() == b'code'
+    assert progress == [2, 0, 4]
+    assert len(calls) == 2
+
+
 class Response(BytesIO):
     def __init__(self, data, offset, total, status=206):
         super().__init__(data)
@@ -57,6 +121,7 @@ def test_progress_counts_only_unique_missing_content_and_reports_chunks(context)
     assert {item['total_bytes'] for item in progress} == {3}
     assert [item['downloaded_bytes'] for item in progress] == [0, 1, 2, 3]
     assert progress[-1]['module_id'] == 'ftp'
+    assert progress[-1]['module_downloaded_bytes'] == progress[-1]['module_total_bytes'] == 3
     verify_module_set_files(context, selected)
 
 

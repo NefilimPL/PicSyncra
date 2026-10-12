@@ -34,7 +34,16 @@ def operation_message(operation):
     downloaded = progress.get('downloaded_bytes', 0)
     if phase == 'downloading' and total > 0:
         label += f': {downloaded / 1048576:.1f} / {total / 1048576:.1f} MiB ({min(100, int(downloaded * 100 / total))}%)'
+        rate = progress.get('bytes_per_second', 0)
+        if rate > 0:
+            label += f" · {rate / 1048576:.1f} MiB/s" if rate >= 1048576 else f" · {rate / 1024:.1f} KiB/s"
+            eta = progress.get('eta_seconds')
+            if eta is not None: label += f" · pozostało {eta // 60} min {eta % 60} s" if eta >= 60 else f" · pozostało {eta} s"
+        else: label += ' · obliczanie prędkości i czasu…'
     if operation.get('error'): label += ' — ' + str(operation['error'])
+    details = operation.get('error_details') or {}
+    if details.get('http_status'): label += f" (HTTP {details['http_status']})"
+    elif details.get('code'): label += f" ({details['code']})"
     return label
 
 
@@ -50,6 +59,16 @@ def available_version_message(module, snapshot):
     if snapshot.get('offline'):
         return latest + ' (katalog lokalny)' if latest else 'nie sprawdzono — katalog niedostępny'
     return latest or 'brak podpisanego wydania'
+
+
+def release_caption(version, release):
+    from datetime import datetime
+    if not release or not release.get('tag'): return version
+    date = ''
+    if release.get('published_at'):
+        try: date = datetime.fromisoformat(release['published_at'].replace('Z', '+00:00')).astimezone().strftime('%d.%m.%Y')
+        except ValueError: pass
+    return release['tag'] + (f' · {date}' if date else '') + f' ({version})'
 
 
 class ModuleLauncherModel:
@@ -109,6 +128,9 @@ class ModuleLauncherWindow:
         self.busy = False
         self.operation_id = None
         self.terminal_message = None
+        self.last_operation = None
+        self.progress_rows = {}
+        self.retry_action = None
         self.app = app
         root.title('PicSyncra — launcher i odzyskiwanie modułów')
         root.geometry('1060x740')
@@ -135,6 +157,7 @@ class ModuleLauncherWindow:
         ttk.Label(root,textvariable=self.status,wraplength=1000).pack(fill='x',padx=12,pady=10)
         self.progressbar=ttk.Progressbar(root,mode='indeterminate')
         self.progressbar.pack(fill='x',padx=12,pady=(0,8))
+        self.catalog_progressbar = self.progressbar
         canvas=tk.Canvas(root,highlightthickness=0)
         scrollbar=ttk.Scrollbar(root,orient='vertical',command=canvas.yview)
         canvas.configure(yscrollcommand=scrollbar.set)
@@ -211,21 +234,37 @@ class ModuleLauncherWindow:
         if snapshot.get('operation') and not self.operation_id:
             self.accepted(snapshot['operation'])
         self.channel.set('Dev' if snapshot.get('channel') == 'dev' else 'Stable')
+        self.progressbar.stop()
+        self.progressbar = self.catalog_progressbar
         for widget in self.rows.winfo_children(): widget.destroy()
+        self.progress_rows.clear()
         for index,module in enumerate(snapshot.get('modules',[])):
-            self.ttk.Label(self.rows,text=module['label']).grid(row=index,column=0,padx=5,pady=10,sticky='w')
-            text=f"Obecna: {module['current']}  Dostępna: {available_version_message(module, snapshot)}"
+            row_index = index * 2
+            self.ttk.Label(self.rows,text=module['label']).grid(row=row_index,column=0,padx=5,pady=10,sticky='w')
+            versions = self.ttk.Frame(self.rows)
+            versions.grid(row=row_index,column=1,sticky='w',padx=5)
+            for caption, version, release in [('Obecna', module['current'], module.get('current_release')),
+                ('Dostępna', available_version_message(module, snapshot), module.get('latest_release'))]:
+                url = (release or {}).get('release_url', '')
+                label = self.ttk.Label(versions,text=f'{caption}: {release_caption(version, release)}',wraplength=400,
+                                      cursor='hand2' if url else '')
+                label.pack(anchor='w',pady=2)
+                if url:
+                    label.configure(foreground='#2677bd',takefocus=True)
+                    label.bind('<Button-1>',lambda event, value=url: self.open_release(value))
+                    label.bind('<Return>',lambda event, value=url: self.open_release(value))
+            text=''
             if module['pinned']: text+='  [wyłączony z aktualizacji]'
             if module['module_id'] in self.model.selected: text+='  [wybrany do cofnięcia; pomijany w aktualizacji]'
             chosen=self.model.selected.get(module['module_id'])
             if chosen and not any(v['version_id']==chosen and v['available'] for v in module['versions']):
                 text+='  [wybrana wersja niedostępna w tym kanale]'
-            self.ttk.Label(self.rows,text=text,wraplength=350).grid(row=index,column=1,sticky='w',padx=5)
+            if text: self.ttk.Label(versions,text=text,wraplength=400).pack(anchor='w')
             values={'Bez zmiany':None}
             links={}
             for version in module['versions']:
                 if not version['available']: continue
-                label=f"{version['display_version']} ({version['version_id'][:8]})"
+                label=release_caption(version['display_version'],version)
                 values[label]=version['version_id']; links[label]=version['release_url']
             combo=self.ttk.Combobox(self.rows,state='readonly',values=list(values),width=25)
             chosen=self.model.selected.get(module['module_id'])
@@ -235,10 +274,17 @@ class ModuleLauncherWindow:
                 values[label]=chosen; links[label]=version.get('release_url','')
                 combo.configure(values=list(values))
             combo.set(next((key for key,value in values.items() if value==chosen),'Bez zmiany'))
-            combo.grid(row=index,column=2,padx=5)
+            combo.grid(row=row_index,column=2,padx=5)
             combo.bind('<<ComboboxSelected>>',lambda event,mid=module['module_id'],box=combo,options=values: self.select_version(mid,options[box.get()]))
-            current_link=next((v['release_url'] for v in module['versions'] if v['version_id']==module['current_id']),'')
-            self.ttk.Button(self.rows,text='Wydanie na GitHub',command=lambda box=combo,urls=links,current=current_link: self.open_release(urls.get(box.get(),current))).grid(row=index,column=3,padx=5)
+            if chosen:
+                link = self.ttk.Label(self.rows,text='Wybrane wydanie ↗',foreground='#2677bd',cursor='hand2')
+                link.grid(row=row_index,column=3,padx=5)
+                link.bind('<Button-1>',lambda event, box=combo, urls=links: self.open_release(urls.get(box.get(),'')))
+            self._make_progress_row(module['module_id'], row_index + 1)
+        if 'ocr' not in self.progress_rows:
+            index = len(snapshot.get('modules',[])) * 2
+            self.ttk.Label(self.rows,text='Silnik i modele OCR').grid(row=index,column=0,pady=10,sticky='w')
+            self._make_progress_row('ocr',index + 1)
         self.backup_ids={'Zachowaj obecną bazę':None}
         for backup in snapshot.get('backups',[]):
             self.backup_ids[f"{backup['backup_id']} · schemat {backup['schema_version']}"]=backup['backup_id']
@@ -246,7 +292,40 @@ class ModuleLauncherWindow:
         if self.backup.get() not in self.backup_ids: self.backup.current(0)
         if not self.operation_id:
             self.status.set(self.terminal_message or catalog_message(snapshot))
+        if self.last_operation: self._show_progress(self.last_operation)
         self._synchronize_controls()
+
+    def _make_progress_row(self, module_id, row_index):
+        frame = self.ttk.Frame(self.rows)
+        frame.grid(row=row_index,column=0,columnspan=4,sticky='ew',padx=5,pady=6)
+        self.ttk.Label(frame,textvariable=self.status,wraplength=950).pack(anchor='w')
+        bar = self.ttk.Progressbar(frame,mode='indeterminate')
+        bar.pack(fill='x',pady=5)
+        buttons = self.ttk.Frame(frame); buttons.pack(anchor='w')
+        retry = self.ttk.Button(buttons,text='Ponów pobieranie',command=lambda:self.prepare(self.retry_action))
+        details = self.ttk.Button(buttons,text='Szczegóły błędu',command=self.show_error_details)
+        frame.grid_remove()
+        self.progress_rows[module_id] = dict(frame=frame,bar=bar,retry=retry,details=details)
+
+    def _place_progress(self, action, module_id=None):
+        selected = self.progress_rows.get('ocr' if action == 'install_ocr' else module_id)
+        for row in self.progress_rows.values():
+            row['bar'].stop()
+            row['frame'].grid_remove()
+        self.catalog_progressbar.stop()
+        if selected:
+            self.catalog_progressbar.pack_forget()
+            selected['frame'].grid()
+            self.progressbar = selected['bar']
+        else:
+            self.catalog_progressbar.pack(fill='x',padx=12,pady=(0,8))
+            self.progressbar = self.catalog_progressbar
+        return selected
+
+    def show_error_details(self):
+        import json
+        details = (self.last_operation or {}).get('error_details')
+        self.messagebox.showinfo('Szczegóły błędu pobierania',json.dumps(details,ensure_ascii=False,indent=2) if details else self.status.get(),parent=self.root)
 
     def select_version(self,module_id,version_id):
         self.model.select(module_id,version_id)
@@ -261,6 +340,9 @@ class ModuleLauncherWindow:
 
     def prepare(self,action):
         if self.busy or self.operation_id: return
+        self._place_progress(action)
+        for row in self.progress_rows.values():
+            row['retry'].pack_forget(); row['details'].pack_forget()
         self.status.set('Sprawdzanie zgodności i przygotowanie instalacji OCR…' if action == 'install_ocr' else 'Sprawdzanie zgodności i przygotowanie planu…')
         self.progressbar.configure(mode='indeterminate',value=0)
         self.progressbar.start()
@@ -308,6 +390,8 @@ class ModuleLauncherWindow:
         else: self.root.after(1500,self.poll)
 
     def _show_progress(self,result):
+        self.last_operation = result
+        row = self._place_progress(result.get('action'),(result.get('progress') or {}).get('module_id'))
         self.status.set(operation_message(result))
         self.progressbar.stop()
         progress=result.get('progress') or {}
@@ -319,6 +403,12 @@ class ModuleLauncherWindow:
         else:
             self.progressbar.configure(mode='indeterminate',value=0)
             self.progressbar.start()
+        if row:
+            details = result.get('error_details') or {}
+            if result.get('error') and result.get('state') in {'failed','rolled_back'} and (result.get('action') == 'install_ocr' or details.get('retryable')):
+                self.retry_action = result['action']
+                row['retry'].pack(side='left',padx=4)
+            if details: row['details'].pack(side='left',padx=4)
 
     def open_panel(self):
         self._run(lambda:self.model.client.start_backend(),lambda result:webbrowser.open('http://127.0.0.1:8010'))

@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 import re
 import shutil
+import http.client
+from time import sleep as _sleep
 from urllib.parse import quote
 from urllib.request import Request, build_opener, HTTPSHandler
 from uuid import uuid4
@@ -14,10 +16,13 @@ from .module_filesystem import safe_path
 from .module_state import module_set_root, publish_module_set
 from .downloads import _TrustedGithubRedirect, _trusted_url
 from .https import verified_https_context
+from .module_download_diagnostics import download_failure
 
 
 class ModuleContentError(RuntimeError):
-    pass
+    def __init__(self, message, *, code='content_error', retryable=False, details=None):
+        super().__init__(message)
+        self.details = details or dict(code=code, message=message, retryable=retryable)
 
 
 def _fetch_range(url, start, size, total):
@@ -32,9 +37,10 @@ def _digest(path: Path) -> str:
 
 
 class ModuleContentStore:
-    def __init__(self, context: InstallContext, *, fetch=_fetch_range):
+    def __init__(self, context: InstallContext, *, fetch=_fetch_range, sleep=_sleep):
         self.context = context
         self.fetch = fetch
+        self.sleep = sleep
         self.root = safe_path(context.program_root, 'content')
         self.root.mkdir(exist_ok=True)
 
@@ -99,34 +105,49 @@ class ModuleContentStore:
             self.import_bytes(b'')
             return destination
         url = f'https://github.com/NefilimPL/PicSyncra/releases/download/{quote(module.source_tag, safe="")}/{quote(file.asset_name, safe="")}'
+        for attempt in range(1, 4):
+            try:
+                return self._acquire_once(file, destination, url, on_progress)
+            except (ModuleContentError, OSError, ValueError, http.client.HTTPException) as exc:
+                details = dict(exc.details) if isinstance(exc, ModuleContentError) else download_failure(exc)
+                details.update(module_id=module.module_id, file=file.path, asset=file.asset_name,
+                               source_tag=module.source_tag, attempts=attempt)
+                if not details['retryable'] or attempt == 3:
+                    raise ModuleContentError(f"{details['message']} [{details['code']}] Moduł: {module.module_id}; plik: {file.path}.", details=details) from exc
+                if on_progress: on_progress(0)
+                delay = attempt
+                headers = getattr(exc, 'headers', None)
+                retry_after = headers.get('Retry-After', '') if headers else ''
+                if retry_after.isdecimal(): delay = min(15, max(delay, int(retry_after)))
+                self.sleep(delay)
+
+    def _acquire_once(self, file, destination, url, on_progress):
         temporary = safe_path(self.root, uuid4().hex + '.part')
         try:
             with self.fetch(url, file.asset_offset, file.size, file.asset_size) as response:
                 expected = f'bytes {file.asset_offset}-{file.asset_offset + file.size - 1}/{file.asset_size}'
                 if response.status != 206 or response.headers.get('Content-Range') != expected:
-                    raise ModuleContentError('Serwer nie potwierdził zakresu pliku; pobranie całej paczki zostało wstrzymane.')
+                    raise ModuleContentError('Serwer nie potwierdził zakresu pliku; pobranie całej paczki zostało wstrzymane.', code='range_mismatch')
                 length = response.headers.get('Content-Length')
                 if length is not None and length != str(file.size):
-                    raise ModuleContentError('Nieprawidłowy rozmiar pobieranego zakresu.')
+                    raise ModuleContentError('Nieprawidłowy rozmiar pobieranego zakresu.', code='size_mismatch')
                 remaining = file.size
                 digest = hashlib.sha256()
                 with temporary.open('xb') as stream:
                     while remaining:
                         chunk = response.read(min(1024 * 1024, remaining))
                         if not chunk or len(chunk) > remaining:
-                            raise ModuleContentError('Przerwane pobieranie pliku modułu.')
+                            raise ModuleContentError('Przerwane pobieranie pliku modułu.', code='interrupted_download', retryable=True)
                         digest.update(chunk)
                         stream.write(chunk)
                         remaining -= len(chunk)
                         if on_progress: on_progress(file.size - remaining)
                     if response.read(1) or digest.hexdigest() != file.sha256:
-                        raise ModuleContentError('Suma kontrolna pobranego pliku modułu jest niezgodna.')
+                        raise ModuleContentError('Suma kontrolna pobranego pliku modułu jest niezgodna.', code='hash_mismatch')
                     stream.flush()
                     os.fsync(stream.fileno())
             os.replace(temporary, destination)
             return destination
-        except (OSError, ValueError) as exc:
-            raise ModuleContentError('Nie udało się pobrać zweryfikowanej zawartości modułu.') from exc
         finally:
             temporary.unlink(missing_ok=True)
 
@@ -135,16 +156,26 @@ class ModuleContentStore:
         root.mkdir(parents=True, exist_ok=True)
         downloaded = {}
         total = 0
+        missing = set()
+        module_totals = {}
+        owners = {}
         if on_progress:
-            unique = {file.sha256: file for module in selected.modules for file in module.files}
             cached = self.available_hashes()
-            total = sum(file.size for digest, file in unique.items() if digest not in cached)
+            for module in selected.modules:
+                for file in module.files:
+                    if file.sha256 not in cached and file.sha256 not in missing and file.size:
+                        missing.add(file.sha256)
+                        owners[file.sha256] = module.module_id
+                        module_totals[module.module_id] = module_totals.get(module.module_id, 0) + file.size
+                        total += file.size
             on_progress(dict(downloaded_bytes=0, total_bytes=total, module_id=None))
         for module in selected.modules:
             for file in module.files:
                 def report(count):
                     downloaded[file.sha256] = count
-                    on_progress(dict(downloaded_bytes=sum(downloaded.values()), total_bytes=total, module_id=module.module_id))
+                    on_progress(dict(downloaded_bytes=sum(downloaded.values()), total_bytes=total, module_id=module.module_id,
+                        module_downloaded_bytes=sum(value for digest, value in downloaded.items() if owners.get(digest) == module.module_id),
+                        module_total_bytes=module_totals.get(module.module_id, 0)))
                 source = self.acquire(module, file, on_progress=report if on_progress else None)
                 destination = safe_path(root, file.path)
                 destination.parent.mkdir(parents=True, exist_ok=True)

@@ -338,3 +338,40 @@ module plans: they reference the signed content pack instead.
 
 Validation: **51 targeted Python tests passed**, **49 JavaScript tests passed**;
 both signed release catalogs and OCR plans passed the independent diagnostic.
+
+## OCR transfer retries, diagnostics and release labels — 2026-10-12
+
+The previous content downloader stopped after a single failed request and
+replaced the cause with a generic verification error. The original failure
+reported in the user's screenshot cannot be recovered from that message.
+Transient HTTP failures, DNS failures, timeouts and interrupted transfers now
+receive up to three attempts per file. Partial files are removed between
+attempts; exact HTTP ranges, file sizes and SHA-256 verification remain required.
+Certificate, range and hash failures are not retried automatically.
+
+The controller retains a bounded public error code, HTTP/system status where
+available, module/file identity, source tag and attempt count in the operation
+journal. It does not expose raw exception text or download URLs. Both UIs show
+failure details and offer a new confirmed plan for retrying OCR. Previously
+verified content remains cached and is excluded from the next download plan.
+
+Current, available and selected rollback versions now link independently to
+their actual source releases. Captions show the source tag and publication date
+when the source release is present in the catalog; a missing source date is not
+replaced with the date of a later release that reused the module. WEB retains
+the content version in a tooltip; the launcher includes it in parentheses.
+Progress is placed beside the active module/OCR row and includes average useful
+download speed and estimated remaining time from controller measurements.
+
+All **53 JavaScript tests passed**. The full Python run passed 2038 tests and
+66 subtests, skipped three tests, and found one obsolete CSS cache-key assertion.
+After updating that assertion for the changed stylesheet, all **113 targeted
+Python tests**, including the complete source-integrity suite, passed.
+Native Tk acceptance through a real
+authenticated controller pipe verified placement beside OCR, speed/ETA, three
+HTTP 503 attempts, visible details, unchanged installed versions after failure,
+and successful manual retry using cached models. This uses isolated fixture
+content; it does not verify a full production Paddle OCR download or inference.
+Python compileall, JavaScript syntax and diff checks passed. A new Setup is
+required to replace the stable controller/launcher, and the updated WEB module
+must become active for its UI changes to appear. No release was published.

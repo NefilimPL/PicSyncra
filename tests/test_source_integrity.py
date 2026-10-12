@@ -167,7 +167,7 @@ class SourceIntegrityTests(unittest.TestCase):
         self.assertIsNotNone(runtime_js_match)
         self.assertIsNotNone(diagnostics_js_match)
         self.assertIsNotNone(js_match)
-        self.assertEqual(css_match.group(1), "20260902-pimcore-ocr-sidebar1")
+        self.assertEqual(css_match.group(1), "20261012-module-transfer1")
         self.assertEqual(runtime_js_match.group(1), "20260728-runtime-poll1")
         self.assertEqual(diagnostics_js_match.group(1), "20260825-ocr-overlay-layout2")
         self.assertEqual(js_match.group(1), "20261009-controller-retry2")
