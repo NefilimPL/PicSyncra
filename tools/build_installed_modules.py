@@ -79,12 +79,13 @@ def build_module_payloads(source_root: Path, build_root: Path, *, release_id=1, 
 
 
 def generate_module_release_manifest(*, release_metadata, modules, migrations=()):
+    from picsyncra.installation.controller_version import CONTROLLER_VERSION, LAUNCHER_VERSION
     versions=[]
     for module in modules:
         payload=asdict(module)
         for key in ('files','requirements','conflicts'): payload[key]=list(payload[key])
         versions.append(payload)
-    payload=dict(release_metadata,schema=2,platform='windows-x64',minimum_controller=3,minimum_launcher=3,
+    payload=dict(release_metadata,schema=2,platform='windows-x64',minimum_controller=CONTROLLER_VERSION,minimum_launcher=LAUNCHER_VERSION,
                  modules=versions,migrations=list(migrations))
     parse_module_manifest(payload)
     return json.dumps(payload,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()

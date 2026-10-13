@@ -55,13 +55,13 @@ def resolve_active_ocr_component(context: InstallContext) -> ActiveOcrComponent 
         from .module_compatibility import check_module_compatibility
         from .module_contracts import ModuleEnvironment
         from .database import inspect_database
-        from .controller_version import CONTROLLER_VERSION
+        from .controller_version import CONTROLLER_VERSION, LAUNCHER_VERSION
         try:
             selected = read_module_set(context)
             versions = {m.module_id: m for m in selected.modules}
             if not {'ocr_runtime', 'ocr_models'} <= set(versions): return None
             environment = ModuleEnvironment(inspect_database(context.database_path).schema_version, 1,
-                                             'cp313-win-amd64', CONTROLLER_VERSION, 3)
+                                             'cp313-win-amd64', CONTROLLER_VERSION, LAUNCHER_VERSION)
             if check_module_compatibility(selected, environment): return None
             verify_module_set_files(context, selected)
             root = safe_path(module_set_root(context, selected), 'runtime/ocr')

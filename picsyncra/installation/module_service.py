@@ -8,7 +8,7 @@ import time
 from urllib.parse import quote
 from contextlib import nullcontext
 from uuid import uuid4
-from .controller_version import CONTROLLER_VERSION
+from .controller_version import CONTROLLER_VERSION, LAUNCHER_VERSION
 from .database import inspect_database
 from .module_content import ModuleContentStore
 from .module_configuration import inspect_configuration
@@ -22,7 +22,6 @@ from .module_planner import plan_module_operation
 from .module_source import ModuleReleaseSource
 from .module_state import read_module_set, module_set_payload, parse_module_set
 
-LAUNCHER_VERSION = 3
 RUNTIME_ABI = 'cp313-win-amd64'
 
 

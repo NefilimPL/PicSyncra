@@ -188,6 +188,13 @@ Konflikty `controller_outdated` i `launcher_outdated` wymagają pełnego Setup;
 aktualizator modułów nie zastępuje stabilnego kontrolera ani launchera.
 Starsze EXE nie otrzymają nowego komunikatu i traya przez samą wymianę modułów.
 
+Tag widoczny przy modułach nie określa wersji zainstalowanego kontrolera ani
+launchera. Poprawki pobierania OCR i kontroli startu backendu są w tych
+niezależnych programach. Manifest nowych wydań pobiera wymagane wersje
+infrastruktury ze wspólnych stałych używanych przez Setup, zamiast utrzymywać
+osobne liczby w generatorze. Wymaganie wersji 4 blokuje aktualizację modułów
+na starszym kontrolerze/launcherze przed pobieraniem i wskazuje pełny Setup.
+
 Instalator rejestruje zadanie `PicSyncra Controller primary-installation`,
 które jest właścicielem tylko uruchomionego przez siebie procesu WEB. Kontroler
 najpierw potwierdza żądanie administracyjne, a następnie restartuje WEB z
