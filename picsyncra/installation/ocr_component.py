@@ -45,7 +45,7 @@ def _active_release(context: InstallContext) -> int | None:
     return release_id
 
 
-def resolve_active_ocr_component(context: InstallContext) -> ActiveOcrComponent | None:
+def resolve_active_ocr_component(context: InstallContext, *, cancel_check=None) -> ActiveOcrComponent | None:
     """Return verified active OCR metadata only when it matches the build."""
 
     marker = _load_json(context.program_root / 'active.json')
@@ -60,10 +60,11 @@ def resolve_active_ocr_component(context: InstallContext) -> ActiveOcrComponent 
             selected = read_module_set(context)
             versions = {m.module_id: m for m in selected.modules}
             if not {'ocr_runtime', 'ocr_models'} <= set(versions): return None
-            environment = ModuleEnvironment(inspect_database(context.database_path).schema_version, 1,
+            environment = ModuleEnvironment(inspect_database(context.database_path,
+                **({'cancel_check': cancel_check} if cancel_check else {})).schema_version, 1,
                                              'cp313-win-amd64', CONTROLLER_VERSION, LAUNCHER_VERSION)
             if check_module_compatibility(selected, environment): return None
-            verify_module_set_files(context, selected)
+            verify_module_set_files(context, selected, cancel_check=cancel_check)
             root = safe_path(module_set_root(context, selected), 'runtime/ocr')
             if not safe_path(root, 'PicSyncra-OCR.exe').is_file(): return None
             return ActiveOcrComponent(root, selected.set_id, versions['ocr_runtime'].version_id)

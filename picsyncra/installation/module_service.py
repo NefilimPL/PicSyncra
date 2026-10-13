@@ -115,7 +115,11 @@ class ModuleService:
     def catalog(self):
         active = read_module_set(self.context)
         channel=self._channel()
-        releases = self._catalog(channel, refresh=True)
+        catalog_state = None
+        if hasattr(self.source, 'catalog_snapshot'):
+            self.entries, catalog_state = self.source.catalog_snapshot(channel)
+            releases = tuple(entry.release for entry in self.entries if entry.release and not entry.blocked_reason)
+        else: releases = self._catalog(channel, refresh=True)
         latest = max(releases, key=lambda r: r.published_at, default=None)
         labels = {item.module_id: item.label for item in module_definitions()}
         rows = []
@@ -149,8 +153,10 @@ class ModuleService:
                 except (RuntimeError, OSError, ValueError): continue
                 if len(backups) >= 100: break
         operation = self.operation(self.current_operation_id) if self.busy and self.current_operation_id else None
-        return dict(revision=active.revision, channel=channel, modules=rows, offline=self.source.offline,
-                    catalog_error=getattr(self.source, 'error', None), backups=backups, operation=operation,
+        return dict(revision=active.revision, channel=channel, modules=rows,
+                    catalog_refreshing=bool(catalog_state and catalog_state['refreshing']),
+                    offline=catalog_state['offline'] if catalog_state else self.source.offline,
+                    catalog_error=catalog_state['error'] if catalog_state else getattr(self.source, 'error', None), backups=backups, operation=operation,
                     ocr_installed=all(any(m.module_id == name for m in active.modules) for name in ('ocr_runtime', 'ocr_models')),
                     blocked_releases=[dict(release_id=e.release_id, tag=e.tag, reason=e.blocked_reason) for e in self.entries if e.blocked_reason][:50])
 
@@ -193,7 +199,7 @@ class ModuleService:
                        restore_backup_id=restore_backup_id, migrations=migrations,
                        has_changes=({m.module_id: m.version_id for m in active.modules} !=
                                     {m.module_id: m.version_id for m in plan.target.modules} or
-                                    active.pinned != plan.target.pinned or bool(restore_backup_id)))
+                                    active.pinned != plan.target.pinned or bool(restore_backup_id) or action == 'install_ocr'))
         atomic_json(safe_path(self.context.state_root, 'module-plans/' + plan.plan_id + '.json'), payload)
         old = {m.module_id: m for m in active.modules}
         return dict(plan_id=plan.plan_id, action=plan.action, expected_revision=plan.expected_revision,

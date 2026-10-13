@@ -16,6 +16,33 @@ class Source:
         return (ModuleCatalogEntry(5, 'v5', release.published_at, release),)
 
 
+def test_reinstall_ocr_repairs_missing_files_even_when_versions_are_unchanged(context):
+    from tests.module_fixtures import module_payload
+    from picsyncra.installation.module_state import make_module_set, activate_module_set, module_set_root, verify_module_set_files
+    active, store, _ = prepare(context)
+    release = parse_module_manifest(release_payload(modules=[module_payload(),
+        module_payload('migrator', 'apps/migrator/PicSyncra-Migrator.exe'),
+        module_payload('ocr_runtime', 'runtime/ocr/PicSyncra-OCR.exe'),
+        module_payload('ocr_models', 'models/ocr/model.bin')]))
+    installed = make_module_set(2, 5, release.modules)
+    store.assemble(installed); activate_module_set(context, installed, expected_revision=1)
+    (module_set_root(context, installed) / 'models/ocr/model.bin').unlink()
+    class OcrSource(Source):
+        def load(self, channel): return (ModuleCatalogEntry(5, 'v5', release.published_at, release),)
+    jobs = []
+    service = ModuleService(context, Controller(), source=OcrSource(), content=store,
+        schedule=jobs.append, quiesce=lambda _: None, healthy=lambda: True)
+    plan = service.prepare(action='install_ocr', selected={}, excluded=[])
+    assert plan['has_changes'] and plan['changes'] == []
+    accepted = service.execute(plan['plan_id'])
+    assert accepted['state'] == 'accepted' and len(jobs) == 1
+    jobs[0]()
+    assert service.operation(plan['plan_id'])['state'] == 'committed'
+    repaired = read_module_set(context)
+    assert repaired.revision == 3
+    verify_module_set_files(context, repaired)
+
+
 def test_module_health_failure_exposes_bounded_component_diagnostics(context, monkeypatch):
     from picsyncra.installation.module_executor import ModuleExecutionError
     from picsyncra.installation import controller_host

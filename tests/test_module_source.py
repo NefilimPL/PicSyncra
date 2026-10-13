@@ -8,6 +8,43 @@ from tests.test_module_state import context
 from tests.module_fixtures import signed, release_payload
 
 
+def test_catalog_refresh_returns_immediately_and_does_not_block_control(context):
+    import threading
+    import time
+    entered, release = threading.Event(), threading.Event()
+    def fetch(_path):
+        entered.set(); assert release.wait(5); return []
+    source = ModuleReleaseSource(context, keys={}, fetch_json=fetch)
+    started = time.monotonic()
+    try:
+        entries, state = source.catalog_snapshot('dev')
+        assert time.monotonic() - started < 0.5
+        assert entries == () and state['refreshing']
+        assert entered.wait(2)
+        with pytest.raises(RuntimeError, match='katalog'):
+            source.snapshot('dev')
+    finally: release.set()
+    for _ in range(100):
+        entries, state = source.catalog_snapshot('dev')
+        if not state['refreshing']: break
+        time.sleep(0.01)
+    assert not state['refreshing'] and not state['offline']
+
+
+def test_active_operation_can_revalidate_verified_catalog_during_refresh(context):
+    import threading
+    source = ModuleReleaseSource(context, keys={}, fetch_json=lambda _: [])
+    expected = source.load('dev')
+    entered, release = threading.Event(), threading.Event()
+    def fetch(_path): entered.set(); assert release.wait(3); return []
+    source.fetch_json = fetch
+    try:
+        source.catalog_snapshot('dev')
+        assert entered.wait(1)
+        assert source.snapshot('dev') is expected
+    finally: release.set()
+
+
 def test_verified_snapshot_avoids_repeated_network_but_invalidates_changed_cache(context):
     calls = []
     source = ModuleReleaseSource(context, keys={}, fetch_json=lambda path: calls.append(path) or [])
@@ -31,6 +68,7 @@ def test_offline_catalog_reverifies_signature(context):
     source = ModuleReleaseSource(context, keys={'test': key}, fetch_json=lambda path: records,
                                  fetch_asset=lambda url: names[url.rsplit('/', 1)[1]])
     assert source.load('stable')[0].blocked_reason is None
+    assert any(entry.release and not entry.blocked_reason for entry in source._cached_catalog('stable'))
     source.fetch_json = lambda path: (_ for _ in ()).throw(OSError('offline'))
     assert any(entry.release and not entry.blocked_reason for entry in source.load('stable'))
     assert source.offline

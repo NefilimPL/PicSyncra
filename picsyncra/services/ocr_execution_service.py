@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 import time
+from threading import Thread
 from typing import Protocol
 
 from .ocr_progress import OcrProgressRegistry, OcrRunSnapshot
@@ -55,6 +56,7 @@ class OcrExecutionService:
         self._maintenance_gate = maintenance_gate
         self._inflight_run_ids: set[str] = set()
         self._maintenance_leases: dict[str, MaintenanceLease] = {}
+        self._pending_dispatch: set[str] = set()
 
     def start(self) -> None:
         self._worker.start()
@@ -120,12 +122,29 @@ class OcrExecutionService:
         if lease is not None:
             self._maintenance_leases[run_id] = lease
             lease.set_cancel_callback(lambda: self.cancel(run_id))
-        self._worker.submit(
-            run_id=run_id,
-            path=str(path),
-            profile_ids=selected,
-            resource_settings=settings,
-        )
+        def dispatch():
+            try:
+                if self._registry.is_cancel_requested(run_id):
+                    self._registry.finalize(run_id, state='cancelled')
+                    self._inflight_run_ids.discard(run_id)
+                    self._finish_maintenance_lease(run_id)
+                    return
+                self._worker.submit(run_id=run_id, path=str(path), profile_ids=selected, resource_settings=settings)
+                if self._registry.is_cancel_requested(run_id): self._worker.cancel(run_id)
+            except Exception as exc:
+                if self._registry.is_cancel_requested(run_id): self._registry.finalize(run_id, state='cancelled')
+                else:
+                    self._registry.publish(run_id, 'error', code='runtime_start_failed', message=str(exc))
+                    self._registry.finalize(run_id, state='error', error=str(exc))
+                self._inflight_run_ids.discard(run_id)
+                self._finish_maintenance_lease(run_id)
+            finally:
+                self._pending_dispatch.discard(run_id)
+        if getattr(self._worker, 'deferred_submission', False):
+            self._pending_dispatch.add(run_id)
+            Thread(target=dispatch, daemon=True, name='PicSyncraOCRDispatch').start()
+        else:
+            self._worker.submit(run_id=run_id, path=str(path), profile_ids=selected, resource_settings=settings)
         return run_id
 
     def pump(self) -> None:
@@ -199,6 +218,7 @@ class OcrExecutionService:
         suffix = f" (kod {exit_code})." if isinstance(exit_code, int) else "."
         message = "Proces OCR zakonczyl sie przed rozpoczeciem zadania" + suffix
         for run_id in tuple(self._inflight_run_ids):
+            if run_id in self._pending_dispatch: continue
             try:
                 self._registry.publish(run_id, "error", message=message)
                 self._registry.finalize(run_id, state="error", error=message)

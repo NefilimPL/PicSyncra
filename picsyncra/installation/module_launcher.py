@@ -49,6 +49,7 @@ def operation_message(operation):
 
 
 def catalog_message(snapshot):
+    if snapshot.get('catalog_refreshing'): return 'Sprawdzanie wersji w tle. Uruchamianie aplikacji i sterowanie backendem pozostają dostępne.'
     error = (snapshot.get('catalog_error') or {}).get('message')
     if snapshot.get('offline'):
         return (error or 'Nie udało się pobrać katalogu GitHuba.') + ' Pokazywany jest katalog lokalny; brakujące pliki wymagają połączenia.'
@@ -363,6 +364,8 @@ class ModuleLauncherWindow:
         self._run(work,self.render)
 
     def render(self,snapshot):
+        if snapshot.get('catalog_refreshing') and not self.operation_id:
+            self.root.after(1500, lambda: self.refresh() if not self.busy and not self.operation_id else None)
         if snapshot.get('backend'):
             self.render_backend(snapshot['backend'])
         if snapshot.get('operation') and not self.operation_id:
@@ -657,7 +660,7 @@ class ModuleLauncherWindow:
             from .module_filesystem import safe_path
             with standalone_session(self.context):
                 selected=read_module_set(self.context)
-                verify_module_set_files(self.context,selected)
+                verify_module_set_files(self.context,selected, defer_ocr_payload=True)
                 name='PicSyncra-Migrator.exe' if app=='migrator' else 'PicSyncra.exe'
                 executable=safe_path(module_set_root(self.context,selected),f'apps/{app}/{name}')
                 if not executable.is_file(): raise RuntimeError('Ten moduł nie jest zainstalowany.')

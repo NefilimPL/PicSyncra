@@ -10,6 +10,7 @@ from dataclasses import dataclass, field, replace
 from decimal import Decimal, InvalidOperation
 from importlib import metadata, util
 import math
+import json
 import os
 from pathlib import Path
 import re
@@ -557,6 +558,28 @@ def _paddlex_ocr_core_is_available() -> bool:
 
 def image_ocr_runtime_info() -> dict[str, object]:
     """Return OCR display metadata without initializing an OCR model."""
+
+    from ..install_paths import resolve_install_context
+    from ..installation.module_state import read_module_set, module_set_root
+    from ..installation.module_filesystem import safe_path
+    context = resolve_install_context(Path(sys.executable))
+    if context is not None and json.loads((context.program_root / 'active.json').read_text(encoding='utf-8')).get('schema') == 2:
+        selected = read_module_set(context)
+        modules = {module.module_id: module for module in selected.modules}
+        runtime, models = modules.get('ocr_runtime'), modules.get('ocr_models')
+        root = module_set_root(context, selected)
+        available = bool(runtime and models and safe_path(root, 'runtime/ocr/PicSyncra-OCR.exe').is_file())
+        model_root = str(safe_path(root, 'models/ocr'))
+        return {
+            'available': available,
+            'engine': {'name': _OCR_ENGINE_NAME, 'version': f'moduł {runtime.source_tag}' if runtime else 'niezainstalowany'},
+            'runtime': {'name': 'Oddzielny proces PaddlePaddle + OpenCV', 'version': runtime.source_tag if runtime else 'niezainstalowany'},
+            'models': [{'id': profile.id, 'name': profile.label, 'version': models.source_tag if models else '',
+                        'description': profile.description,
+                        'status': 'ready' if available and _model_cache_has_profile(model_root, profile) else 'unavailable'}
+                       for profile in available_ocr_profiles()],
+            'github_url': _OCR_GITHUB_URL,
+        }
 
     paddleocr_version = _optional_package_version("paddleocr")
     paddle_version = _optional_package_version("paddlepaddle")

@@ -75,9 +75,17 @@ def test_both_clients_share_atomic_rollback_pins_offline_cache_and_stale_plans(c
     with pytest.raises(RuntimeError,match='zmieniła'): web.module_execute(stale['plan_id'])
     pinned_update=web.module_plan(action='update',selected={},excluded=[])
     assert pinned_update['changes']==[] and pinned_update['download_bytes']==0
-    source.fetch_json=lambda path: (_ for _ in ()).throw(OSError('offline'))
+    # A restarted controller creates a new source, returns its signed disk
+    # cache immediately and completes the remote check in the background.
+    source=ModuleReleaseSource(context,keys=trusted,
+        fetch_json=lambda path: (_ for _ in ()).throw(OSError('offline')))
     restarted=ModuleService(context,Controller(),source=source,content=store,schedule=lambda work:work(),quiesce=lambda op:None,healthy=lambda:True)
-    assert restarted.catalog()['offline']
+    import time
+    for _ in range(100):
+        snapshot = restarted.catalog()
+        if not snapshot['catalog_refreshing']: break
+        time.sleep(0.01)
+    assert snapshot['offline'] and not snapshot['catalog_refreshing']
     offline=restarted.prepare(action='rollback_modules',selected={'ftp':old_ftp.version_id},excluded=[])
     assert offline['download_bytes']==0
     restarted.execute(offline['plan_id'])

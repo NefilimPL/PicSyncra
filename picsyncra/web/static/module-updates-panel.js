@@ -52,7 +52,7 @@
     channelLabel.append(channel);
     const conflicts = node('div', undefined, 'module-updates-conflicts');
     const selected = new Map(), rows = new Map(), selectedVersions = new Map();
-    let busy = false, timer = null, operationId = null, restoreBackupId = null, terminalMessage = null;
+    let busy = false, timer = null, catalogTimer = null, disposed = false, operationId = null, restoreBackupId = null, terminalMessage = null;
     let lastOperation = null, retryAction = null;
     let authorizationId = null;
     function button(label, action) {
@@ -251,9 +251,14 @@
           option.value = backup.backup_id; backups.append(option);
         }
         backups.value = restoreBackupId || '';
-        ocr.hidden = snapshot.ocr_installed === true;
+        ocr.hidden = false;
+        ocr.textContent = snapshot.ocr_installed === true ? 'Zainstaluj ponownie OCR' : 'Pobierz OCR';
+        clearTimeout(catalogTimer);
+        if (snapshot.catalog_refreshing && !operationId && !disposed) {
+          catalogTimer = setTimeout(() => { if (!busy && !operationId && !disposed) refresh(); }, 1500);
+        }
         if (lastOperation) placeProgress(lastOperation.action, lastOperation.progress?.module_id);
-        if (!operationId) status.textContent = terminalMessage || (snapshot.offline ?
+        if (!operationId) status.textContent = terminalMessage || (snapshot.catalog_refreshing ? 'Sprawdzanie wersji w tle…' : snapshot.offline ?
           `${snapshot.catalog_error?.message || 'Nie udało się pobrać katalogu GitHuba.'} Pokazywany jest katalog lokalny; brakujące pliki wymagają połączenia.` :
           snapshot.blocked_releases?.length && !snapshot.modules.some(m => m.latest) ? 'Brak kompletnego podpisanego wydania modułów w Release.' : '');
         synchronize();
@@ -342,7 +347,7 @@
       }
     } catch (_) {}
     synchronize();
-    return {element, refresh, select, prepare, selected, rows, dispose:() => clearTimeout(timer)};
+    return {element, refresh, select, prepare, selected, rows, dispose:() => {disposed = true; clearTimeout(timer); clearTimeout(catalogTimer);}};
   }
   root.ModuleUpdatesPanel = {create};
 })();

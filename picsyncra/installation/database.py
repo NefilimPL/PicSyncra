@@ -56,9 +56,10 @@ def _inspect(connection: sqlite3.Connection) -> DatabaseInspection:
     return DatabaseInspection(schema, integrity_ok, is_picsyncra)
 
 
-def inspect_database(path: Path) -> DatabaseInspection:
+def inspect_database(path: Path, *, cancel_check=None) -> DatabaseInspection:
     """Inspect an existing database without instantiating the migrating store."""
     with closing(_read_only_connection(Path(path))) as connection:
+        if cancel_check: connection.set_progress_handler(lambda: int(cancel_check()), 1000)
         return _inspect(connection)
 
 

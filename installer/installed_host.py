@@ -15,7 +15,7 @@ def run_application():
     with standalone_session(context) if name in {'PicSyncra', 'PicSyncra-Migrator'} else nullcontext():
         if name in {'PicSyncra', 'PicSyncra-Migrator'} and resolve_install_context(Path(sys.executable)) != context:
             raise RuntimeError('Host nie należy już do aktywnego zestawu. Uruchom aplikację ponownie przez launcher.')
-        context, selected = bootstrap_installed_modules(context)
+        context, selected = bootstrap_installed_modules(context, defer_ocr_payload=name != 'PicSyncra-OCR')
         if name == 'PicSyncra-WEB':
             from picsyncra.web_manager import main
             main()

@@ -10,7 +10,7 @@ from queue import Empty, Queue
 import re
 import shutil
 import subprocess
-from threading import Thread, RLock
+from threading import Thread, RLock, Event
 import time
 from typing import Callable, Mapping, TextIO
 
@@ -435,53 +435,112 @@ class StagedInstalledOcrWorker:
 
 class LazyInstalledOcrWorker:
     """Keep OCR verification and handshake outside WEB's startup transaction."""
+    deferred_submission = True
 
     def __init__(self, factory):
         self._factory, self._worker = factory, None
         self._lock = RLock()
+        self._start_lock = RLock()
         self._cpu_percent = None
+        self._starting = False
+        self._starting_worker = None
+        self._closed = False
+        self._abort_start = Event()
+        self._cancelled = set()
+        self._initializing_run_id = None
+        self._runs = set()
+        self._pending_events = Queue()
 
     def start(self):
         # The independent runtime is needed only when submitting an OCR job.
         pass
 
     def submit(self, **kwargs):
-        with self._lock:
+        with self._start_lock:
+            run_id = kwargs.get('run_id')
+            if self._closed: raise OcrRuntimeProtocolError('Moduł OCR został zatrzymany.')
+            if run_id in self._cancelled: raise OcrRuntimeProtocolError('Anulowano zadanie OCR.')
+            if self._worker is not None and self._worker.status().get('alive') is False:
+                # Preserve terminal events for the previous generation before
+                # replacing it; otherwise its jobs retain maintenance leases.
+                terminal = set()
+                for event in self._worker.poll_events():
+                    self._pending_events.put(event)
+                    if event.get('kind') in {'result', 'error'}: terminal.add(event.get('run_id'))
+                for previous in tuple(self._runs - terminal):
+                    self._pending_events.put({'kind': 'error', 'run_id': previous, 'message': 'Proces OCR zakończył pracę.'})
+                self._runs.clear()
+                self._worker.stop(timeout=2)
+                self._worker = None
             if self._worker is None:
-                worker = self._factory()
-                if worker is None:
-                    raise OcrRuntimeProtocolError('Nie można uruchomić zweryfikowanego modułu OCR. Sprawdź instalację modułu.')
-                try:
-                    worker.start()
-                    if self._cpu_percent is not None: worker.update_limits(cpu_percent=self._cpu_percent)
-                except Exception:
-                    worker.stop(timeout=2)
-                    raise
-                self._worker = worker
-            self._worker.submit(**kwargs)
+                self._starting = True
+                self._initializing_run_id = run_id
+                self._abort_start.clear()
+                if run_id in self._cancelled or self._closed: self._abort_start.set()
+                try: self._start_worker()
+                finally:
+                    self._starting = False
+                    self._initializing_run_id = None
+            if run_id in self._cancelled or self._closed: raise OcrRuntimeProtocolError('Anulowano zadanie OCR.')
+            self._runs.add(run_id)
+            try: self._worker.submit(**kwargs)
+            except Exception:
+                self._runs.discard(run_id)
+                raise
+
+    def _start_worker(self):
+        worker = self._factory()
+        if worker is None:
+            raise OcrRuntimeProtocolError('Nie można uruchomić zweryfikowanego modułu OCR. Sprawdź instalację modułu.')
+        try:
+            self._starting_worker = worker
+            if self._abort_start.is_set() or self._closed: raise OcrRuntimeProtocolError('Anulowano uruchamianie OCR.')
+            worker.start()
+            if self._abort_start.is_set() or self._closed: raise OcrRuntimeProtocolError('Anulowano uruchamianie OCR.')
+            if self._cpu_percent is not None: worker.update_limits(cpu_percent=self._cpu_percent)
+        except Exception:
+            worker.stop(timeout=2)
+            raise
+        finally:
+            self._starting_worker = None
+        self._worker = worker
 
     def update_limits(self, *, cpu_percent):
         with self._lock:
             self._cpu_percent = cpu_percent
-            if self._worker is not None: self._worker.update_limits(cpu_percent=cpu_percent)
+            if self._worker is not None and self._worker.status().get('alive') is not False:
+                self._worker.update_limits(cpu_percent=cpu_percent)
 
     def update_telemetry(self, telemetry):
-        with self._lock:
-            if self._worker is not None: self._worker.update_telemetry(telemetry)
+        if self._worker is not None: self._worker.update_telemetry(telemetry)
 
     def poll_events(self):
-        return self._worker.poll_events() if self._worker is not None else []
+        events = []
+        while True:
+            try: events.append(self._pending_events.get_nowait())
+            except Empty: break
+        if self._worker is not None: events.extend(self._worker.poll_events())
+        for event in events:
+            if event.get('kind') in {'result', 'error'}: self._runs.discard(event.get('run_id'))
+        return events
 
     def status(self):
+        if self._starting: return {'pid': None, 'alive': None, 'exit_code': None, 'starting': True}
         return self._worker.status() if self._worker is not None else {'pid': None, 'alive': False, 'exit_code': None}
 
     def cancel(self, run_id):
-        if self._worker is not None: self._worker.cancel(run_id)
+        self._cancelled.add(run_id)
+        if self._initializing_run_id == run_id:
+            self._abort_start.set()
+            if self._starting_worker is not None: self._starting_worker.stop(timeout=2)
+        if self._worker is not None and run_id in self._runs: self._worker.cancel(run_id)
 
     def stop(self, *, timeout):
-        with self._lock:
-            if self._worker is not None: self._worker.stop(timeout=timeout)
-            self._worker = None
+        self._closed = True
+        self._abort_start.set()
+        worker = self._worker or self._starting_worker
+        if worker is not None: worker.stop(timeout=timeout)
+        self._worker = None
 
 
 def create_installed_ocr_worker(
@@ -489,7 +548,8 @@ def create_installed_ocr_worker(
     *,
     process_factory=_launch_runtime,
     lazy: bool = False,
-) -> StagedInstalledOcrWorker | None:
+    cancel_check=None,
+) -> StagedInstalledOcrWorker | LazyInstalledOcrWorker | None:
     """Build the WEB-compatible worker only from an active verified component."""
 
     if lazy:
@@ -498,8 +558,10 @@ def create_installed_ocr_worker(
         if marker.get('schema') == 2:
             ids = {module.module_id for module in read_module_set(context).modules}
             if not {'ocr_runtime', 'ocr_models'} <= ids: return None
-            return LazyInstalledOcrWorker(lambda: create_installed_ocr_worker(context, process_factory=process_factory))
-    active = resolve_active_ocr_component(context)
+            worker = LazyInstalledOcrWorker(lambda: create_installed_ocr_worker(context, process_factory=process_factory,
+                cancel_check=worker._abort_start.is_set))
+            return worker
+    active = resolve_active_ocr_component(context, **({'cancel_check': cancel_check} if cancel_check else {}))
     if active is None:
         return None
     runtime = InstalledOcrWorker(

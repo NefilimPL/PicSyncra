@@ -19,7 +19,7 @@ def test_installed_web_uses_the_verified_ocr_worker_factory(monkeypatch, tmp_pat
     expected = object()
     monkeypatch.setattr(web_app, "resolve_install_context", lambda _executable: context)
     monkeypatch.setattr(
-        web_app, "create_installed_ocr_worker", lambda received: expected if received is context else None
+        web_app, "create_installed_ocr_worker", lambda received, *, lazy: expected if received is context and lazy else None
     )
 
     worker = web_app._create_ocr_execution_worker({"max_cpu_percent": 35})
@@ -40,7 +40,7 @@ def test_installed_web_without_ocr_component_does_not_start_portable_worker(
         database_path=tmp_path / "state" / "data" / "picsyncra.sqlite",
     )
     monkeypatch.setattr(web_app, "resolve_install_context", lambda _executable: context)
-    monkeypatch.setattr(web_app, "create_installed_ocr_worker", lambda _context: None)
+    monkeypatch.setattr(web_app, "create_installed_ocr_worker", lambda _context, **kwargs: None)
     monkeypatch.setattr(
         web_app,
         "OcrWorkerProcess",

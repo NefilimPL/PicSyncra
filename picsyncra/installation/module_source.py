@@ -51,6 +51,42 @@ class ModuleReleaseSource:
         self.error = None
         self._snapshot = None
         self._lock = threading.RLock()
+        self._async_lock = threading.RLock()
+        self._async_catalogs = {}
+        self._refresh_worker = None
+
+    def _cached_catalog(self, channel):
+        path = safe_path(self.context.state_root, 'module-catalog-' + channel + '.json')
+        if not path.exists(): return ()
+        cached = json.loads(path.read_text(encoding='utf-8'))
+        def loader(record):
+            item = cached['manifests'].get(str(record['id']))
+            if item is None: raise ValueError('Brak lokalnego podpisanego manifestu.')
+            return base64.b64decode(item['raw'], validate=True), base64.b64decode(item['signature'], validate=True), item['key_id']
+        return catalog_module_releases(cached['records'], channel=channel, manifest_loader=loader, trusted_keys=self.keys)
+
+    def catalog_snapshot(self, channel):
+        """Refresh GitHub outside the pipe thread; return verified cached data."""
+        if channel not in {'stable', 'dev'}: raise ValueError('Invalid catalog channel.')
+        with self._async_lock:
+            if channel not in self._async_catalogs:
+                try: entries = self._cached_catalog(channel)
+                except (ValueError, OSError, KeyError): entries = ()
+                self._async_catalogs[channel] = (entries, 0.0, True, None)
+            entries, expires, offline, error = self._async_catalogs[channel]
+            running = self._refresh_worker is not None and self._refresh_worker.is_alive()
+            if not running and time.monotonic() >= expires:
+                def refresh():
+                    try:
+                        updated = self.load(channel)
+                        outcome = (updated, time.monotonic() + 60, self.offline, self.error)
+                    except Exception as exc:
+                        outcome = (entries, time.monotonic() + 60, True, _catalog_error(exc))
+                    with self._async_lock: self._async_catalogs[channel] = outcome
+                self._refresh_worker = threading.Thread(target=refresh, daemon=True, name='PicSyncraCatalogRefresh')
+                self._refresh_worker.start()
+                running = True
+            return entries, dict(refreshing=running, offline=offline, error=error)
 
     def _fingerprint(self, channel):
         path = safe_path(self.context.state_root, 'module-catalog-' + channel + '.json')
@@ -62,6 +98,15 @@ class ModuleReleaseSource:
         # Reuse only an already verified, immutable in-memory catalog. A disk
         # change or expiration requires signature verification again. Explicit
         # refresh still calls load(), including its network check.
+        with self._async_lock:
+            if self._refresh_worker is not None and self._refresh_worker.is_alive():
+                # An accepted transaction may revalidate while another UI
+                # refreshes GitHub. Its previously verified immutable catalog
+                # remains usable; network activity must not roll it back.
+                if self._snapshot and self._snapshot[0] == channel: return self._snapshot[3]
+                previous = self._async_catalogs.get(channel)
+                if previous and previous[0]: return previous[0]
+                raise RuntimeError('Trwa sprawdzanie katalogu wersji. Poczekaj na zakończenie i ponów aktualizację.')
         with self._lock:
             cached = self._snapshot
             if cached and cached[0] == channel and time.monotonic() < cached[1] and cached[2] == self._fingerprint(channel):

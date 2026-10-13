@@ -18,6 +18,17 @@ class Element {
 }
 function find(item, predicate) { return predicate(item) ? item : item.children?.map(child => find(child, predicate)).find(Boolean); }
 
+test('installed OCR keeps an explicit reinstall action available', async () => {
+  resetBrowserGlobals(); global.document = {createElement:tag => new Element(tag)};
+  loadBrowserScript('picsyncra/web/static/module-updates-panel.js');
+  const panel = window.PicSyncra.ModuleUpdatesPanel.create({requestJson:async () => ({modules:[], ocr_installed:true, channel:'dev'})});
+  await panel.refresh();
+  const reinstall = find(panel.element, child => child.tagName === 'button' && child.textContent === 'Zainstaluj ponownie OCR');
+  assert.ok(reinstall);
+  assert.equal(reinstall.hidden, false);
+  panel.dispose();
+});
+
 test('infrastructure upgrade conflicts offer full Setup rather than module selection changes', async () => {
   resetBrowserGlobals(); global.document = {createElement:tag => new Element(tag)};
   loadBrowserScript('picsyncra/web/static/module-updates-panel.js');

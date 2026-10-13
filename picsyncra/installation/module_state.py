@@ -100,10 +100,14 @@ def read_module_set(context: InstallContext) -> ActiveModuleSet:
         raise ModuleStateError(str(exc)) from exc
 
 
-def verify_module_set_files(context: InstallContext, selected: ActiveModuleSet) -> None:
+def verify_module_set_files(context: InstallContext, selected: ActiveModuleSet, *, defer_ocr_payload=False, cancel_check=None) -> None:
     root = module_set_root(context, selected)
     for module in selected.modules:
+        # These optional payloads execute only in the independent OCR host,
+        # which performs the full verification before accepting any job.
+        if defer_ocr_payload and module.module_id in {'ocr_runtime', 'ocr_models'}: continue
         for file in module.files:
+            if cancel_check and cancel_check(): raise ModuleStateError('Anulowano weryfikację modułu OCR.')
             path = safe_path(root, file.path)
             try:
                 with path.open('rb') as handle:
