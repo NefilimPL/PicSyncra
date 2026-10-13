@@ -197,6 +197,8 @@ class ControlDispatcher:
                      "autostart": bool(snapshot.get("autostart", False))}
             if type(snapshot.get('backend_pid')) is int and snapshot['backend_pid'] > 0:
                 state['backend_pid'] = snapshot['backend_pid']
+            if type(snapshot.get('backend_port')) is int and 1 <= snapshot['backend_port'] <= 65535:
+                state['backend_port'] = snapshot['backend_port']
             return {
                 "ok": True,
                 "snapshot": state,

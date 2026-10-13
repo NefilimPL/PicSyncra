@@ -136,7 +136,7 @@ def test_dispatcher_drops_private_fields_from_a_snapshot() -> None:
 
     assert response == {
         "ok": True,
-        "snapshot": {"backend_running": True, "autostart": False},
+        "snapshot": {"backend_running": True, "autostart": False, "backend_port": 8010},
     }
 
 

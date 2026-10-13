@@ -16,6 +16,20 @@ class Source:
         return (ModuleCatalogEntry(5, 'v5', release.published_at, release),)
 
 
+def test_module_health_failure_exposes_bounded_component_diagnostics(context, monkeypatch):
+    from picsyncra.installation.module_executor import ModuleExecutionError
+    from picsyncra.installation import controller_host
+    _, store, _ = prepare(context)
+    service=ModuleService(context, Controller(), source=Source(), content=store)
+    def not_ready(controller, *, on_status):
+        on_status(dict(code='backend_health_timeout', timeout_seconds=180, components={'sqlite':'critical'}))
+        return False
+    monkeypatch.setattr(controller_host, '_backend_ready', not_ready)
+    with pytest.raises(ModuleExecutionError, match='sqlite') as failure: service._healthy()
+    assert failure.value.details['code']=='backend_health_timeout'
+    assert failure.value.details['timeout_seconds']==180
+
+
 def test_access_failure_precedes_catalog_download_and_has_structured_details(context, monkeypatch):
     _, store, _ = prepare(context)
     from pathlib import Path

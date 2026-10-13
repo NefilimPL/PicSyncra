@@ -8,6 +8,7 @@ restart the backend without relying on the process being restarted.
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 from pathlib import Path
@@ -16,8 +17,8 @@ import subprocess
 import threading
 import time
 from typing import Callable, Protocol
-from urllib.error import URLError
-from urllib.request import urlopen
+from urllib.error import URLError, HTTPError
+from urllib.request import build_opener, ProxyHandler, HTTPRedirectHandler
 from uuid import uuid4
 
 from ..install_paths import load_registered_install_context
@@ -360,20 +361,96 @@ class DeferredRestartController:
         timer.start()
 
 
-def _backend_ready(controller: InstallationController, *, timeout_seconds: float = 30.0) -> bool:
+BACKEND_START_TIMEOUT = 180.0
+
+
+class _BackendHealthRedirect(HTTPRedirectHandler):
+    def redirect_request(self, request, fp, code, msg, headers, newurl):
+        raise URLError('Backend health redirects are not allowed.')
+
+
+def _owned_backend_process(pid, owner_pid):
+    # Older application modules have no process_id. A bootloader/wrapper may
+    # own the root process while the HTTP server is one of its children.
+    if pid is None or owner_pid is None: return True
+    if type(pid) is not int or pid <= 0: return False
+    if pid == owner_pid: return True
+    import psutil
+    try:
+        process = psutil.Process(pid)
+        for _ in range(16):
+            process = process.parent()
+            if process is None: return False
+            if process.pid == owner_pid: return True
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        pass
+    return False
+
+
+def _read_backend_health(response, deadline):
+    data = bytearray()
+    limit = 256*1024
+    while time.monotonic()<deadline:
+        # read1 returns available data instead of waiting for the whole body.
+        # Check the overall deadline even if the peer keeps sending a trickle.
+        chunk = response.read1(min(8192,limit+1-len(data)))
+        if not chunk: return bytes(data)
+        data.extend(chunk)
+        if len(data)>limit: raise ValueError('Oversized backend health response.')
+    raise TimeoutError('Backend health deadline exceeded.')
+
+
+def _backend_ready(controller: InstallationController, *, timeout_seconds: float = BACKEND_START_TIMEOUT,
+                   on_status=None) -> bool:
     """Require the new process to serve its own health response before commit."""
 
-    deadline = time.monotonic() + timeout_seconds
+    started = time.monotonic()
+    deadline = started + timeout_seconds
+    # Loopback probes must not follow the user's/company's proxy configuration
+    # or redirects to another listener.
+    opener = build_opener(ProxyHandler({}), _BackendHealthRedirect())
+    details = dict(code='backend_health_timeout', timeout_seconds=timeout_seconds)
     while time.monotonic() < deadline:
-        if not bool(controller.snapshot().get("backend_running", False)):
+        snapshot = controller.snapshot()
+        if not bool(snapshot.get("backend_running", False)):
+            details.update(code='backend_exited', backend_running=False)
+            if on_status: on_status(details)
             return False
+        port = snapshot.get('backend_port', 8010)
+        if type(port) is not int or not 1 <= port <= 65535:
+            raise ValueError('Invalid backend health port.')
+        url = f'http://127.0.0.1:{port}/api/health'
         try:
-            with urlopen("http://127.0.0.1:8010/api/health", timeout=1.0) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-            if isinstance(payload, dict) and payload.get("ok") is True:
-                return True
-        except (OSError, URLError, ValueError, json.JSONDecodeError):
-            time.sleep(0.2)
+            with opener.open(url, timeout=min(1.0, max(0.01, deadline-time.monotonic()))) as response:
+                if hasattr(response, 'geturl') and response.geturl() != url:
+                    raise ValueError('Redirected backend health response.')
+                raw = _read_backend_health(response,deadline)
+                payload = json.loads(raw.decode('utf-8'))
+            if not isinstance(payload, dict): raise ValueError('Invalid backend health response.')
+            details.update(backend_running=True, observation='unhealthy')
+            components = payload.get('components')
+            if isinstance(components, dict):
+                details['components'] = {name: item['status'] for name in ('backend','sqlite','job_processor','notification_worker')
+                    if isinstance(item:=components.get(name),dict) and isinstance(item.get('status'),str)
+                    and item['status'] in {'online','critical','degraded','unknown'}}
+            own_process = _owned_backend_process(payload.get('process_id'),snapshot.get('backend_pid'))
+            own_app = payload.get('application')=='picsyncra'
+            if not own_process or not own_app:
+                details['observation'] = 'different_process' if not own_process else 'different_application'
+            if payload.get('ok') is True and own_process and own_app:
+                current = controller.snapshot()
+                if not current.get('backend_running') or current.get('backend_pid')!=snapshot.get('backend_pid'):
+                    details['observation'] = 'process_changed'
+                else:
+                    if on_status: on_status(dict(code='ready', elapsed_seconds=round(time.monotonic()-started,1)))
+                    return True
+        except HTTPError as exc:
+            details.update(backend_running=True,observation='http_error',http_status=exc.code)
+        except (OSError, URLError, ValueError, http.client.HTTPException):
+            details.update(backend_running=True, observation='no_valid_response')
+        time.sleep(min(0.2, max(0, deadline-time.monotonic())))
+    details['elapsed_seconds'] = round(time.monotonic()-started,1)
+    if on_status: on_status(details)
     return False
 
 

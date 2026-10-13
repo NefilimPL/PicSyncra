@@ -50,6 +50,8 @@ class InstallationControlClient:
         }
         if type(snapshot.get('backend_pid')) is int and snapshot['backend_pid'] > 0:
             result['backend_pid'] = snapshot['backend_pid']
+        if type(snapshot.get('backend_port')) is int and 1 <= snapshot['backend_port'] <= 65535:
+            result['backend_port'] = snapshot['backend_port']
         return result
 
     def start_backend(self) -> None:

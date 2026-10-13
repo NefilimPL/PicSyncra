@@ -43,7 +43,7 @@ def test_restart_waits_for_new_process_instead_of_accepting_old_health(monkeypat
     calls = []
     client = SimpleNamespace(snapshot=lambda: next(states), restart_backend=lambda: calls.append('restart') or True)
     monkeypatch.setattr(module_launcher.time, 'sleep', lambda _: calls.append('wait'))
-    monkeypatch.setattr(controller_host, '_backend_ready', lambda _: calls.append('health') or True)
+    monkeypatch.setattr(controller_host, '_backend_ready', lambda _, **kwargs: calls.append('health') or True)
     assert module_launcher.restart_and_wait(client)['backend_pid'] == 42
     assert calls == ['restart', 'wait', 'wait', 'health']
 

@@ -427,7 +427,16 @@ class ModuleService:
 
     def _healthy(self):
         from .controller_host import _backend_ready
-        return _backend_ready(self.controller)
+        status = []
+        if _backend_ready(self.controller, on_status=status.append): return True
+        details = status[-1] if status else dict(code='backend_health_timeout')
+        message = ('Backend zakończył pracę podczas uruchamiania.' if details['code']=='backend_exited'
+                   else 'Backend nie potwierdził gotowości w wymaganym czasie.')
+        if details.get('observation') in {'different_process','different_application'}:
+            message = 'Kontrola działania otrzymała odpowiedź innego procesu lub aplikacji.'
+        failed = [name for name, state in details.get('components',{}).items() if state!='online']
+        if failed: message += ' Niesprawne składniki: ' + ', '.join(failed) + '.'
+        raise ModuleExecutionError(message, details=details)
 
     def _quiesce(self, operation_id):
         if not self.controller.snapshot()['backend_running']: return

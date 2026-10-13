@@ -5079,6 +5079,7 @@ def _health_payload() -> Dict[str, Any]:
     return {
         "ok": local_ready,
         "application": brand.PACKAGE_NAME,
+        "process_id": os.getpid(),
         "version": get_display_version(),
         "time": server_time,
         "components": components,

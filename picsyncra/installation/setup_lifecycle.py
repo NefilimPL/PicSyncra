@@ -202,7 +202,8 @@ def run_lifecycle_command(command, request):
         needs_backend = needs_backend or request['enabled']
     elif command != 'resume-previous':
         raise ValueError('Unsupported installer lifecycle command.')
-    deadline = time.monotonic() + 45
+    from .controller_host import BACKEND_START_TIMEOUT
+    deadline = time.monotonic() + BACKEND_START_TIMEOUT
     while time.monotonic() < deadline:
         try:
             state = client.snapshot()
@@ -215,7 +216,7 @@ def run_lifecycle_command(command, request):
                 continue
             if state['backend_running']:
                 from .controller_host import _backend_ready
-                if _backend_ready(client, timeout_seconds=3):
+                if _backend_ready(client, timeout_seconds=min(3,max(0.01,deadline-time.monotonic()))):
                     if command == 'verify-startup': commit_setup(context)
                     return
         except (OSError, RuntimeError):

@@ -18,7 +18,9 @@ from .module_state import read_module_set, module_set_payload, parse_module_set,
 
 
 class ModuleExecutionError(RuntimeError):
-    pass
+    def __init__(self, message, *, details=None):
+        super().__init__(message)
+        self.details = details
 
 
 @contextmanager
@@ -276,6 +278,8 @@ class ModuleExecutor:
                 if not self.healthy(): raise ModuleExecutionError('Poprzedni backend nie przeszedł kontroli po odzyskaniu danych.')
             self._write(record, 'rolled_back')
         except Exception as exc:
+            if getattr(exc, 'details', None):
+                record['error_details'] = dict(record.get('error_details') or {}, recovery=exc.details)
             if record['data_changed']:
                 try:
                     # Failed validation must not leave unvalidated selected code

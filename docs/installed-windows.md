@@ -177,6 +177,13 @@ poprzednie ustawienie autostartu i wznawia wcześniej działający backend.
 Ponowne uruchomienie Setup odzyskuje przerwaną aktywację przed nową instalacją;
 nie nadpisuje jej kopii i informacji do cofnięcia. Niepowodzenie cofnięcia jest
 pokazywane osobno; instalator nie oznacza takiej instalacji jako udanej.
+
+Kontrola startu backendu podczas aktualizacji, odzyskiwania i instalacji czeka
+do 180 sekund. Pierwszy start po doinstalowaniu OCR obejmuje sprawdzenie plików
+i może trwać dłużej od kolejnego startu. Sonda localhost omija proxy, sprawdza
+nazwę aplikacji i — gdy WEB udostępnia PID — przynależność procesu do backendu
+kontrolera. Błąd rozróżnia zakończenie procesu i przekroczenie czasu gotowości;
+szczegóły zawierają stany lokalnych składników oraz osobną diagnozę odzyskiwania.
 Konflikty `controller_outdated` i `launcher_outdated` wymagają pełnego Setup;
 aktualizator modułów nie zastępuje stabilnego kontrolera ani launchera.
 Starsze EXE nie otrzymają nowego komunikatu i traya przez samą wymianę modułów.

@@ -63,7 +63,7 @@ def conflict_guidance(conflicts):
     return 'Zmień wybory wersji wskazanych modułów i ponów aktualizację. Blokady pozostają zachowane.'
 
 
-def restart_and_wait(client, *, timeout=45):
+def restart_and_wait(client, *, timeout=180):
     previous = client.snapshot()
     old_pid = previous.get('backend_pid')
     if previous['backend_running'] and old_pid is None:
@@ -75,7 +75,7 @@ def restart_and_wait(client, *, timeout=45):
         state = client.snapshot()
         if state['backend_running'] and state.get('backend_pid') is not None and state['backend_pid'] != old_pid:
             from .controller_host import _backend_ready
-            if _backend_ready(client):
+            if _backend_ready(client, timeout_seconds=max(0.01,deadline-time.monotonic())):
                 return client.snapshot()
             break
         time.sleep(0.2)

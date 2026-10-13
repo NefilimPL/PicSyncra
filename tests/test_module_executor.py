@@ -177,6 +177,20 @@ def test_failed_restored_backend_health_keeps_recovery_gate_closed(context):
     assert not controller.running
 
 
+def test_original_and_recovery_health_diagnostics_survive_failed_rollback(context):
+    _, store, plan = prepare(context)
+    failures = iter([dict(code='backend_health_timeout', components={'sqlite':'critical'}),
+                     dict(code='backend_exited')])
+    def healthy():
+        raise ModuleExecutionError('Readiness failed', details=next(failures))
+    executor = ModuleExecutor(context, Controller(), content=store, quiesce=lambda op: None, healthy=healthy)
+    result = executor.execute(plan)
+    assert result['state']=='recovery_required'
+    assert result['error_details']['components']=={'sqlite':'critical'}
+    assert result['error_details']['recovery']['code']=='backend_exited'
+    assert executor.status()['error_details']==result['error_details']
+
+
 def test_drain_failure_never_stops_a_busy_backend(context):
     active,store,plan=prepare(context)
     class Busy(Controller):
