@@ -9,6 +9,54 @@ from collections import deque
 
 import pytest
 
+
+def test_silent_runtime_handshake_has_a_deadline_and_reaps_child(tmp_path):
+    import subprocess
+    import sys
+    import time
+    processes = []
+    def launch(_args):
+        process = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'],
+                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        processes.append(process)
+        return process
+    worker = InstalledOcrWorker(executable=tmp_path / 'ocr.exe', build_id='build', component_id='ocr',
+                                process_factory=launch, startup_timeout_seconds=0.15)
+    started = time.monotonic()
+    try:
+        with pytest.raises(OcrRuntimeProtocolError, match='OCR.*czas'):
+            worker.start()
+        assert time.monotonic() - started < 3
+        assert processes[0].poll() is not None
+        assert worker.status()['alive'] is False
+    finally:
+        for process in processes:
+            if process.poll() is None: process.kill()
+            process.wait(timeout=5)
+
+
+def test_lazy_installed_ocr_does_not_block_backend_start_and_retries_failed_start():
+    from picsyncra.installation.ocr_runtime import LazyInstalledOcrWorker
+    calls = []
+    class Worker:
+        def start(self): calls.append('start')
+        def update_limits(self, **kwargs): calls.append(kwargs)
+        def submit(self, **kwargs): calls.append('submit')
+        def stop(self, **kwargs): calls.append('stop')
+        def status(self): return {'alive': True, 'pid': 123}
+    def factory():
+        calls.append('verify')
+        if calls.count('verify') == 1: raise OcrRuntimeProtocolError('first failure')
+        return Worker()
+    worker = LazyInstalledOcrWorker(factory)
+    worker.start()
+    worker.update_limits(cpu_percent=35)
+    assert calls == []
+    assert worker.status()['alive'] is False
+    with pytest.raises(OcrRuntimeProtocolError): worker.submit(run_id='one')
+    worker.submit(run_id='two')
+    assert calls == ['verify', 'verify', 'start', {'cpu_percent': 35}, 'submit']
+
 from picsyncra.installation.ocr_runtime import (
     OCR_PROTOCOL_VERSION,
     OcrRuntimeProtocolError,
@@ -24,7 +72,7 @@ class _Output:
     def __init__(self, lines: list[str]) -> None:
         self._lines = deque(lines)
 
-    def readline(self) -> str:
+    def readline(self, size=-1) -> str:
         return self._lines.popleft() if self._lines else ""
 
 

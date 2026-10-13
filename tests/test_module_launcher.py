@@ -1,6 +1,18 @@
 from picsyncra.installation.module_launcher import ModuleLauncherModel
 
 
+def test_requested_application_opens_without_fetching_catalog():
+    from picsyncra.installation.module_launcher import ModuleLauncherWindow
+    window = object.__new__(ModuleLauncherWindow)
+    window.app = 'web'; window.busy = False; window.operation_id = None
+    calls = []
+    window.open_panel = lambda: calls.append('web')
+    window.refresh = lambda: (_ for _ in ()).throw(AssertionError('startup must not fetch catalog'))
+    window.open_requested_app()
+    window.open_requested_app()
+    assert calls == ['web'] and window.app is None
+
+
 def test_closing_launcher_with_ready_tray_keeps_backend_controls_available():
     from picsyncra.installation.module_launcher import ModuleLauncherWindow
     from types import SimpleNamespace

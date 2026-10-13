@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from pathlib import Path
 from queue import Empty, Queue
 import re
 import shutil
 import subprocess
-from threading import Thread
+from threading import Thread, RLock
+import time
 from typing import Callable, Mapping, TextIO
 
 from .contracts import InstallContext
@@ -134,6 +136,7 @@ class InstalledOcrWorker:
         build_id: str,
         component_id: str,
         process_factory=_launch_runtime,
+        startup_timeout_seconds: float = 120.0,
     ) -> None:
         if not isinstance(build_id, str) or not build_id:
             raise ValueError("build_id must be non-empty text.")
@@ -143,6 +146,9 @@ class InstalledOcrWorker:
         self._build_id = build_id
         self._component_id = component_id
         self._process_factory = process_factory
+        if not math.isfinite(startup_timeout_seconds) or startup_timeout_seconds <= 0:
+            raise ValueError('OCR startup timeout must be finite and positive.')
+        self._startup_timeout_seconds = startup_timeout_seconds
         self._process: object | None = None
         self._events: Queue[dict[str, object]] = Queue()
         self._exit_reported = False
@@ -165,8 +171,30 @@ class InstalledOcrWorker:
         if stdout is None:
             self._terminate(process)
             raise OcrRuntimeProtocolError("OCR runtime does not expose stdout.")
+        # Own the child during its handshake, so shutdown can stop it even if
+        # it never emits a complete line. A bounded reader also rejects a peer
+        # that keeps sending bytes without a newline.
+        self._process = process
+        reply = Queue()
+        def read_hello():
+            try: reply.put((stdout.readline(MAX_OCR_MESSAGE_BYTES + 1), None))
+            except Exception as exc: reply.put((None, exc))
+        reader = Thread(target=read_hello, daemon=True, name='PicSyncraOCRHello')
+        reader.start()
+        deadline = time.monotonic() + self._startup_timeout_seconds
         try:
-            hello = parse_ocr_message(stdout.readline().rstrip("\r\n"))
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise OcrRuntimeProtocolError('OCR nie potwierdził gotowości w wymaganym czasie. Ponów zadanie OCR.')
+                try:
+                    line, error = reply.get(timeout=min(0.1, remaining))
+                    break
+                except Empty:
+                    if self._process is not process or process.poll() is not None:
+                        raise OcrRuntimeProtocolError('Proces OCR zakończył pracę przed potwierdzeniem gotowości.')
+            if error: raise error
+            hello = parse_ocr_message(line.rstrip("\r\n"))
             validate_ocr_hello(
                 hello,
                 expected_build_id=self._build_id,
@@ -174,6 +202,8 @@ class InstalledOcrWorker:
             )
         except Exception:
             self._terminate(process)
+            reader.join(timeout=1)
+            self._process = None
             raise
         self._process = process
         self._exit_reported = False
@@ -286,6 +316,10 @@ class InstalledOcrWorker:
     def _terminate(process: object) -> None:
         try:
             getattr(process, "terminate")()
+            try: getattr(process, 'wait')(2.0)
+            except (TimeoutError, subprocess.TimeoutExpired):
+                getattr(process, 'kill')()
+                getattr(process, 'wait')(2.0)
         except Exception:
             pass
 
@@ -399,13 +433,72 @@ class StagedInstalledOcrWorker:
             shutil.rmtree(resolved)
 
 
+class LazyInstalledOcrWorker:
+    """Keep OCR verification and handshake outside WEB's startup transaction."""
+
+    def __init__(self, factory):
+        self._factory, self._worker = factory, None
+        self._lock = RLock()
+        self._cpu_percent = None
+
+    def start(self):
+        # The independent runtime is needed only when submitting an OCR job.
+        pass
+
+    def submit(self, **kwargs):
+        with self._lock:
+            if self._worker is None:
+                worker = self._factory()
+                if worker is None:
+                    raise OcrRuntimeProtocolError('Nie można uruchomić zweryfikowanego modułu OCR. Sprawdź instalację modułu.')
+                try:
+                    worker.start()
+                    if self._cpu_percent is not None: worker.update_limits(cpu_percent=self._cpu_percent)
+                except Exception:
+                    worker.stop(timeout=2)
+                    raise
+                self._worker = worker
+            self._worker.submit(**kwargs)
+
+    def update_limits(self, *, cpu_percent):
+        with self._lock:
+            self._cpu_percent = cpu_percent
+            if self._worker is not None: self._worker.update_limits(cpu_percent=cpu_percent)
+
+    def update_telemetry(self, telemetry):
+        with self._lock:
+            if self._worker is not None: self._worker.update_telemetry(telemetry)
+
+    def poll_events(self):
+        return self._worker.poll_events() if self._worker is not None else []
+
+    def status(self):
+        return self._worker.status() if self._worker is not None else {'pid': None, 'alive': False, 'exit_code': None}
+
+    def cancel(self, run_id):
+        if self._worker is not None: self._worker.cancel(run_id)
+
+    def stop(self, *, timeout):
+        with self._lock:
+            if self._worker is not None: self._worker.stop(timeout=timeout)
+            self._worker = None
+
+
 def create_installed_ocr_worker(
     context: InstallContext,
     *,
     process_factory=_launch_runtime,
+    lazy: bool = False,
 ) -> StagedInstalledOcrWorker | None:
     """Build the WEB-compatible worker only from an active verified component."""
 
+    if lazy:
+        from .module_state import read_module_set
+        marker = json.loads((context.program_root / 'active.json').read_text(encoding='utf-8'))
+        if marker.get('schema') == 2:
+            ids = {module.module_id for module in read_module_set(context).modules}
+            if not {'ocr_runtime', 'ocr_models'} <= ids: return None
+            return LazyInstalledOcrWorker(lambda: create_installed_ocr_worker(context, process_factory=process_factory))
     active = resolve_active_ocr_component(context)
     if active is None:
         return None

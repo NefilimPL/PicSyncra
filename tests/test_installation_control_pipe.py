@@ -20,6 +20,35 @@ from picsyncra.installation.control_pipe import (
 from picsyncra.installation.control_protocol import ControlDispatcher
 
 
+def test_controller_response_timeout_does_not_replay_request_and_next_call_works():
+    from picsyncra.installation.control_pipe import ControlPipeError
+    from picsyncra.installation.windows_service import ControllerPipeHost
+    ready = threading.Event()
+    calls, failures = [], []
+    installation_id = 'timeout-' + uuid4().hex
+    class Dispatcher:
+        def dispatch(self, message, *, peer_identity):
+            calls.append(message)
+            if message == b'slow': time.sleep(0.35)
+            return {'ok': True}
+    class Server(NamedPipeControlServer):
+        def __enter__(self): super().__enter__(); ready.set(); return self
+    def serve():
+        try:
+            ControllerPipeHost(server_factory=lambda: Server(Dispatcher(), installation_id=installation_id,
+                allowed_sids={_current_user_sid()}), stop_requested=lambda: b'next' in calls).serve_forever()
+        except Exception as exc: failures.append(exc)
+    worker = threading.Thread(target=serve, daemon=True); worker.start()
+    assert ready.wait(5)
+    pipe_name = r'\\.\pipe\PicSyncra.Control.' + installation_id
+    with pytest.raises(ControlPipeError, match='czas'):
+        NamedPipeControlClient(pipe_name, response_timeout_seconds=0.1).request(b'slow')
+    assert NamedPipeControlClient(pipe_name).request(b'next') == {'ok': True}
+    worker.join(5)
+    assert not worker.is_alive() and not failures
+    assert calls == [b'slow', b'next']
+
+
 def test_server_shutdown_preserves_reply_until_delayed_client_reads(monkeypatch):
     from picsyncra.installation import control_pipe
     modules = control_pipe._windows_modules()
@@ -74,6 +103,7 @@ def test_native_read_failure_is_a_control_pipe_error_not_an_unhandled_win32_erro
     class Pipe:
         PIPE_READMODE_MESSAGE = 2
         def SetNamedPipeHandleState(self, *args): pass
+        def PeekNamedPipe(self, *args): return b'', 1, 0
     modules = control_pipe._windows_modules()
     file = File()
     monkeypatch.setattr(control_pipe, '_windows_modules', lambda: (*modules[:2], file, Pipe(), modules[4]))

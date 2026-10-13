@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import time
 from typing import Any
@@ -219,10 +220,13 @@ class NamedPipeControlServer:
 class NamedPipeControlClient:
     """Request one bounded response from a private installed-controller pipe."""
 
-    def __init__(self, pipe_name: str) -> None:
+    def __init__(self, pipe_name: str, *, response_timeout_seconds: float = 120.0) -> None:
         if not isinstance(pipe_name, str) or not pipe_name.startswith(_PIPE_PREFIX):
             raise ValueError("pipe_name is not a PicSyncra controller pipe.")
         self._pipe_name = pipe_name
+        if not math.isfinite(response_timeout_seconds) or response_timeout_seconds <= 0:
+            raise ValueError('Controller response timeout must be finite and positive.')
+        self._response_timeout_seconds = response_timeout_seconds
 
     def request(self, message: bytes) -> dict[str, object]:
         if not isinstance(message, bytes) or len(message) > MAX_MESSAGE_BYTES:
@@ -252,6 +256,13 @@ class NamedPipeControlClient:
                 handle, win32pipe.PIPE_READMODE_MESSAGE, None, None
             )
             win32file.WriteFile(handle, message)
+            response_deadline = time.monotonic() + self._response_timeout_seconds
+            while True:
+                _data, available, _remaining = win32pipe.PeekNamedPipe(handle, 0)
+                if available: break
+                if time.monotonic() >= response_deadline:
+                    raise ControlPipeError('Kontroler nie odpowiedział w wymaganym czasie. Sprawdź stan operacji przed ponowieniem.')
+                time.sleep(0.01)
             error_code, response = win32file.ReadFile(handle, _RESPONSE_BYTES)
             if error_code or len(response) > _RESPONSE_BYTES:
                 raise ControlPipeError("The controller response is invalid.")

@@ -262,7 +262,7 @@ def _create_ocr_execution_worker(ocr_settings: dict[str, object]) -> object | No
 
     context = resolve_install_context(Path(sys.executable))
     if context is not None:
-        return create_installed_ocr_worker(context)
+        return create_installed_ocr_worker(context, lazy=True)
     return OcrWorkerProcess(cpu_percent=int(ocr_settings.get("max_cpu_percent") or 35))
 
 

@@ -225,7 +225,17 @@ class ModuleLauncherWindow:
         if authorization_request_id:
             self.pending_authorization = None
             root.after(1, lambda: self.begin_authorization(authorization_request_id))
+        elif app:
+            # Opening an installed application must not depend on GitHub or
+            # wait for a catalog request holding the controller's pipe.
+            root.after(1, self.open_requested_app)
         else: self.refresh()
+
+    def open_requested_app(self):
+        if not self.app or self.busy or self.operation_id: return
+        app, self.app = self.app, None
+        if app == 'web': self.open_panel()
+        else: self.open_app(app)
 
     def close(self):
         if self.tray_ready:

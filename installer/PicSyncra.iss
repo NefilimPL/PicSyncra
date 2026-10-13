@@ -53,6 +53,10 @@ Name: "{commonappdata}\PicSyncra\primary-installation\control"; Flags: uninsneve
 Name: "{commonappdata}\PicSyncra\primary-installation\staging"; Flags: uninsneveruninstall
 
 [Files]
+Source: "{#BuildRoot}\PicSyncra-AppEntry\_internal\*"; DestDir: "{app}\apps\_internal"; Flags: recursesubdirs createallsubdirs ignoreversion
+Source: "{#BuildRoot}\PicSyncra-AppEntry\PicSyncra-AppEntry.exe"; DestDir: "{app}\apps"; DestName: "PicSyncra-WEB.exe"; Flags: ignoreversion; Components: web
+Source: "{#BuildRoot}\PicSyncra-AppEntry\PicSyncra-AppEntry.exe"; DestDir: "{app}\apps"; DestName: "PicSyncra-Migrator.exe"; Flags: ignoreversion; Components: migrator
+Source: "{#BuildRoot}\PicSyncra-AppEntry\PicSyncra-AppEntry.exe"; DestDir: "{app}\apps"; DestName: "PicSyncra.exe"; Flags: ignoreversion; Components: local
 ; A new helper runs outside the installed directories, including when the old
 ; controller/launcher cannot understand the new module update protocol.
 Source: "{#BuildRoot}\helper\*"; DestDir: "{tmp}\PicSyncra-SetupHelper"; Flags: dontcopy noencryption recursesubdirs createallsubdirs
@@ -73,12 +77,13 @@ Root: HKLM64; Subkey: "SOFTWARE\PicSyncra\Installations\primary-installation"; V
 Root: HKLM64; Subkey: "SOFTWARE\PicSyncra\Installations\primary-installation"; ValueType: string; ValueName: "DatabasePath"; ValueData: "{code:SelectedDatabasePath}"; Flags: uninsdeletekey
 
 [Icons]
-Name: "{autoprograms}\PicSyncra WEB"; Filename: "{app}\launcher\PicSyncra-Launcher.exe"; Parameters: "--app web"; Components: web
-Name: "{autoprograms}\PicSyncra Migrator"; Filename: "{app}\launcher\PicSyncra-Launcher.exe"; Parameters: "--app migrator"; Components: migrator
-Name: "{autoprograms}\PicSyncra"; Filename: "{app}\launcher\PicSyncra-Launcher.exe"; Parameters: "--app local"; Components: local
-Name: "{autodesktop}\PicSyncra WEB"; Filename: "{app}\launcher\PicSyncra-Launcher.exe"; Parameters: "--app web"; Tasks: desktopicons; Components: web
-Name: "{autodesktop}\PicSyncra Migrator"; Filename: "{app}\launcher\PicSyncra-Launcher.exe"; Parameters: "--app migrator"; Tasks: desktopicons; Components: migrator
-Name: "{autodesktop}\PicSyncra"; Filename: "{app}\launcher\PicSyncra-Launcher.exe"; Parameters: "--app local"; Tasks: desktopicons; Components: local
+Name: "{autoprograms}\PicSyncra WEB"; Filename: "{app}\apps\PicSyncra-WEB.exe"; Components: web
+Name: "{autoprograms}\PicSyncra Migrator"; Filename: "{app}\apps\PicSyncra-Migrator.exe"; Components: migrator
+Name: "{autoprograms}\PicSyncra"; Filename: "{app}\apps\PicSyncra.exe"; Components: local
+Name: "{autodesktop}\PicSyncra WEB"; Filename: "{app}\apps\PicSyncra-WEB.exe"; Tasks: desktopicons; Components: web
+Name: "{autodesktop}\PicSyncra Migrator"; Filename: "{app}\apps\PicSyncra-Migrator.exe"; Tasks: desktopicons; Components: migrator
+Name: "{autodesktop}\PicSyncra"; Filename: "{app}\apps\PicSyncra.exe"; Tasks: desktopicons; Components: local
+Name: "{autoprograms}\PicSyncra Aktualizator"; Filename: "{app}\launcher\PicSyncra-Launcher.exe"
 
 [Run]
 Filename: "{app}\launcher\PicSyncra-Launcher.exe"; Description: "Otwórz launcher PicSyncra (panel WEB i ikona w trayu)"; Flags: postinstall nowait skipifsilent
