@@ -24,6 +24,9 @@ def test_installed_build_from_clean_directory_and_repeated_release(tmp_path: Pat
     checkout = tmp_path / "builder's checkout"
     (checkout / "installer").mkdir(parents=True)
     shutil.copy2(ROOT / "installer" / "build_installer.ps1", checkout / "installer")
+    compiler_wrapper = ROOT / 'installer/compile_installer.ps1'
+    shutil.copy2(compiler_wrapper, checkout / 'installer')
+    shutil.copy2(ROOT / 'installer/PicSyncra.iss', checkout / 'installer')
     shutil.copytree(ROOT / "pic", checkout / "pic")
     shutil.copytree(ROOT / 'picsyncra', checkout / 'picsyncra', ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
     (checkout / 'tools').mkdir()
@@ -84,6 +87,13 @@ function Get-Command {
     return [pscustomobject]@{ Source = 'Invoke-TestIscc' }
 }
 function Invoke-TestIscc {
+    $buildRootArgument = @($args | Where-Object { $_ -like '/DBuildRoot=*' })[0]
+    if ($buildRootArgument -notmatch '^/DBuildRoot=[A-Z]:\\$') {
+        throw 'The compiler must use a short mapped build root to avoid MAX_PATH.'
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $buildRootArgument.Substring(12) 'module-initial-layout.json'))) {
+        throw 'The mapped compiler root does not refer to the prepared build.'
+    }
     if (-not (Test-Path -LiteralPath (Join-Path $Checkout 'dist\installed\fresh-verification-called.txt'))) {
         throw 'The compiler ran before fresh installation verification.'
     }

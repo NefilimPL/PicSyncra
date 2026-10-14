@@ -165,13 +165,13 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Nie powiodla sie weryfikacja swiezej instalacji. Setup nie zostanie utworzony.' }
 
     $iscc = Get-Command ISCC.exe -ErrorAction Stop
-    $ocrSetupArguments = @()
+    $compilerParameters = @{ BuildRoot = $distRoot; ReleaseId = $ReleaseId; BaseSetId = $moduleLayout.base; LocalSetId = $moduleLayout.local; Compiler = $iscc.Source }
     if ($BuildOcr) {
         if (-not $moduleLayout.ocr -or -not $moduleLayout.local_ocr) { throw 'Brakuje zestawow OCR wymaganych przez Setup.' }
-        $ocrSetupArguments = @("/DOcrSetId=$($moduleLayout.ocr)", "/DLocalOcrSetId=$($moduleLayout.local_ocr)")
+        $compilerParameters.OcrSetId = $moduleLayout.ocr
+        $compilerParameters.LocalOcrSetId = $moduleLayout.local_ocr
     }
-    & $iscc.Source "/DBuildRoot=$distRoot" "/DReleaseId=$ReleaseId" "/DBaseSetId=$($moduleLayout.base)" "/DLocalSetId=$($moduleLayout.local)" @ocrSetupArguments (Join-Path $PSScriptRoot 'PicSyncra.iss')
-    if ($LASTEXITCODE -ne 0) { throw 'Kompilacja Inno Setup nie powiodla sie.' }
+    & (Join-Path $PSScriptRoot 'compile_installer.ps1') @compilerParameters
 }
 finally {
     Pop-Location
