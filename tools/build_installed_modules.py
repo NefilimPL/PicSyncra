@@ -120,8 +120,15 @@ def prepare_layout(dist_root, *, release_id, tag, commit, channel='stable', sour
     manifest=generate_module_release_manifest(release_metadata=metadata,modules=modules,migrations=migrations)
     (assets/'PicSyncra-modules-manifest.json').write_bytes(manifest)
     base=tuple(m for m in modules if m.module_id not in {'local','ocr_runtime','ocr_models'})
+    local=tuple(m for m in modules if m.module_id=='local')
+    ocr_modules=tuple(m for m in modules if m.module_id in {'ocr_runtime','ocr_models'})
+    variants=[('base',base),('local',base+local)]
+    if ocr_modules:
+        if {m.module_id for m in ocr_modules} != {'ocr_runtime','ocr_models'}:
+            raise ValueError('Setup requires both OCR runtime and models.')
+        variants.extend([('ocr',base+ocr_modules),('local_ocr',base+local+ocr_modules)])
     layouts={}
-    for variant, chosen in (('base',base),('local',base+tuple(m for m in modules if m.module_id=='local'))):
+    for variant, chosen in variants:
         selected=make_module_set(1,release_id,chosen)
         root=safe_path(dist_root,'module-sets/'+selected.set_id)
         if root.exists(): shutil.rmtree(root)
@@ -131,7 +138,7 @@ def prepare_layout(dist_root, *, release_id, tag, commit, channel='stable', sour
                 target=root/file.path; target.parent.mkdir(parents=True,exist_ok=True); shutil.copyfile(payload/file.path,target)
         atomic_json(root/'module-set.json',module_set_payload(selected))
         layouts[variant]=selected.set_id
-    atomic_json(dist_root/'module-initial-layout.json',dict(schema=1,release_id=release_id,channel=channel,**layouts),replace=True)
+    atomic_json(dist_root/'module-initial-layout.json',dict(schema=1,release_id=release_id,channel=channel,ocr_management='setup',**layouts),replace=True)
     return layouts
 
 

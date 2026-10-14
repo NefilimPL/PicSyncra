@@ -18,6 +18,27 @@ class Element {
 }
 function find(item, predicate) { return predicate(item) ? item : item.children?.map(child => find(child, predicate)).find(Boolean); }
 
+test('missing OCR shows Setup instructions and no download or version selection', async () => {
+  resetBrowserGlobals(); global.document = {createElement:tag => new Element(tag)};
+  loadBrowserScript('picsyncra/web/static/module-updates-panel.js');
+  const panel = window.PicSyncra.ModuleUpdatesPanel.create({requestJson:async () => ({
+    ocr_management:'setup', ocr_installed:false, modules:[
+      {module_id:'ocr_runtime',label:'Silnik OCR',installed:false,current:null,versions:[]},
+      {module_id:'ocr_models',label:'Modele OCR',installed:false,current:null,versions:[]},
+    ],
+  })});
+  await panel.refresh();
+  for (const id of ['ocr_runtime','ocr_models']) {
+    const row = panel.rows.get(id);
+    assert.ok(find(row.element, child => child.textContent === 'Moduł nie zainstalowany'));
+    assert.equal(find(row.element, child => child.tagName === 'select'), undefined);
+  }
+  const download = find(panel.element, child => child.tagName === 'button' && child.textContent === 'Pobierz OCR');
+  assert.ok(!download || download.hidden);
+  assert.ok(find(panel.element, child => /Uruchom.*Setup/.test(child.textContent || '')));
+  panel.dispose();
+});
+
 test('installed OCR keeps an explicit reinstall action available', async () => {
   resetBrowserGlobals(); global.document = {createElement:tag => new Element(tag)};
   loadBrowserScript('picsyncra/web/static/module-updates-panel.js');

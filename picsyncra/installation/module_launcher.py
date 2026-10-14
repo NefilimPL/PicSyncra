@@ -179,13 +179,15 @@ class ModuleLauncherWindow:
         self.buttons=[]
         actions = [('Uruchom panel', self.open_panel), ('Uruchom Migrator', lambda: self.open_app('migrator')),
                               ('Uruchom LOCAL', lambda: self.open_app('local')), ('Sprawdź wersje', self.refresh),
-                              ('Aktualizuj', lambda: self.prepare('apply')), ('Pobierz OCR', lambda: self.prepare('install_ocr')),
+                              ('Aktualizuj', lambda: self.prepare('apply')),
                               ('Zatrzymaj backend', self.stop_backend), ('Uruchom ponownie backend', self.restart_backend),
                               ('Ponów odzyskiwanie', lambda: self._run(self.model.client.module_recover, self.accepted))]
         for index, (label, action) in enumerate(actions):
             button=ttk.Button(toolbar,text=label,command=action)
             button.grid(row=index//3,column=index%3,padx=3,pady=3,sticky='ew'); self.buttons.append(button)
         for column in range(3): toolbar.columnconfigure(column,weight=1)
+        ttk.Label(root, text='OCR doinstalujesz, uruchamiając ponownie pełny Setup i zaznaczając składnik OCR. '
+                  'Kolejne wersje zainstalowanego OCR obsługuje przycisk Aktualizuj.', wraplength=1000).pack(fill='x', padx=12, pady=4)
         backend_frame = ttk.Frame(root); backend_frame.pack(fill='x', padx=12, pady=6)
         ttk.Label(backend_frame, textvariable=self.backend_status).pack(side='left')
         self.autostart_control = ttk.Checkbutton(backend_frame, text='Uruchamiaj WEB w tle po starcie Windows',
@@ -381,6 +383,10 @@ class ModuleLauncherWindow:
         for index,module in enumerate(snapshot.get('modules',[])):
             row_index = index * 2
             self.ttk.Label(self.rows,text=module['label']).grid(row=row_index,column=0,padx=5,pady=10,sticky='w')
+            if module.get('installed') is False:
+                self.ttk.Label(self.rows,text='Moduł nie zainstalowany — uruchom Setup i zaznacz OCR.',
+                               wraplength=600).grid(row=row_index,column=1,columnspan=3,sticky='w',padx=5)
+                continue
             versions = self.ttk.Frame(self.rows)
             versions.grid(row=row_index,column=1,sticky='w',padx=5)
             for caption, version, release in [('Obecna', module['current'], module.get('current_release')),

@@ -1,5 +1,6 @@
 """Thin installed host. Portable entrypoints intentionally remain separate."""
 import multiprocessing
+import os
 import sys
 from pathlib import Path
 from contextlib import nullcontext
@@ -16,6 +17,10 @@ def run_application():
         if name in {'PicSyncra', 'PicSyncra-Migrator'} and resolve_install_context(Path(sys.executable)) != context:
             raise RuntimeError('Host nie należy już do aktywnego zestawu. Uruchom aplikację ponownie przez launcher.')
         context, selected = bootstrap_installed_modules(context, defer_ocr_payload=name != 'PicSyncra-OCR')
+        # Feature visibility must follow installed components before WEB imports
+        # its settings/routes; no Paddle import or model verification on startup.
+        from picsyncra.installation.ocr_component import installed_ocr_files_present
+        os.environ['PICSYNCRA_OCR_ENABLED'] = '1' if installed_ocr_files_present(context,selected) else '0'
         if name == 'PicSyncra-WEB':
             from picsyncra.web_manager import main
             main()
@@ -23,7 +28,6 @@ def run_application():
             from picsyncra.offline_migrator_gui import main
             main()
         elif name == 'PicSyncra-OCR':
-            import os
             from picsyncra.installation.module_state import module_set_root
             os.environ['PADDLE_PDX_CACHE_HOME'] = str(module_set_root(context, selected) / 'models/ocr')
             from picsyncra.installation.ocr_entrypoint import main

@@ -24,6 +24,71 @@ def strict_layout(context, schema):
         state_root=str(context.state_root), database_path=str(context.database_path), include_local=False)
 
 
+def optional_ocr_layout(context):
+    from picsyncra.sqlite_store import SCHEMA_VERSION
+    from picsyncra.installation.module_state import make_module_set, publish_module_set
+    from picsyncra.installation.module_manifest import parse_module_version, module_version_id
+    from picsyncra.installation.module_content import ModuleContentStore
+    from tests.module_fixtures import module_payload, release_payload
+    request = strict_layout(context, SCHEMA_VERSION)
+    path = context.program_root / 'module-initial-layout.json'
+    layout = json.loads(path.read_text())
+    base = json.loads((context.program_root / 'sets' / layout['base'] / 'module-set.json').read_text())
+    from picsyncra.installation.module_state import parse_module_set
+    extras = [module_payload('ocr_runtime', 'runtime/ocr/PicSyncra-OCR.exe'),
+              module_payload('ocr_models', 'models/ocr/model.bin')]
+    for item in extras:
+        item['database_min'] = item['database_max'] = SCHEMA_VERSION
+        item['version_id'] = module_version_id(item)
+    selected = make_module_set(1, 11, parse_module_set(base).modules + tuple(parse_module_version(item) for item in extras))
+    store = ModuleContentStore(context); store.import_bytes(b'code'); store.assemble(selected)
+    publish_module_set(context, selected)
+    path.write_text(json.dumps(dict(layout, ocr=selected.set_id, local_ocr=selected.set_id, ocr_management='setup')))
+    return request
+
+
+@pytest.mark.parametrize('include_ocr', [False, True])
+def test_fresh_setup_activates_only_selected_ocr_component(context, include_ocr):
+    request = optional_ocr_layout(context)
+    initialize_module_layout(dict(request, include_ocr=include_ocr))
+    ids = {m.module_id for m in read_module_set(context).modules}
+    assert {'ocr_runtime', 'ocr_models'} <= ids if include_ocr else not {'ocr_runtime', 'ocr_models'} & ids
+    assert json.loads((context.state_root / 'installation-settings.json').read_text())['ocr_management'] == 'setup'
+
+
+def test_setup_adds_ocr_offline_on_reopen_and_preserves_data_and_installed_ocr(context, monkeypatch):
+    from picsyncra.sqlite_store import SqliteStore
+    request = optional_ocr_layout(context)
+    initialize_module_layout(request); commit_setup(context)
+    store = SqliteStore(str(context.database_path)); store.save_config({'retain': 'user-data'})
+    (context.config_root / 'config.json').write_text('{"retain":"configuration"}')
+    monkeypatch.setattr('picsyncra.installation.module_content.ModuleContentStore._transfer_range',
+        lambda *args, **kwargs: pytest.fail('Setup must never download OCR'))
+    initialize_module_layout(dict(request, include_ocr=True)); commit_setup(context)
+    assert {'ocr_runtime', 'ocr_models'} <= {m.module_id for m in read_module_set(context).modules}
+    assert store.load_config() == {'retain': 'user-data'}
+    assert json.loads((context.config_root / 'config.json').read_text()) == {'retain': 'configuration'}
+    initialize_module_layout(dict(request, include_ocr=False))
+    assert {'ocr_runtime', 'ocr_models'} <= {m.module_id for m in read_module_set(context).modules}
+
+
+def test_older_setup_adds_missing_compatible_ocr_without_downgrading_active_modules(context):
+    from picsyncra.installation.module_state import make_module_set, activate_module_set, publish_module_set
+    from picsyncra.installation.module_content import ModuleContentStore
+    request = optional_ocr_layout(context)
+    initialize_module_layout(request); commit_setup(context)
+    base = read_module_set(context)
+    newer = make_module_set(2,12,base.modules,frozenset({'core'}))
+    ModuleContentStore(context).assemble(newer); publish_module_set(context,newer)
+    activate_module_set(context,newer,expected_revision=1)
+    initialize_module_layout(dict(request,include_ocr=True))
+    active = read_module_set(context)
+    assert active.release_id == 12 and active.pinned == newer.pinned
+    by_id = {m.module_id:m for m in active.modules}
+    assert {'ocr_runtime','ocr_models'} <= set(by_id)
+    assert all(by_id[m.module_id] == m for m in newer.modules)
+
+
 def test_fresh_install_creates_real_current_schema_before_activation(context):
     import sqlite3
     from picsyncra.sqlite_store import SCHEMA_VERSION

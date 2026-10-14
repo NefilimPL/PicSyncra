@@ -61,6 +61,7 @@
     }
     const update = button('Aktualizuj', () => prepare('apply'));
     const ocr = button('Pobierz OCR', () => prepare('install_ocr'));
+    ocr.hidden = true;
     const retry = button('Ponów pobieranie', () => prepare(retryAction)); retry.hidden = true;
     const authorizationLink = node('a', 'Otwórz jednorazowe logowanie Windows'); authorizationLink.hidden = true;
     const authorizationCancel = button('Anuluj logowanie', async () => {
@@ -74,7 +75,8 @@
     }); authorizationCancel.hidden = true;
     operationBox.append(status, progressbar, errorDetails, retry, authorizationLink, authorizationCancel);
     const ocrSection = node('div', undefined, 'module-ocr-install');
-    ocrSection.append(node('strong', 'Silnik i modele OCR'), ocr);
+    const ocrNote = node('p', '', 'settings-note');
+    ocrSection.append(node('strong', 'Silnik i modele OCR'), ocrNote, ocr);
     const refreshButton = button('Sprawdź wersje', () => refresh());
     controls.append(update, refreshButton);
     const backupLabel = node('label', 'Awaryjne odtworzenie bazy: ');
@@ -125,7 +127,7 @@
     }
     function synchronize() {
       update.disabled = ocr.disabled = refreshButton.disabled = busy;
-      for (const row of rows.values()) row.select.disabled = busy;
+      for (const row of rows.values()) if (row.select) row.select.disabled = busy;
       backups.disabled = busy;
       channel.disabled = busy;
       retry.disabled = busy;
@@ -133,6 +135,7 @@
     function select(moduleId, versionId) {
       const row = rows.get(moduleId);
       if (!row) throw new Error('Nieznany moduł.');
+      if (row.module.installed === false) throw new Error('Moduł nie zainstalowany. Uruchom Setup, aby go doinstalować.');
       if (versionId) selected.set(moduleId, versionId);
       else { selected.delete(moduleId); selectedVersions.delete(moduleId); }
       row.select.value = versionId || '';
@@ -211,6 +214,13 @@
         for (const module of snapshot.modules || []) {
           const row = node('div', undefined, 'module-update-row');
           const label = node('strong', module.label);
+          if (module.installed === false) {
+            const rowStatus = node('span', 'Moduł nie zainstalowany', 'settings-note');
+            row.append(label, rowStatus);
+            selected.delete(module.module_id); selectedVersions.delete(module.module_id);
+            rows.set(module.module_id, {module, element:row, select:null, status:rowStatus});
+            table.append(row); continue;
+          }
           const available = snapshot.offline ? (module.latest ? `${module.latest} (katalog lokalny)` : 'nie sprawdzono — katalog niedostępny') :
             module.latest || 'brak podpisanego wydania';
           const versions = node('div', undefined, 'module-version-pair');
@@ -251,8 +261,12 @@
           option.value = backup.backup_id; backups.append(option);
         }
         backups.value = restoreBackupId || '';
-        ocr.hidden = false;
+        ocr.hidden = snapshot.ocr_management === 'setup';
         ocr.textContent = snapshot.ocr_installed === true ? 'Zainstaluj ponownie OCR' : 'Pobierz OCR';
+        ocrNote.textContent = snapshot.ocr_management === 'setup' ? (snapshot.ocr_installed && snapshot.ocr_available === false ?
+          'OCR ma niekompletne pliki. Zakładka OCR jest ukryta; napraw instalację przed użyciem OCR.' : snapshot.ocr_installed ?
+          'OCR zainstalowany. Kolejne wersje zainstalujesz przyciskiem Aktualizuj.' :
+          'Moduł nie zainstalowany. Uruchom ponownie pełny Setup i zaznacz składnik OCR. Silnik i modele są w instalatorze; instalacja nie wymaga Internetu.') : '';
         clearTimeout(catalogTimer);
         if (snapshot.catalog_refreshing && !operationId && !disposed) {
           catalogTimer = setTimeout(() => { if (!busy && !operationId && !disposed) refresh(); }, 1500);

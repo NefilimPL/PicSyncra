@@ -58,7 +58,7 @@ def test_base_installer_contains_required_apps_but_not_ocr_or_local() -> None:
     assert layout.product_app_id == PRODUCT_APP_ID
     assert layout.required_components == ("web", "migrator")
     assert layout.optional_components == ()
-    assert layout.downloadable_components == ("ocr",)
+    assert layout.downloadable_components == ()
     assert layout.autostart_enabled is False
 
 
@@ -81,7 +81,18 @@ def test_local_is_opt_in_without_changing_the_required_base_components() -> None
 
     assert layout.required_components == ("web", "migrator")
     assert layout.optional_components == ("local",)
-    assert layout.downloadable_components == ("ocr",)
+    assert layout.downloadable_components == ()
+
+
+def test_ocr_is_an_opt_in_setup_component_with_bundled_payloads():
+    layout = build_installer_layout(include_local=True, include_ocr=True)
+    assert layout.required_components == ('web','migrator')
+    assert layout.optional_components == ('local','ocr')
+    assert layout.downloadable_components == ()
+    source = (Path(__file__).resolve().parents[1] / 'installer/PicSyncra.iss').read_text(encoding='utf-8')
+    assert 'Name: "ocr"; Description:' in source
+    assert 'Components: ocr;' in source
+    assert '"include_ocr":' in source
 
 
 def test_inno_base_package_uses_the_setup_mutex_and_preserves_machine_data() -> None:

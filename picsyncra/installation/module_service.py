@@ -59,6 +59,11 @@ class ModuleService:
             if value in {'stable', 'dev'}: return value
         return 'stable'
 
+    def _ocr_management(self):
+        path = safe_path(self.context.state_root, 'installation-settings.json')
+        settings = json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
+        return 'setup' if settings.get('ocr_management') == 'setup' else 'download'
+
     def backend_start_allowed(self):
         try:
             status = self.executor.status()
@@ -139,10 +144,18 @@ class ModuleService:
             versions.setdefault(module.version_id, dict(version_id=module.version_id, display_version=module.display_version,
                 release_id=module.source_release_id, **provenance(module), available=False))
             newest = next((m for m in latest.modules if m.module_id == module.module_id), None) if latest else None
-            rows.append(dict(module_id=module.module_id, label=labels[module.module_id], current=module.display_version,
+            rows.append(dict(module_id=module.module_id, label=labels[module.module_id], installed=True, current=module.display_version,
                              current_id=module.version_id, latest=newest.display_version if newest else None,
                              current_release=provenance(module), latest_release=provenance(newest) if newest else None,
                              pinned=module.module_id in active.pinned, versions=list(versions.values())[:50]))
+        ocr_management = self._ocr_management()
+        installed_ids = {m.module_id for m in active.modules}
+        if ocr_management == 'setup':
+            for module_id in ('ocr_runtime','ocr_models'):
+                if module_id not in installed_ids:
+                    rows.append(dict(module_id=module_id, label=labels[module_id], installed=False,
+                        current=None, current_id=None, latest=None, current_release=None, latest_release=None,
+                        pinned=False, versions=[]))
         backups = []
         backup_root = safe_path(self.context.state_root, 'backups/operations')
         if backup_root.exists():
@@ -153,11 +166,14 @@ class ModuleService:
                 except (RuntimeError, OSError, ValueError): continue
                 if len(backups) >= 100: break
         operation = self.operation(self.current_operation_id) if self.busy and self.current_operation_id else None
+        from .ocr_component import installed_ocr_files_present
         return dict(revision=active.revision, channel=channel, modules=rows,
                     catalog_refreshing=bool(catalog_state and catalog_state['refreshing']),
                     offline=catalog_state['offline'] if catalog_state else self.source.offline,
                     catalog_error=catalog_state['error'] if catalog_state else getattr(self.source, 'error', None), backups=backups, operation=operation,
-                    ocr_installed=all(any(m.module_id == name for m in active.modules) for name in ('ocr_runtime', 'ocr_models')),
+                    ocr_management=ocr_management,
+                    ocr_available=installed_ocr_files_present(self.context,active),
+                    ocr_installed={'ocr_runtime','ocr_models'} <= installed_ids,
                     blocked_releases=[dict(release_id=e.release_id, tag=e.tag, reason=e.blocked_reason) for e in self.entries if e.blocked_reason][:50])
 
     def prepare(self, *, action, selected, excluded, restore_backup_id=None):
@@ -168,6 +184,9 @@ class ModuleService:
     def _prepare(self, *, action, selected, excluded, restore_backup_id=None):
         from .module_preflight import check_update_access
         if self.busy: raise ModuleExecutionError('Inna operacja modułów jest w toku.')
+        if action == 'install_ocr' and self._ocr_management() == 'setup':
+            if not {'ocr_runtime','ocr_models'} <= {m.module_id for m in read_module_set(self.context).modules}:
+                raise ModuleExecutionError('Moduł OCR nie zainstalowany. Uruchom pełny Setup i zaznacz składnik OCR.')
         check_update_access(self.context)
         active = read_module_set(self.context)
         releases = self._catalog()

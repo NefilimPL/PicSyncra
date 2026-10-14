@@ -21,6 +21,24 @@ class ActiveOcrComponent:
     component_id: str
 
 
+def installed_ocr_files_present(context: InstallContext, selected) -> bool:
+    """Check feature availability without loading Paddle or hashing model data.
+
+    Full integrity/compatibility verification remains the worker's job. The
+    launcher/WEB startup only checks the entrypoint and declared model files.
+    """
+    from .module_state import module_set_root
+    from .module_filesystem import safe_path
+    modules = {module.module_id: module for module in selected.modules}
+    if not {'ocr_runtime','ocr_models'} <= set(modules): return False
+    try:
+        root = module_set_root(context,selected)
+        return safe_path(root,'runtime/ocr/PicSyncra-OCR.exe').is_file() and all(
+            safe_path(root,file.path).is_file() for file in modules['ocr_models'].files)
+    except (OSError,ValueError,RuntimeError):
+        return False
+
+
 def _load_json(path: Path) -> dict[str, object] | None:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))

@@ -16,6 +16,44 @@ class Source:
         return (ModuleCatalogEntry(5, 'v5', release.published_at, release),)
 
 
+def test_setup_managed_missing_ocr_is_visible_and_cannot_be_downloaded(context):
+    import json
+    _, store, _ = prepare(context)
+    (context.state_root / 'installation-settings.json').write_text('{"ocr_management":"setup"}')
+    service = ModuleService(context, Controller(), source=Source(), content=store)
+    catalog = service.catalog()
+    missing = {row['module_id']: row for row in catalog['modules'] if row.get('installed') is False}
+    assert {'ocr_runtime','ocr_models'} <= set(missing)
+    assert catalog['ocr_management'] == 'setup' and catalog['ocr_installed'] is False
+    assert all(missing[name]['current'] is None and missing[name]['versions'] == [] for name in ('ocr_runtime','ocr_models'))
+    service.source.load = lambda _: pytest.fail('OCR installation must be rejected before network')
+    with pytest.raises(RuntimeError, match='Setup'):
+        service.prepare(action='install_ocr', selected={}, excluded=[])
+
+
+def test_setup_managed_installed_ocr_keeps_receiving_normal_module_updates(context):
+    from tests.module_fixtures import module_payload
+    from picsyncra.installation.module_state import make_module_set, activate_module_set
+    _, store, _ = prepare(context)
+    modules = [module_payload(), module_payload('migrator','apps/migrator/PicSyncra-Migrator.exe'),
+        module_payload('ocr_runtime','runtime/ocr/PicSyncra-OCR.exe'),
+        module_payload('ocr_models','models/ocr/model.bin')]
+    old = parse_module_manifest(release_payload(1, modules))
+    active = make_module_set(2,1,old.modules)
+    store.assemble(active); activate_module_set(context,active,expected_revision=1)
+    (context.state_root / 'installation-settings.json').write_text('{"ocr_management":"setup"}')
+    modules[-2] = module_payload('ocr_runtime','runtime/ocr/PicSyncra-OCR.exe',b'next-engine',source=5)
+    modules[-1] = module_payload('ocr_models','models/ocr/model.bin',b'next-model',source=5)
+    newer = parse_module_manifest(release_payload(5, modules))
+    class OcrSource(Source):
+        def load(self, channel): return (ModuleCatalogEntry(5,'v5',newer.published_at,newer),)
+    service = ModuleService(context,Controller(),source=OcrSource(),content=store)
+    plan = service.prepare(action='apply',selected={},excluded=[])
+    assert not plan['conflicts']
+    assert {m['module_id'] for m in plan['changes']} == {'ocr_runtime','ocr_models'}
+    assert plan['download_bytes'] == len(b'next-engine') + len(b'next-model')
+
+
 def test_reinstall_ocr_repairs_missing_files_even_when_versions_are_unchanged(context):
     from tests.module_fixtures import module_payload
     from picsyncra.installation.module_state import make_module_set, activate_module_set, module_set_root, verify_module_set_files

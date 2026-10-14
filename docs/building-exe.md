@@ -106,7 +106,7 @@ WEB, Migratora i LOCAL oraz pomocnika instalatora, a następnie przekazuje je do
 Inno Setup:
 
 ```powershell
-powershell -NoProfile -File installer/build_installer.ps1 -ReleaseId 1
+powershell -NoProfile -File installer/build_installer.ps1 -ReleaseId 1 -BuildOcr
 ```
 
 W Windows można uruchomić ten sam build bez wpisywania polecenia PowerShell:
@@ -115,7 +115,7 @@ W Windows można uruchomić ten sam build bez wpisywania polecenia PowerShell:
 Generator exe\BUILD_INSTALLER.bat 1
 ```
 
-Skrypt domyślnie przygotowuje także pobierany później komponent OCR. Aby zbudować
+Skrypt domyślnie umieszcza w instalatorze opcjonalny silnik i modele OCR. Aby zbudować
 sam instalator podstawowy, użyj `Generator exe\BUILD_INSTALLER.bat 1 --without-ocr`.
 Gotowy plik instalatora to `dist\installed\PicSyncra-Setup-<release-id>.exe`,
 na przykład `dist\installed\PicSyncra-Setup-1.exe`. Ponowne budowanie tego samego
@@ -124,12 +124,22 @@ wydania zastępuje przygotowane katalogi komponentów, usuwając stare pliki.
 Aby użyć konkretnego interpretera, na przykład środowiska wirtualnego projektu:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File installer/build_installer.ps1 -ReleaseId 1 -Python .venv/Scripts/python.exe
+powershell -NoProfile -ExecutionPolicy Bypass -File installer/build_installer.ps1 -ReleaseId 1 -BuildOcr -Python .venv/Scripts/python.exe
 ```
 
 Polecenie wymaga dostępnych w `PATH` interpretera Python i `ISCC.exe` z Inno
 Setup. LOCAL jest zawarty w artefakcie, ale pozostaje opcją instalatora;
-podstawowy pakiet nie zawiera OCR. Skrypt tworzy `active.json` dla wydania i
+OCR wybiera się osobnym checkboxem podczas instalacji. Bez zaznaczenia silnik
+i modele nie są instalowane, a zakładka OCR w ustawieniach WEB jest ukryta.
+Pierwszą instalację OCR wykonuje się przez ponowne uruchomienie pełnego Setup
+z zaznaczonym składnikiem OCR, bez pobierania z Internetu. Baza i konfiguracja
+pozostają zachowane. Odznaczenie składnika przy kolejnej instalacji nie usuwa
+wcześniej zainstalowanego OCR. Zwykły aktualizator aktualizuje już zainstalowane
+moduły OCR, ale nie doinstalowuje brakującego składnika.
+Build z `--without-ocr` nie oferuje checkboxa OCR.
+Przed kompilacją Setup generator uruchamia skompilowanego pomocnika dla każdej
+dostępnej kombinacji składników i sprawdza bazę oraz aktywowany zestaw.
+Skrypt tworzy `active.json` dla wydania i
 kompiluje `installer/PicSyncra.iss`. Nie uruchamia się go na komputerze z
 produkcyjną instalacją deweloperską — instalację, naprawę i deinstalację należy
 sprawdzić w czystej maszynie wirtualnej bez Pythona.

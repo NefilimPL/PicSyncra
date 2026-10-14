@@ -79,16 +79,18 @@ class WindowsRegistryWriter:
             return
 
 
-def build_installer_layout(*, include_local: bool) -> InstallerLayout:
+def build_installer_layout(*, include_local: bool, include_ocr: bool = False) -> InstallerLayout:
     """Return the base component layout without implicitly enabling OCR or startup."""
 
     if not isinstance(include_local, bool):
         raise ValueError("include_local must be a boolean.")
+    if not isinstance(include_ocr, bool):
+        raise ValueError("include_ocr must be a boolean.")
     return InstallerLayout(
         product_app_id=PRODUCT_APP_ID,
         required_components=("web", "migrator"),
-        optional_components=("local",) if include_local else (),
-        downloadable_components=("ocr",),
+        optional_components=(("local",) if include_local else ()) + (("ocr",) if include_ocr else ()),
+        downloadable_components=(),
         autostart_enabled=False,
     )
 

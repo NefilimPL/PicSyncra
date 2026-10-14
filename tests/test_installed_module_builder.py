@@ -6,6 +6,40 @@ from tools.build_installed_modules import build_module_payloads
 from tests.test_module_state import context
 
 
+@pytest.mark.parametrize('with_ocr', [False, True])
+def test_setup_payload_variants_include_ocr_only_when_selected(tmp_path, monkeypatch, with_ocr):
+    from tools import build_installed_modules as builder
+    from picsyncra.installation.module_state import parse_module_set
+    source = tmp_path / 'source'; source.mkdir()
+    (source / 'picsyncra').mkdir(); (source / 'picsyncra/config.py').write_text('value = 1')
+    (source / 'PicSyncra.pyw').write_text('pass')
+    (source / 'installer').mkdir()
+    import shutil
+    shutil.copyfile(builder.ROOT / 'installer/module-compatibility.json', source / 'installer/module-compatibility.json')
+    monkeypatch.setattr(builder, 'ROOT', source)
+    dist = tmp_path / 'dist'
+    for name in ('PicSyncra-WEB', 'PicSyncra-Migrator', 'PicSyncra'):
+        directory = dist / name; directory.mkdir(parents=True)
+        (directory / (name + '.exe')).write_bytes(b'host')
+    if with_ocr:
+        directory = dist / 'PicSyncra-OCR'; directory.mkdir()
+        (directory / 'PicSyncra-OCR.exe').write_bytes(b'ocr-engine')
+        models = directory / '_internal/ocr_models'; models.mkdir(parents=True)
+        (models / 'model.bin').write_bytes(b'ocr-model')
+    layouts = builder.prepare_layout(dist, release_id=11, tag='v11', commit='a' * 40)
+    assert set(layouts) == ({'base', 'local', 'ocr', 'local_ocr'} if with_ocr else {'base', 'local'})
+    for variant, set_id in layouts.items():
+        root = dist / 'module-sets' / set_id
+        selected = parse_module_set(json.loads((root / 'module-set.json').read_text()))
+        ids = {m.module_id for m in selected.modules}
+        assert ('local' in ids) == variant.startswith('local')
+        assert {'ocr_runtime', 'ocr_models'} <= ids if 'ocr' in variant else not {'ocr_runtime', 'ocr_models'} & ids
+        if 'ocr' in variant:
+            assert (root / 'runtime/ocr/PicSyncra-OCR.exe').read_bytes() == b'ocr-engine'
+            assert (root / 'models/ocr/model.bin').read_bytes() == b'ocr-model'
+    assert json.loads((dist / 'module-initial-layout.json').read_text())['ocr_management'] == 'setup'
+
+
 def test_ftp_only_edit_preserves_sql_and_model_identities_and_all_ranges_reconstruct(tmp_path):
     root=tmp_path/'payload'
     contents={'picsyncra/config.py':b'core', 'picsyncra/services/ftp_service.py':b'ftp-1',

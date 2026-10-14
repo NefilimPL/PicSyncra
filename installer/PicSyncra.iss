@@ -40,6 +40,9 @@ Name: "custom"; Description: "Wybór składników"; Flags: iscustom
 Name: "web"; Description: "Panel WEB"; Types: full custom; Flags: fixed
 Name: "migrator"; Description: "Migrator"; Types: full custom; Flags: fixed
 Name: "local"; Description: "Wersja lokalna (opcjonalna)"
+#ifdef OcrSetId
+Name: "ocr"; Description: "OCR — silnik i modele (opcjonalne, instalacja bez Internetu)"
+#endif
 
 [Dirs]
 ; ProgramData is intentionally not cleaned by the uninstaller: it may contain
@@ -60,8 +63,12 @@ Source: "{#BuildRoot}\PicSyncra-AppEntry\PicSyncra-AppEntry.exe"; DestDir: "{app
 ; A new helper runs outside the installed directories, including when the old
 ; controller/launcher cannot understand the new module update protocol.
 Source: "{#BuildRoot}\helper\*"; DestDir: "{tmp}\PicSyncra-SetupHelper"; Flags: dontcopy noencryption recursesubdirs createallsubdirs
-Source: "{#BuildRoot}\module-sets\{#BaseSetId}\*"; DestDir: "{app}\sets\{#BaseSetId}"; Check: not WizardIsComponentSelected('local'); Flags: recursesubdirs createallsubdirs ignoreversion
-Source: "{#BuildRoot}\module-sets\{#LocalSetId}\*"; DestDir: "{app}\sets\{#LocalSetId}"; Components: local; Flags: recursesubdirs createallsubdirs ignoreversion
+Source: "{#BuildRoot}\module-sets\{#BaseSetId}\*"; DestDir: "{app}\sets\{#BaseSetId}"; Check: (not WizardIsComponentSelected('local')) and (not OcrSelected); Flags: recursesubdirs createallsubdirs ignoreversion
+Source: "{#BuildRoot}\module-sets\{#LocalSetId}\*"; DestDir: "{app}\sets\{#LocalSetId}"; Components: local; Check: not OcrSelected; Flags: recursesubdirs createallsubdirs ignoreversion
+#ifdef OcrSetId
+Source: "{#BuildRoot}\module-sets\{#OcrSetId}\*"; DestDir: "{app}\sets\{#OcrSetId}"; Components: ocr; Check: not WizardIsComponentSelected('local'); Flags: recursesubdirs createallsubdirs ignoreversion
+Source: "{#BuildRoot}\module-sets\{#LocalOcrSetId}\*"; DestDir: "{app}\sets\{#LocalOcrSetId}"; Components: ocr; Check: WizardIsComponentSelected('local'); Flags: recursesubdirs createallsubdirs ignoreversion
+#endif
 Source: "{#BuildRoot}\PicSyncra-Controller\*"; DestDir: "{app}\controller"; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "{#BuildRoot}\helper\*"; DestDir: "{app}\controller\helper"; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "{#BuildRoot}\module-initial-layout.json"; DestDir: "{app}"; Flags: ignoreversion
@@ -107,6 +114,20 @@ var
 function SetupCompletedSuccessfully: Boolean;
 begin
   Result := SetupSucceeded;
+end;
+
+function OcrSelected: Boolean;
+begin
+#ifdef OcrSetId
+  Result := WizardIsComponentSelected('ocr');
+#else
+  Result := False;
+#endif
+end;
+
+function JsonBoolean(Value: Boolean): String;
+begin
+  if Value then Result := 'true' else Result := 'false';
 end;
 
 function StateRoot: String;
@@ -294,10 +315,7 @@ begin
     WizardForm.StatusLabel.Caption := 'Weryfikowanie bazy i aktywowanie modułów z instalatora…';
     InspectSelectedDatabase;
     ImportSelectedConfiguration;
-    if WizardIsComponentSelected('local') then
-      RunSetupHelper('initialize-modules', '{"installation_id":"primary-installation","program_root":"' + JsonEscape(ExpandConstant('{app}')) + '","state_root":"' + JsonEscape(StateRoot) + '","database_path":"' + JsonEscape(SelectedDatabasePath('')) + '","include_local":true}')
-    else
-      RunSetupHelper('initialize-modules', '{"installation_id":"primary-installation","program_root":"' + JsonEscape(ExpandConstant('{app}')) + '","state_root":"' + JsonEscape(StateRoot) + '","database_path":"' + JsonEscape(SelectedDatabasePath('')) + '","include_local":false}');
+    RunSetupHelper('initialize-modules', '{"installation_id":"primary-installation","program_root":"' + JsonEscape(ExpandConstant('{app}')) + '","state_root":"' + JsonEscape(StateRoot) + '","database_path":"' + JsonEscape(SelectedDatabasePath('')) + '","include_local":' + JsonBoolean(WizardIsComponentSelected('local')) + ',"include_ocr":' + JsonBoolean(OcrSelected) + '}');
     RunSetupHelper('configure-startup', StartupJson);
     RunControllerTask(ControllerTaskParameters,
       'Nie można zarejestrować zadania kontrolera PicSyncra');

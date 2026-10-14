@@ -19,11 +19,17 @@ from picsyncra.installation.module_state import read_module_set, parse_module_se
 
 def verify_fresh_setup(dist_root: Path, work_root: Path):
     dist_root, work_root = dist_root.resolve(strict=True), work_root.resolve(strict=True)
-    helper = safe_path(dist_root, 'helper/PicSyncra-SetupHelper.exe')
     layout = json.loads(safe_path(dist_root, 'module-initial-layout.json').read_text(encoding='utf-8'))
-    source = safe_path(dist_root, 'module-sets/' + layout['base'])
+    if ('ocr' in layout) != ('local_ocr' in layout): raise ValueError('Incomplete bundled OCR variants.')
+    for variant in ('base','local','ocr','local_ocr'):
+        if variant in layout: _verify_variant(dist_root, work_root, layout, variant)
+
+
+def _verify_variant(dist_root, work_root, layout, variant):
+    helper = safe_path(dist_root, 'helper/PicSyncra-SetupHelper.exe')
+    source = safe_path(dist_root, 'module-sets/' + layout[variant])
     selected = parse_module_set(json.loads(safe_path(source, 'module-set.json').read_text(encoding='utf-8')))
-    if selected.set_id != layout['base']: raise ValueError('Invalid bundled base module identity.')
+    if selected.set_id != layout[variant]: raise ValueError('Invalid bundled module identity.')
     with tempfile.TemporaryDirectory(prefix='fresh-setup-', dir=work_root) as directory:
         workspace = Path(directory).resolve(strict=True)
         # This checked, newly created directory is the only recursive cleanup
@@ -42,11 +48,13 @@ def verify_fresh_setup(dist_root: Path, work_root: Path):
                 # avoid copying hundreds of MB; fallback supports other volumes.
                 try: os.link(item, destination)
                 except OSError: shutil.copyfile(item, destination)
-        (program / 'module-initial-layout.json').write_text(json.dumps(dict(layout, local=layout['base'])), encoding='utf-8')
+        (program / 'module-initial-layout.json').write_text(json.dumps(layout), encoding='utf-8')
         context = InstallContext('build-verification', program, state, state / 'config', state / 'data/picsyncra.sqlite')
         request = workspace / 'request.json'
-        request.write_text(json.dumps(dict(installation_id=context.installation_id, program_root=str(program),
-            state_root=str(state), database_path=str(context.database_path), include_local=False)), encoding='utf-8')
+        payload = dict(installation_id=context.installation_id, program_root=str(program),
+            state_root=str(state), database_path=str(context.database_path), include_local=variant.startswith('local'))
+        if 'ocr' in variant: payload['include_ocr'] = True
+        request.write_text(json.dumps(payload), encoding='utf-8')
         result = subprocess.run([str(helper), 'initialize-modules', '--request', str(request)], cwd=workspace,
             env=dict(os.environ, PICSYNCRA_HEADLESS='1'), stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=600)
         if result.returncode:
@@ -60,7 +68,7 @@ def verify_fresh_setup(dist_root: Path, work_root: Path):
             raise RuntimeError('Fresh Setup database schema does not satisfy the bundled modules.')
         if read_module_set(context) != selected:
             raise RuntimeError('Fresh Setup activated an unexpected module selection.')
-        print(f'Fresh Setup verification passed: database schema {inspection.schema_version}; {len(selected.modules)} modules activated.')
+        print(f'Fresh Setup verification passed ({variant}): database schema {inspection.schema_version}; {len(selected.modules)} modules activated.')
 
 
 def main():

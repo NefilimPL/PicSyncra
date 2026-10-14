@@ -43,7 +43,8 @@ def _create_fresh_database(path, expected_schema):
 
 def initialize_module_layout(request):
     keys={'installation_id','program_root','state_root','database_path','include_local'}
-    if not isinstance(request,dict) or set(request)!=keys or type(request['include_local']) is not bool:
+    if (not isinstance(request,dict) or set(request) not in (keys, keys | {'include_ocr'})
+        or type(request['include_local']) is not bool or type(request.get('include_ocr',False)) is not bool):
         raise ValueError('Invalid initial module layout request.')
     context=InstallContext(request['installation_id'],Path(request['program_root']),Path(request['state_root']),
                            Path(request['state_root'])/'config',Path(request['database_path']))
@@ -73,9 +74,15 @@ def initialize_module_layout(request):
         settings=json.loads(settings_path.read_text(encoding='utf-8')) if settings_path.exists() else {}
         if not isinstance(settings,dict): raise ValueError('Invalid installation settings.')
         if 'channel' not in settings: settings['channel']=channel
-        selected_id=layout['local' if request['include_local'] else 'base']
+        if layout.get('ocr_management') == 'setup': settings['ocr_management']='setup'
+        variant = 'local' if request['include_local'] else 'base'
+        if request.get('include_ocr',False): variant = 'local_ocr' if request['include_local'] else 'ocr'
+        if variant not in layout: raise ValueError('Ten instalator nie zawiera składnika OCR. Użyj pełnego Setup z OCR.')
+        selected_id=layout[variant]
         selected=parse_module_set(json.loads(safe_path(context.program_root,'sets/'+selected_id+'/module-set.json').read_text(encoding='utf-8')))
         if selected.set_id!=selected_id: raise ValueError('Initial set identity mismatch.')
+        if request.get('include_ocr',False) and not {'ocr_runtime','ocr_models'} <= {m.module_id for m in selected.modules}:
+            raise ValueError('Niekompletny składnik OCR w instalatorze.')
         packaged = selected
         changed = True
         if previous:
@@ -84,11 +91,19 @@ def initialize_module_layout(request):
             # OCR/LOCAL modules absent from the package remain installed.
             if packaged.release_id >= previous.release_id:
                 chosen.update({m.module_id: m for m in packaged.modules if m.module_id not in previous.pinned})
+            else:
+                # An older offline Setup may add explicitly requested missing
+                # optional components. Compatibility is checked below; active
+                # application versions, release identity and pins stay intact.
+                requested = ({'local'} if request['include_local'] else set()) | (
+                    {'ocr_runtime','ocr_models'} if request.get('include_ocr',False) else set())
+                chosen.update({m.module_id: m for m in packaged.modules
+                               if m.module_id in requested and m.module_id not in chosen})
             if chosen == {m.module_id: m for m in previous.modules}:
                 changed = False
                 selected = previous
             else:
-                selected = make_module_set(previous.revision + 1, packaged.release_id,
+                selected = make_module_set(previous.revision + 1, max(packaged.release_id,previous.release_id),
                                            tuple(chosen.values()), previous.pinned)
             if not changed and database_changed:
                 changed = True
@@ -114,6 +129,7 @@ def initialize_module_layout(request):
         if not changed:
             verify_module_set_files(context, previous)
             if fresh_database: _create_fresh_database(context.database_path, schema)
+            atomic_json(settings_path,settings,replace=True)
             atomic_json(safe_path(context.state_root, 'module-setup-result.json'),
                         setup_receipt(context, dict(changed=False, target_set_id=previous.set_id,
                                                    previous_marker=marker, state='activating')), replace=True)
