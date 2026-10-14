@@ -311,7 +311,7 @@ def main(argv: list[str] | None = None, *, registry: RegistryWriter | None = Non
             response = {"ok": access["exists"] and access["is_directory"], "access": access}
         else:  # pragma: no cover - argparse keeps this unreachable
             parser.error("Unsupported setup helper command.")
-    except (OSError, ValueError, RuntimeError) as exc:
+    except (OSError, ValueError, RuntimeError, sqlite3.Error) as exc:
         try:
             args.request.with_suffix('.error.txt').write_text(str(exc), encoding='utf-8')
         except OSError:

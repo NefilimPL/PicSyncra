@@ -86,7 +86,7 @@ Name: "{autodesktop}\PicSyncra"; Filename: "{app}\apps\PicSyncra.exe"; Tasks: de
 Name: "{autoprograms}\PicSyncra Aktualizator"; Filename: "{app}\launcher\PicSyncra-Launcher.exe"
 
 [Run]
-Filename: "{app}\launcher\PicSyncra-Launcher.exe"; Description: "Otwórz launcher PicSyncra (panel WEB i ikona w trayu)"; Flags: postinstall nowait skipifsilent
+Filename: "{app}\launcher\PicSyncra-Launcher.exe"; Description: "Otwórz launcher PicSyncra (panel WEB i ikona w trayu)"; Flags: postinstall nowait skipifsilent; Check: SetupCompletedSuccessfully
 
 [UninstallRun]
 Filename: "{sys}\schtasks.exe"; Parameters: "/End /TN ""PicSyncra Controller primary-installation"""; RunOnceId: "stop-controller"; Flags: runhidden waituntilterminated
@@ -101,6 +101,13 @@ var
   ExistingDatabasePage: TInputFileWizardPage;
   ConfigurationImportPage: TInputOptionWizardPage;
   ConfigurationRootPage: TInputDirWizardPage;
+  SetupSucceeded: Boolean;
+  HadPreviousInstallation: Boolean;
+
+function SetupCompletedSuccessfully: Boolean;
+begin
+  Result := SetupSucceeded;
+end;
 
 function StateRoot: String;
 begin
@@ -220,6 +227,8 @@ var
   ErrorText: AnsiString;
 begin
   Result := '';
+  SetupSucceeded := False;
+  HadPreviousInstallation := FileExists(ExpandConstant('{app}\active.json'));
   try
     WizardForm.StatusLabel.Caption := 'Sprawdzanie instalacji i zatrzymywanie backendu przed wymianą plików…';
     ExtractTemporaryFiles('{tmp}\PicSyncra-SetupHelper\*');
@@ -296,15 +305,28 @@ begin
       'Nie można uruchomić zadania kontrolera PicSyncra');
     WizardForm.StatusLabel.Caption := 'Sprawdzanie uruchomienia kontrolera i panelu WEB…';
     RunSetupHelper('verify-startup', StartupJson);
+    SetupSucceeded := True;
     except
       FailureMessage := GetExceptionMessage;
-      try
-        RunSetupHelper('rollback-upgrade', StartupJson);
-        RunControllerTask('/Run /TN "PicSyncra Controller primary-installation"',
-          'Nie można ponownie uruchomić kontrolera po cofnięciu');
-        RunSetupHelper('resume-previous', StartupJson);
-      except
-        FailureMessage := FailureMessage + #13#10 + 'Odzyskiwanie: ' + GetExceptionMessage;
+      if HadPreviousInstallation or FileExists(ExpandConstant('{app}\active.json')) then begin
+        try
+          RunSetupHelper('rollback-upgrade', StartupJson);
+          if HadPreviousInstallation then begin
+            RunControllerTask('/Run /TN "PicSyncra Controller primary-installation"',
+              'Nie można ponownie uruchomić kontrolera po cofnięciu');
+            RunSetupHelper('resume-previous', StartupJson);
+          end;
+        except
+          FailureMessage := FailureMessage + #13#10 + 'Odzyskiwanie: ' + GetExceptionMessage;
+        end;
+      end else if not FileExists(ExpandConstant('{app}\active.json')) then begin
+        { A failed first activation has no previous installation to resume.
+          Remove only its registration so another Setup can retry safely. }
+        try
+          RunSetupHelper('unregister', '{"installation_id":"primary-installation"}');
+        except
+          Log('Nie udało się usunąć rejestracji niedokończonej pierwszej instalacji: ' + GetExceptionMessage);
+        end;
       end;
       RaiseException(FailureMessage);
     end;

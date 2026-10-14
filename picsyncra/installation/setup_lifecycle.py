@@ -157,8 +157,16 @@ def rollback_setup(context):
                 'sets/' + marker['set_id'] + '/module-set.json').read_text(encoding='utf-8')))
             verify_module_set_files(context, old)
         if result.get('changed') and marker and not still_previous:
+            if result.get('selected_database_backup_id'):
+                from dataclasses import replace
+                selected_database = Path(result['selected_database_backup_path'])
+                if not selected_database.is_absolute(): raise RuntimeError('Invalid Setup selected database backup path.')
+                restore_backup(replace(context, database_path=selected_database), result['selected_database_backup_id'])
             if result.get('backup_id'):
-                restore_backup(context, result['backup_id'])
+                from dataclasses import replace
+                database = Path(result.get('backup_database_path') or context.database_path)
+                if not database.is_absolute(): raise RuntimeError('Invalid Setup backup database path.')
+                restore_backup(replace(context, database_path=database), result['backup_id'])
             atomic_json(safe_path(context.program_root, 'active.json'), marker, replace=True)
         if type(result.get('previous_autostart')) is bool:
             atomic_json(safe_path(context.state_root, 'controller-settings.json'),

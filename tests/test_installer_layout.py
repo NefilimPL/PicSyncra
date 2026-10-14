@@ -261,3 +261,17 @@ def test_inspect_cli_reports_a_corrupt_database_as_a_safe_setup_failure(
     error_text = capsys.readouterr().err
     assert str(database) not in error_text
     assert "Setup helper failed:" in error_text
+
+
+def test_inno_does_not_launch_or_restore_a_previous_install_after_fresh_failure():
+    source = (Path(__file__).resolve().parents[1] / 'installer/PicSyncra.iss').read_text(encoding='utf-8')
+    run_section = source.split('[Run]')[1].split('[UninstallRun]')[0]
+    assert 'Check: SetupCompletedSuccessfully' in run_section
+    assert "HadPreviousInstallation := FileExists(ExpandConstant('{app}\\active.json'))" in source
+    assert "if HadPreviousInstallation then begin" in source
+    assert 'SetupSucceeded := True' in source
+
+
+def test_installer_build_checks_fresh_database_with_frozen_helper_before_packaging():
+    source = (Path(__file__).resolve().parents[1] / 'installer/build_installer.ps1').read_text(encoding='utf-8')
+    assert source.index('tools/verify_installed_setup.py') < source.index('$iscc = Get-Command ISCC.exe')

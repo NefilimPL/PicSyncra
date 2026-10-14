@@ -46,6 +46,16 @@ function Invoke-BuildPython {
         $global:LASTEXITCODE = $LASTEXITCODE
         return
     }
+    if ($arguments[0] -eq 'tools/verify_installed_setup.py') {
+        $distIndex = [Array]::IndexOf($arguments, '--dist-root')
+        $root = $arguments[$distIndex + 1]
+        if (-not (Test-Path -LiteralPath (Join-Path $root 'helper\PicSyncra-SetupHelper.exe'))) {
+            throw 'Fresh verification must use the packaged helper.'
+        }
+        Set-Content -LiteralPath (Join-Path $root 'fresh-verification-called.txt') -Value 'checked before packaging'
+        $global:LASTEXITCODE = 0
+        return
+    }
     if ($arguments[0] -ne '-m') { throw 'Unexpected Python invocation' }
     if ($arguments[1] -eq 'pip') { $global:LASTEXITCODE = 0; return }
     if ($arguments[1] -ne 'PyInstaller') { throw 'Unexpected build module' }
@@ -74,6 +84,9 @@ function Get-Command {
     return [pscustomobject]@{ Source = 'Invoke-TestIscc' }
 }
 function Invoke-TestIscc {
+    if (-not (Test-Path -LiteralPath (Join-Path $Checkout 'dist\installed\fresh-verification-called.txt'))) {
+        throw 'The compiler ran before fresh installation verification.'
+    }
     $global:LASTEXITCODE = 0
 }
 & (Join-Path $Checkout 'installer\build_installer.ps1') -ReleaseId 1 -ReleaseCommit ('a' * 40) -Channel $TestChannel -SourceBranch $(if ($TestChannel -eq 'dev') { 'dev2' } else { 'main' }) -Python Invoke-BuildPython
@@ -93,6 +106,7 @@ function Invoke-TestIscc {
     output = checkout / "dist" / "installed"
     layout = json.loads((output / 'module-initial-layout.json').read_text())
     assert layout['channel'] == channel
+    assert (output / 'fresh-verification-called.txt').is_file()
     base = output / 'module-sets' / layout['base']
     local = output / 'module-sets' / layout['local']
     static = base / 'picsyncra/web/static'

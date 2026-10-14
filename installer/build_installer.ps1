@@ -161,6 +161,9 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Nie udalo sie zbudowac rozlacznych modulow.' }
     $moduleLayout = Get-Content -LiteralPath (Join-Path $distRoot 'module-initial-layout.json') -Raw | ConvertFrom-Json
 
+    & $Python tools/verify_installed_setup.py --dist-root $distRoot --work-root $workRoot
+    if ($LASTEXITCODE -ne 0) { throw 'Nie powiodla sie weryfikacja swiezej instalacji. Setup nie zostanie utworzony.' }
+
     $iscc = Get-Command ISCC.exe -ErrorAction Stop
     & $iscc.Source "/DBuildRoot=$distRoot" "/DReleaseId=$ReleaseId" "/DBaseSetId=$($moduleLayout.base)" "/DLocalSetId=$($moduleLayout.local)" (Join-Path $PSScriptRoot 'PicSyncra.iss')
     if ($LASTEXITCODE -ne 0) { throw 'Kompilacja Inno Setup nie powiodla sie.' }
