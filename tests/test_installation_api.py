@@ -15,6 +15,22 @@ class RequestStub:
         return self._payload
 
 
+def test_background_submit_is_csrf_protected_and_old_hosts_get_setup_instruction():
+    payload = dict(action='apply', selected={}, excluded=[], restore_backup_id=None)
+    class Client:
+        def module_submit(self, **kwargs): return dict(operation_id='a'*32, state='preparing')
+    routes, _ = app_with_dependencies(module_client=Client())
+    with pytest.raises(HTTPException) as failure:
+        asyncio.run(routes['/api/installation/module-updates'](RequestStub(payload)))
+    assert failure.value.status_code == 403
+    response = asyncio.run(routes['/api/installation/module-updates'](RequestStub(payload, csrf='valid')))
+    assert response.status_code == 202
+    routes, _ = app_with_dependencies(module_client=object())
+    with pytest.raises(HTTPException) as failure:
+        asyncio.run(routes['/api/installation/module-updates'](RequestStub(payload, csrf='valid')))
+    assert failure.value.detail['code'] == 'setup_required'
+
+
 def app_with_dependencies(*, installed: bool = True, module_client=None, installation_status=None, read_operation=None):
     from picsyncra.web.installation_api import InstallationApiDependencies, build_installation_router
 

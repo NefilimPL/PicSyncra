@@ -8,6 +8,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 
 from ..installation.contracts import OperationRequest
 
@@ -88,11 +89,26 @@ def build_installation_router(dependencies: InstallationApiDependencies) -> APIR
         try:
             payload = await request.json()
             validate_module_payload('module_plan', payload)
-            return client.module_plan(**payload)
+            return await run_in_threadpool(client.module_plan, **payload)
         except ValueError as exc: raise HTTPException(status_code=400, detail=str(exc)) from exc
         except RuntimeError as exc:
             detail = dict(message=str(exc), **(getattr(exc, 'details', None) or {}))
             raise HTTPException(status_code=409, detail=detail) from exc
+
+    @router.post('/api/installation/module-updates')
+    async def installation_module_submit(request: Request):
+        client = modules(request, mutation=True)
+        from ..installation.control_protocol import validate_module_payload
+        try:
+            if not callable(getattr(client, 'module_submit', None)):
+                raise HTTPException(status_code=409, detail=dict(code='setup_required', message='Aktualizacje w tle wymagają nowszego kontrolera. Uruchom pełny instalator Setup na istniejącej instalacji.'))
+            payload = await request.json()
+            validate_module_payload('module_submit', payload)
+            result = await run_in_threadpool(client.module_submit, **payload)
+            return JSONResponse(result, status_code=202)
+        except ValueError as exc: raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=dict(message=str(exc), **(getattr(exc, 'details', None) or {}))) from exc
 
     @router.post('/api/installation/module-authorization')
     async def installation_module_authorization(request: Request):

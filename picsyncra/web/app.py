@@ -289,7 +289,9 @@ _BROWSER_EXTENSION_IMPORTS_LOCK = threading.Lock()
 _PROCESS_JOB_RETENTION_SECONDS = 6 * 60 * 60
 _PROCESS_JOB_DIRECTORY_TTL_SECONDS = 24 * 60 * 60
 _PROCESS_JOB_DIRECTORY_PREFIX = "job-"
-_PROCESS_JOB_ROOT = Path(tempfile.gettempdir()) / "picsyncra_web_process_jobs"
+_PROCESS_INSTALL_CONTEXT = resolve_install_context(Path(sys.executable))
+_PROCESS_JOB_ROOT = (_PROCESS_INSTALL_CONTEXT.state_root / 'web-process-jobs' if _PROCESS_INSTALL_CONTEXT
+                     else Path(tempfile.gettempdir()) / "picsyncra_web_process_jobs")
 # Active work is never discarded; only the newest terminal jobs stay in memory.
 _PROCESS_JOB_MAX_COMPLETED = 200
 _PROCESS_QUEUE = ProcessQueueService()
@@ -2537,7 +2539,7 @@ def _download_ftp_photo_source(
 
 
 def _same_existing_source(source_path: str, upload: WebUploadedSlot, photo: Dict[str, Any]) -> bool:
-    upload_path = str(upload.source_path or "")
+    upload_path = str(upload.original_source_path or upload.source_path or "")
     if source_path and upload_path:
         try:
             return os.path.samefile(source_path, upload_path)
@@ -3327,14 +3329,14 @@ def _process_upload_snapshot(
                 }
                 local_token = str(form.get(f"delete_local_slot_{prefix}") or "").strip()
                 if local_token:
-                    delete_item["local_path"] = _path_from_file_token(
+                    delete_item["local_path"] = form.trusted_paths.get(f'delete_local_slot_{prefix}') or _path_from_file_token(
                         local_token,
                         require_exists=False,
                     )
                 delete_requests.append(delete_item)
             token = str(form.get(f"existing_slot_{prefix}") or "").strip()
             if token:
-                source_path = _path_from_file_token(token)
+                source_path = form.trusted_paths.get(f'existing_slot_{prefix}') or _path_from_file_token(token)
                 original_filename = _safe_upload_name(
                     str(form.get(f"existing_slot_name_{prefix}") or ""),
                     os.path.basename(source_path),
@@ -3350,6 +3352,7 @@ def _process_upload_snapshot(
                         original_filename=original_filename,
                         content_fit=_optional_form_bool(form, f"slot_fit_{prefix}"),
                         preprocessed=preprocessed,
+                        original_source_path=form.source_paths.get(f'existing_slot_{prefix}', ''),
                     )
                 )
                 continue
@@ -4229,6 +4232,28 @@ def _emit_process_failed(
     )
 
 
+def _restore_pending_process_jobs() -> None:
+    from .process_pending import load_pending
+    def validate_original(path):
+        return resolve_path_within_roots(path, _file_token_roots())
+    try:
+        for saved in load_pending(_PROCESS_JOB_ROOT, issue_token=_FILE_TOKEN_REGISTRY.issue,
+                                  validate_original=validate_original):
+            if saved['id'] in _PROCESS_JOBS:
+                continue
+            reservation = _PROCESS_QUEUE.reserve(saved['cache_scope'], restoring=True)
+            job = _new_process_job(username=saved['username'], cache_scope=saved['cache_scope'],
+                                   form=saved['form'], status='queued')
+            job.update({key: saved[key] for key in ('id', 'created_at', 'created_time')})
+            with _PROCESS_JOBS_LOCK:
+                _PROCESS_JOBS[job['id']] = job
+                _PROCESS_JOB_COMPLETIONS[job['id']] = threading.Event()
+                _advance_process_queue_generation_locked()
+            _PROCESS_QUEUE.submit(reservation, job['id'], _run_process_job)
+    except Exception as exc:
+        log_error(f'Nie udało się wznowić kolejki po restarcie: {exc}')
+
+
 def _queue_process_job(
     *,
     username: str,
@@ -4242,6 +4267,12 @@ def _queue_process_job(
         username=username, cache_scope=cache_scope, form=form, status="queued"
     )
     job_id = str(job["id"])
+    from .process_pending import save_pending, mark_state
+    # This write is required for acceptance, unlike optional job telemetry.
+    if not form.temp_dir:
+        _PROCESS_JOB_ROOT.mkdir(parents=True, exist_ok=True)
+        form.temp_dir = tempfile.mkdtemp(prefix=_PROCESS_JOB_DIRECTORY_PREFIX, dir=_PROCESS_JOB_ROOT)
+    save_pending(job, _PROCESS_JOB_ROOT, resolve_token=_path_from_file_token, state='staged')
     completion = threading.Event()
     with _PROCESS_JOBS_LOCK:
         _PROCESS_JOBS[job_id] = job
@@ -4256,7 +4287,8 @@ def _queue_process_job(
             persisted_job["progress_label"] = "Start zadania"
     _persist_process_job(persisted_job)
     try:
-        queue_position = _PROCESS_QUEUE.submit(reservation, job_id, _run_process_job)
+        queue_position = _PROCESS_QUEUE.submit(reservation, job_id, _run_process_job,
+                                              on_submit=lambda: mark_state(form, 'queued'))
     except Exception:
         with _PROCESS_JOBS_LOCK:
             _PROCESS_JOBS.pop(job_id, None)
@@ -4297,6 +4329,9 @@ def _run_process_job(
         if not start_persisted:
             _persist_process_job(durable_job)
         try:
+            from .process_pending import mark_started
+            if isinstance(form, _ProcessFormSnapshot) and form.temp_dir:
+                mark_started(form)
             if cancel_event is not None and cancel_event.is_set():
                 raise _ProcessJobCancelled()
             payload = _process_upload_snapshot(
@@ -4367,6 +4402,10 @@ def _cancel_process_job_for_user(job_id: str, username: str) -> Optional[Dict[st
             return None
         if job.get("status") not in {"queued", "running"}:
             return None
+        form = job.get('form')
+        if job.get('status') == 'queued' and isinstance(form, _ProcessFormSnapshot) and form.temp_dir:
+            from .process_pending import mark_state
+            mark_state(form, 'cancelled')
     if not _PROCESS_QUEUE.cancel(job_id):
         return None
     temp_dir = ""
@@ -5347,6 +5386,11 @@ def create_app() -> FastAPI:
         )
 
     def _run_ocr_queue_once() -> str:
+        execution = app.state.ocr_execution_service
+        if execution is not None:
+            execution.pump()
+        if installation_service is not None and installation_service.maintenance_gate.snapshot()['state'] != 'idle':
+            return 'maintenance'
         _purge_expired_ocr_crop_jobs()
         ocr_settings = normalize_ocr_settings(
             config.CONFIG.get(OCR_SETTINGS_KEY, {})
@@ -5366,7 +5410,14 @@ def create_app() -> FastAPI:
             lease=app.state.ocr_queue_lease,
             now=time.monotonic,
         )
-        return scheduler.run_once()
+        gate = installation_service.maintenance_gate if installation_service else None
+        lease = gate.try_admit('ocr_queue') if gate else None
+        if gate is not None and lease is None:
+            return 'maintenance'
+        try:
+            return scheduler.run_once()
+        finally:
+            if lease: lease.finish()
 
     @app.exception_handler(ClientDisconnect)
     async def _client_disconnected(request: Request, exc: ClientDisconnect) -> Response:
@@ -5491,6 +5542,10 @@ def create_app() -> FastAPI:
     def _startup() -> None:
         global _OCR_EXECUTION_SERVICE
         if installation_service is not None:
+            request_path = installed_context.state_root / 'module-maintenance-request.json'
+            if request_path.exists():
+                identifier = json.loads(request_path.read_text(encoding='utf-8'))['operation_id']
+                installation_service.maintenance_gate.begin(identifier, initiator_id='module-controller')
             installation_service.start_module_maintenance_watch()
         os.environ.setdefault("PICSYNCRA_HEADLESS", "1")
         runtime_info = initialize_application_runtime(interactive=False)
@@ -5501,7 +5556,8 @@ def create_app() -> FastAPI:
             ocr_settings = normalize_ocr_settings(config.CONFIG.get(OCR_SETTINGS_KEY, {}))
             ocr_worker = _create_ocr_execution_worker(ocr_settings)
             if ocr_worker is not None:
-                _clear_ocr_crop_queue_on_startup()
+                if installation_service is None:
+                    _clear_ocr_crop_queue_on_startup()
                 execution_service = OcrExecutionService(
                     worker=ocr_worker,
                     registry=OcrProgressRegistry(),
@@ -5542,6 +5598,7 @@ def create_app() -> FastAPI:
                 app.state.ocr_queue_thread.start()
         cleanup_web_ftp_cache(force=True)
         cleanup_web_upload_cache(force=True)
+        _restore_pending_process_jobs()
         try:
             _prune_live_events_if_due(force=True)
         except Exception as exc:
@@ -5766,6 +5823,7 @@ def create_app() -> FastAPI:
             "processed_dir": settings.l,
             "config_path": runtime_info["config_path"],
             "version": get_display_version(),
+            "release_notice": release_notice_for(request),
             "auto_content_fit": bool(config.CONFIG.get(AUTO_CONTENT_FIT_KEY, False)),
             "processing": _processing_settings(),
             "security": _security_settings(),
@@ -5784,6 +5842,25 @@ def create_app() -> FastAPI:
             **load_web_data(),
             "pimcore": pimcore_runtime_capabilities(),
         }
+
+    def release_notice_for(request):
+        from .release_notices import current_notice
+        user = _current_user_payload(request)
+        return current_notice(installed_context, observability_store(), str(user.get('id') or user['username']))
+
+    @app.get('/api/installation/release-notice')
+    def release_notice_get(request: Request):
+        return {'notice': release_notice_for(request)}
+
+    @app.post('/api/installation/release-notice/read')
+    async def release_notice_read(request: Request):
+        _validate_mutating_request(request)
+        notice = release_notice_for(request)
+        body = await request.json()
+        if notice and body.get('version_id') == notice['version_id']:
+            user = _current_user_payload(request)
+            observability_store().acknowledge_release_notice(str(user.get('id') or user['username']), notice['version_id'])
+        return {'ok': True}
 
     @app.get("/api/github/repository")
     def github_repository_api(request: Request) -> Dict[str, Any]:

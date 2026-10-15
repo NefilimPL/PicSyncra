@@ -53,6 +53,7 @@ _COMMAND_PAYLOADS: dict[str, frozenset[str]] = {
     "module_recover": frozenset(),
     "module_channel": frozenset({'channel'}),
     "module_plan": frozenset({'action', 'selected', 'excluded', 'restore_backup_id'}),
+    "module_submit": frozenset({'action', 'selected', 'excluded', 'restore_backup_id'}),
     "module_execute": frozenset({'plan_id', 'restore_backup_id', 'acknowledge_data_loss'}),
     "module_operation": frozenset({'operation_id'}),
     "module_authorization_request": frozenset({'action', 'selected', 'excluded', 'restore_backup_id'}),
@@ -84,7 +85,7 @@ def validate_module_payload(command, payload):
     backup = payload.get('restore_backup_id')
     if backup is not None and (not isinstance(backup, str) or not re.fullmatch('[A-Za-z0-9][A-Za-z0-9._-]{0,63}', backup)):
         _reject('Invalid backup identifier.')
-    if command == 'module_plan':
+    if command in {'module_plan', 'module_submit'}:
         names = {item.module_id for item in module_definitions()}
         selected, excluded = payload['selected'], payload['excluded']
         if payload['action'] not in {'apply', 'update', 'update_all', 'rollback_modules', 'install_ocr'} or not isinstance(selected, dict) or not set(selected) <= names or not all(isinstance(v, str) and re.fullmatch('[a-f0-9]{64}', v) for v in selected.values()):
@@ -178,6 +179,7 @@ class ControlDispatcher:
                 elif request.command == 'module_recover': result = service.recover()
                 elif request.command == 'module_channel': result = service.change_channel(**request.payload)
                 elif request.command == 'module_plan': result = service.prepare(**request.payload)
+                elif request.command == 'module_submit': result = service.submit(**request.payload)
                 elif request.command == 'module_execute': result = service.execute(**request.payload)
                 elif request.command == 'module_authorization_request': result = service.authorization_request(**request.payload)
                 elif request.command == 'module_authorization_status': result = service.authorization_status(**request.payload)

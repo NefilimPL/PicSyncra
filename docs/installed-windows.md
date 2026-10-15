@@ -39,12 +39,27 @@ obecną, najnowszą i listę wersji do cofnięcia. Link **Wydanie na GitHub**
 wskazuje Release będący źródłem wybranej wersji. Portable nadal aktualizuje
 się ręcznie przez pobranie nowego EXE.
 
-Samo wybranie wersji niczego nie instaluje ani nie pobiera. Przygotowany
-wiersz jest pomijany przez **Aktualizuj moduły**, ale dotychczasowy kod nadal
-działa. Jeden przycisk **Cofnij wersję modułu** przygotowuje plan wszystkich
-wybranych cofnięć. Po kontroli zgodności i zatwierdzeniu całość jest
-instalowana jako jeden zestaw. Cofnięte moduły pozostają wyłączone z kolejnych
-zwykłych aktualizacji, także po restarcie i w drugim interfejsie.
+Samo wybranie wersji niczego nie instaluje ani nie pobiera. W panelu WEB
+**Aktualizuj** rozpoczyna przygotowanie i wykonanie operacji w kontrolerze,
+bez dodatkowego okna potwierdzenia. Po komunikacie o przyjęciu operacji można
+zamknąć kartę; ponowne otwarcie panelu pokazuje trwającą operację. Osobne
+potwierdzenie pozostaje wymagane przy odtwarzaniu starszej kopii bazy, które
+usuwa nowsze dane. Launcher zachowuje swój podgląd i zatwierdzanie planu.
+
+Aktywni użytkownicy otrzymują komunikat o aktualizacji. Rozpoczęte zadania
+kończą się, a kolejne zadania przetwarzania i kolejka OCR czekają. Formularze
+i zdjęcia oczekujących zadań są zachowywane na dysku i wznawiane po restarcie
+oraz pomyślnej kontroli backendu. W razie nieudanego pobrania kolejka rusza po
+odblokowaniu aplikacji. Przerwane przez awarię zadanie już wykonywane nie jest
+automatycznie powtarzane, ponieważ mogło zapisać dane w systemie zewnętrznym.
+
+Nowe pliki są pobierane równolegle ze sprawdzaniem bazy i przygotowaniem
+lokalnych plików. Kopia bazy i konfiguracji powstaje po zakończeniu aktywnych
+zapisów i zatrzymaniu backendu. Po zmianie wydania użytkownik otrzymuje opis
+z Release przy pierwszym wejściu do aplikacji. Potwierdzenie przeczytania jest
+zapisane dla konta i wydania, więc obowiązuje także w innej przeglądarce.
+Obsługa tego mechanizmu wymaga jednorazowej instalacji pełnego Setupu z
+kontrolerem i launcherem w wersji API 6; aktualizacja modułów ich nie wymienia.
 
 Kontroler sprawdza zależności API między modułami, schemat bazy, format
 konfiguracji, ABI runtime oraz wersje kontrolera i launchera. Przy konflikcie
@@ -56,8 +71,8 @@ Przed pobieraniem sprawdzane jest miejsce na pliki, kopię danych i
 odzyskiwanie oraz możliwość zapisu we wszystkich lokalizacjach instalacji.
 LOCAL i Migrator blokują zmianę modułów przez cały czas działania — zamknij
 te aplikacje przed aktualizacją lub cofaniem. Wyświetlony błąd zachowuje
-przygotowane wybory. Potwierdzenie **Aktualizuj wszystko** wymienia również
-moduły, dla których usuwa blokady lub pomija przygotowane wybory cofnięcia.
+przygotowane wybory. Cofnięte moduły pozostają wyłączone z kolejnych zwykłych
+aktualizacji, także po restarcie i w drugim interfejsie.
 
 Aktualizacja przechodzi bezpośrednio do docelowego wydania. Każdy plik ma
 właściciela, rozmiar i SHA256; zweryfikowane pliki są ponownie używane z

@@ -7,6 +7,24 @@ from tests.module_fixtures import module_payload, release_payload
 from tests.test_module_state import context
 
 
+def test_new_content_downloads_while_local_seed_is_waiting(context, monkeypatch):
+    import threading
+    fetched = threading.Event()
+    def fetch(url, start, size, total):
+        fetched.set()
+        return Response(b'new-code', start, total)
+    store = ModuleContentStore(context, fetch=fetch)
+    store.import_bytes(b'code')
+    active = make_module_set(1, 1, parse_module_manifest(release_payload()).modules)
+    target = make_module_set(2, 5, parse_module_manifest(release_payload(5,
+        [module_payload(content=b'new-code', source=5), module_payload('migrator', 'apps/migrator/PicSyncra-Migrator.exe')])).modules)
+    def slow_seed(*args, **kwargs):
+        assert fetched.wait(5), 'download waited for local verification'
+    monkeypatch.setattr(store, 'seed', slow_seed)
+    store.stage_update(active, target, on_progress=lambda _: None)
+    verify_module_set_files(context, target)
+
+
 def test_planning_inventory_reuses_unchanged_hash_but_transfer_still_verifies(context, monkeypatch):
     from picsyncra.installation import module_content
     store = ModuleContentStore(context)

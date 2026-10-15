@@ -100,10 +100,10 @@ def _tree_size(root):
                for path in root.rglob('*') if path.is_file())
 
 
-def check_operation_preflight(context, target, active, content):
+def check_operation_preflight(context, target, active, content, *, inspect_cache=True):
     check_update_access(context)
     from .module_executor import ModuleExecutionError
-    cache = content.available_hashes()
+    cache = content.available_hashes() if inspect_cache else frozenset()
     files = {file.sha256: file.size for module in (*target.modules, *active.modules) for file in module.files}
     cache_bytes = sum(size for digest, size in files.items() if digest not in cache)
     staging = module_set_root(context, target)

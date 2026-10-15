@@ -17,6 +17,8 @@ class ProcessFormSnapshot:
     fields: dict[str, str] = field(default_factory=dict)
     uploads: dict[str, QueuedUploadFile] = field(default_factory=dict)
     temp_dir: str = ""
+    trusted_paths: dict[str, str] = field(default_factory=dict)
+    source_paths: dict[str, str] = field(default_factory=dict)
 
     def get(self, key: str, default: Any = None) -> Any:
         if key in self.uploads:

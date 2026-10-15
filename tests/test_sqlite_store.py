@@ -17,6 +17,17 @@ from picsyncra.product_queries import ProductSearchCriteria
 from picsyncra.sqlite_store import SCHEMA_VERSION, SqliteStore
 
 
+def test_release_receipts_survive_reopening_and_are_per_account_and_version(tmp_path):
+    path = tmp_path / 'notices.sqlite'
+    store = SqliteStore(path)
+    assert not store.release_notice_seen('alice', 'v1')
+    store.acknowledge_release_notice('alice', 'v1')
+    reopened = SqliteStore(path)
+    assert reopened.release_notice_seen('alice', 'v1')
+    assert not reopened.release_notice_seen('bob', 'v1')
+    assert not reopened.release_notice_seen('alice', 'v2')
+
+
 def test_schema_creates_expected_tables(tmp_path: Path) -> None:
     db_path = tmp_path / "data.sqlite"
     store = SqliteStore(str(db_path))

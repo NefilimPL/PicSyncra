@@ -125,7 +125,7 @@ def test_service_requires_setup_before_transfer_then_installs_ocr_once(context,m
     service=ModuleService(context,Controller(),source=source,content=store,
         schedule=lambda work:work(),quiesce=lambda _:None,healthy=lambda:True)
     current_environment=service._environment
-    monkeypatch.setattr(service,'_environment',lambda _:ModuleEnvironment(1,1,'cp313-win-amd64',3,3))
+    monkeypatch.setattr(service,'_environment',lambda _, **kwargs:ModuleEnvironment(1,1,'cp313-win-amd64',3,3))
     transfers=[]
     def fetch(url,start,size,total):
         transfers.append((start,size))

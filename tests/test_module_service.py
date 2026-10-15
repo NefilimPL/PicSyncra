@@ -16,6 +16,64 @@ class Source:
         return (ModuleCatalogEntry(5, 'v5', release.published_at, release),)
 
 
+def test_submit_accepts_before_preparation_and_runs_without_browser(context):
+    _, store, _ = prepare(context)
+    jobs = []
+    service = ModuleService(context, Controller(), source=Source(), content=store,
+        schedule=jobs.append, quiesce=lambda _: None, healthy=lambda: True)
+    accepted = service.submit(action='apply', selected={}, excluded=[], restore_backup_id=None)
+    identifier = accepted['operation_id']
+    assert accepted['state'] == 'preparing'
+    assert service.operation(identifier)['state'] == 'preparing'
+    assert (context.state_root / 'module-maintenance-request.json').exists()
+    assert not (context.state_root / 'module-plans' / (identifier + '.json')).exists()
+    jobs.pop()()
+    assert service.operation(identifier)['state'] == 'committed'
+    assert not (context.state_root / 'module-maintenance-request.json').exists()
+
+
+def test_nested_background_execution_keeps_ownership_until_outer_cleanup(context, monkeypatch):
+    from picsyncra.installation import module_service
+    _, store, _ = prepare(context)
+    jobs, reentry = [], []
+    service = ModuleService(context, Controller(), source=Source(), content=store,
+        schedule=jobs.append, quiesce=lambda _: None, healthy=lambda: True)
+    write = module_service.atomic_json
+    def publish(path, payload, **kwargs):
+        if path.parent.name == 'module-operations' and payload.get('state') == 'committed':
+            try:
+                service.submit(action='apply', selected={}, excluded=[])
+            except RuntimeError:
+                reentry.append('blocked')
+            else:
+                reentry.append('accepted')
+        return write(path, payload, **kwargs)
+    monkeypatch.setattr(module_service, 'atomic_json', publish)
+    operation = service.submit(action='apply', selected={}, excluded=[])
+    jobs.pop()()
+    assert service.operation(operation['operation_id'])['state'] == 'committed'
+    assert reentry == ['blocked']
+    assert not service.busy
+
+
+def test_changelog_follows_new_release_even_with_unchanged_core(context):
+    import json
+    from tests.module_fixtures import module_payload
+    active, store, _ = prepare(context)
+    release = parse_module_manifest(release_payload(6, [module_payload(),
+        module_payload('migrator', 'apps/migrator/PicSyncra-Migrator.exe'),
+        module_payload('web_ui', 'picsyncra/web/static/app.js', b'new-ui', source=6)]))
+    class NewRelease(Source):
+        def load(self, channel):
+            return (ModuleCatalogEntry(6, 'v6', release.published_at, release, release_notes='Zmiany interfejsu'),)
+    service = ModuleService(context, Controller(), source=NewRelease(), content=store)
+    plan = service.prepare(action='apply', selected={}, excluded=[])
+    payload = json.loads((context.state_root / 'module-plans' / (plan['plan_id'] + '.json')).read_text())
+    assert payload['release_notice']['release_id'] == 6
+    assert payload['release_notice']['body'] == 'Zmiany interfejsu'
+    assert {item['module_id'] for item in plan['changes']} == {'web_ui'}
+
+
 def test_setup_managed_missing_ocr_is_visible_and_cannot_be_downloaded(context):
     import json
     _, store, _ = prepare(context)

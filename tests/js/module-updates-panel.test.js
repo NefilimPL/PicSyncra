@@ -138,7 +138,7 @@ test('OCR preparation shows pending progress and then the controller error witho
   assert.match(status.textContent, /certyfikatu GitHuba/);
   assert.equal(bar.hidden, true);
   assert.ok(controls.children.filter(button => !/Cofnij/.test(button.textContent)).every(button => !button.disabled));
-  assert.deepEqual(calls, ['/api/installation/module-plans']);
+  assert.deepEqual(calls, ['/api/installation/module-updates']);
 });
 
 test('OCR download failure remains visible after the automatic catalog refresh', async () => {
@@ -147,7 +147,7 @@ test('OCR download failure remains visible after the automatic catalog refresh',
   loadBrowserScript('picsyncra/web/static/module-updates-panel.js');
   const pending = deferred();
   const panel = window.PicSyncra.ModuleUpdatesPanel.create({confirm:() => true, requestJson:async url => {
-    if (url.endsWith('/module-plans')) return {plan_id:'a'.repeat(32),conflicts:[],changes:[],download_bytes:100};
+    if (url.endsWith('/module-updates')) return {operation_id:'a'.repeat(32),state:'preparing',action:'install_ocr'};
     if (url.endsWith('/execute')) return {operation_id:'a'.repeat(32),state:'accepted',action:'install_ocr'};
     if (url.includes('/operations/')) return pending.promise;
     return {modules:[],offline:false};
@@ -161,13 +161,13 @@ test('OCR download failure remains visible after the automatic catalog refresh',
   panel.dispose();
 });
 
-test('download details and retry create a fresh plan and require new confirmation', async t => {
+test('download retry starts a new background operation without a confirmation', async t => {
   resetBrowserGlobals(); global.document = {createElement:tag => new Element(tag)};
   loadBrowserScript('picsyncra/web/static/module-updates-panel.js');
   let plans = 0, executions = 0, confirmations = 0;
   const panel = window.PicSyncra.ModuleUpdatesPanel.create({confirm:() => { confirmations++; return confirmations === 1; },
     requestJson:async url => {
-      if (url.endsWith('/module-plans')) { plans++; return {plan_id:String(plans).repeat(32),conflicts:[],changes:[],download_bytes:10}; }
+      if (url.endsWith('/module-updates')) { plans++; return {operation_id:String(plans).repeat(32),state:'preparing',action:'install_ocr'}; }
       if (url.endsWith('/execute')) { executions++; return {operation_id:'1'.repeat(32),state:'accepted',action:'install_ocr'}; }
       if (url.includes('/operations/')) return {operation_id:'1'.repeat(32),state:'rolled_back',action:'install_ocr',error:'GitHub zwrócił HTTP 503.',
         error_details:{code:'http_error',http_status:503,module_id:'ocr_models',file:'models/ocr/model.bin',retryable:true}};
@@ -181,7 +181,8 @@ test('download details and retry create a fresh plan and require new confirmatio
   const retry = find(panel.element, child => child.textContent === 'Ponów pobieranie');
   assert.equal(retry.hidden, false); assert.equal(retry.disabled, false);
   await retry.events.click();
-  assert.equal(plans, 2); assert.equal(confirmations, 2); assert.equal(executions, 1);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(plans, 2); assert.equal(confirmations, 0); assert.equal(executions, 0);
 });
 
 test('offline empty catalog displays GitHub failure cause', async () => {
@@ -229,7 +230,7 @@ test('permission failure opens only native host authorization and stops before d
   const calls = [], id = 'a'.repeat(32);
   const panel = window.PicSyncra.ModuleUpdatesPanel.create({requestJson:async (url, options) => {
     calls.push([url, options?.body ? JSON.parse(options.body) : null]);
-    if (url.endsWith('/module-plans')) {
+    if (url.endsWith('/module-updates')) {
       const error = new Error('Brak dostępu'); error.detail = {code:'permission_required'}; throw error;
     }
     if (url.endsWith('/module-authorization')) return {request_id:id,launch_url:`picsyncra-update://authorize/test/${id}`};
@@ -258,7 +259,7 @@ test('late authorization response cannot replace a newer login request', async t
       let requests = 0;
       const panel = window.PicSyncra.ModuleUpdatesPanel.create({requestJson:async url => {
         calls.push(url);
-        if (url.endsWith('/module-plans')) {
+        if (url.endsWith('/module-updates')) {
           const error = new Error('Brak dostępu'); error.detail = {code:'permission_required'}; throw error;
         }
         if (url.endsWith('/module-authorization')) {

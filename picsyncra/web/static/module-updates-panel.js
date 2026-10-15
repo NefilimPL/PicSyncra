@@ -92,7 +92,7 @@
     function showProgress(operation) {
       lastOperation = operation;
       placeProgress(operation.action, operation.progress?.module_id);
-      const labels = {accepted:'Operacja przyjęta — oczekiwanie na rozpoczęcie.', downloading:'Pobieranie',
+      const labels = {preparing:'Sprawdzanie zgodności i przygotowanie aktualizacji.', accepted:'Operacja przyjęta — oczekiwanie na rozpoczęcie.', downloading:'Pobieranie',
         draining:'Oczekiwanie na zakończenie zadań.', stopping:'Zatrzymywanie backendu.',
         backing_up:'Tworzenie kopii bazy i konfiguracji.', installing:'Instalowanie',
         restoring:'Odtwarzanie bazy i konfiguracji.', migrating:'Migracja bazy.',
@@ -116,6 +116,10 @@
         } else text += ' · obliczanie prędkości i czasu…';
       } else progressbar.removeAttribute('value');
       status.textContent = text + (operation.error ? ` — ${operation.error}` : '');
+      if (!['committed','rolled_back','failed','recovery_required'].includes(operation.state)) {
+        status.textContent += ' Aktualizacja działa w tle — możesz zamknąć kartę.';
+      }
+      if (operation.conflicts?.length) conflictDialog(operation);
       const details = operation.error_details;
       errorDetails.hidden = !details;
       errorText.textContent = details ? JSON.stringify(details, null, 2) : '';
@@ -301,17 +305,21 @@
       progressbar.hidden = false; progressbar.removeAttribute('value');
       status.textContent = action === 'install_ocr' ? 'Sprawdzanie zgodności i przygotowanie instalacji OCR…' : 'Sprawdzanie zgodności i przygotowanie planu…';
       try {
+        if (!restoreBackupId) {
+          const operation = await post('/api/installation/module-updates', {action,
+            selected: ['apply','rollback_modules'].includes(action) ? Object.fromEntries(selected) : {},
+            excluded: action === 'update' ? [...selected.keys()] : [], restore_backup_id:null});
+          operationId = operation.operation_id;
+          terminalMessage = null;
+          showProgress(operation);
+          try { window.sessionStorage?.setItem('picsyncra-module-operation', operationId); } catch (_) {}
+          poll(); return operation;
+        }
         const plan = await post('/api/installation/module-plans', {action,
           selected: ['apply','rollback_modules'].includes(action) ? Object.fromEntries(selected) : {},
           excluded: action === 'update' ? [...selected.keys()] : [], restore_backup_id:restoreBackupId});
         if (plan.conflicts.length) { status.textContent = 'Plan zawiera konflikty zgodności.'; conflictDialog(plan); return plan; }
         if (plan.has_changes === false) { status.textContent = 'Wszystkie wybrane moduły są aktualne. Blokady zostały zachowane.'; return plan; }
-        let changes = (plan.changes || []).map(item => `${item.module_id}: ${item.current || 'brak'} → ${item.target}`).join('\n');
-        if (action === 'update_all') {
-          const overridden = new Set([...selected.keys(), ...[...rows.values()].filter(row => row.module.pinned).map(row => row.module.module_id)]);
-          if (overridden.size) changes += `\nAktualizacje zostaną włączone, a wybory cofnięcia pominięte dla: ${[...overridden].sort().join(', ')}.`;
-        }
-        if (!await confirm(`${changes || 'Zgodny zestaw modułów.'}\nDo pobrania: ${plan.download_bytes.toLocaleString('pl-PL')} bajtów.\nZatwierdzić operację?`)) { status.textContent = 'Operacja anulowana przed rozpoczęciem.'; return plan; }
         let acknowledged = false;
         if (restoreBackupId) {
           acknowledged = await confirm('Odtworzenie starszej bazy usunie dane zapisane po wykonaniu wybranej kopii. Potwierdzasz utratę tych nowszych danych?');

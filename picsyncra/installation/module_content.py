@@ -89,8 +89,9 @@ class ModuleContentStore:
         cache[path] = identity, digest
         return digest
 
-    def available_hashes(self) -> frozenset[str]:
-        return frozenset(path.name for path in self.root.iterdir()
+    def available_hashes(self, required=None) -> frozenset[str]:
+        paths = self.root.iterdir() if required is None else (safe_path(self.root, digest) for digest in required)
+        return frozenset(path.name for path in paths
                          if re.fullmatch('[a-f0-9]{64}', path.name) and path.is_file()
                          and self._inventory_digest(safe_path(self.root, path.name)) == path.name)
 
@@ -120,11 +121,13 @@ class ModuleContentStore:
                 except (OSError, ValueError): continue
         return frozenset(verified)
 
-    def seed(self, selected: ActiveModuleSet, *, allow_incomplete=False) -> None:
+    def seed(self, selected: ActiveModuleSet, *, allow_incomplete=False, required=None) -> None:
         """Import an installed set without fetching historical releases."""
         root = module_set_root(self.context, selected)
         for module in selected.modules:
             for file in module.files:
+                if required is not None and file.sha256 not in required:
+                    continue
                 destination = safe_path(self.root, file.sha256)
                 if destination.is_file() and destination.stat().st_size == file.size and _digest(destination) == file.sha256:
                     continue
@@ -254,6 +257,34 @@ class ModuleContentStore:
         destination = safe_path(self.root, file.sha256)
         return destination.is_file() and destination.stat().st_size == file.size and _digest(destination) == file.sha256
 
+    def stage_update(self, active, selected, *, on_progress):
+        """Fetch new content while checking/copying reusable local content."""
+        from concurrent.futures import ThreadPoolExecutor
+        required = {file.sha256 for module in selected.modules for file in module.files}
+        local = {file.sha256 for module in active.modules for file in module.files
+                 if file.sha256 in required and safe_path(module_set_root(self.context, active), file.path).is_file()}
+        entries, seen = [], set()
+        for module in selected.modules:
+            for file in module.files:
+                if file.size and file.sha256 not in seen and file.sha256 not in local and not safe_path(self.root, file.sha256).is_file():
+                    entries.append((module, file))
+                    seen.add(file.sha256)
+        total = sum(file.size for _, file in entries)
+        counts = {}
+        def report(module, file, count):
+            counts[file.sha256] = count
+            on_progress(dict(downloaded_bytes=sum(counts.values()), total_bytes=total, module_id=module.module_id))
+        def download():
+            if total: on_progress(dict(downloaded_bytes=0, total_bytes=total, module_id=None))
+            for batch in _range_batches(entries):
+                self._acquire_batch(batch, report)
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix='ModuleDownload') as pool:
+            pending = pool.submit(download)
+            self.seed(active, allow_incomplete=True, required=required)
+            pending.result()
+        # Full verification at use still repairs corrupt/missing cache candidates.
+        self.assemble(selected, on_progress=lambda value: on_progress(value) if value['total_bytes'] or not total else None)
+
     def assemble(self, selected: ActiveModuleSet, *, on_progress=None) -> None:
         root = module_set_root(self.context, selected)
         root.mkdir(parents=True, exist_ok=True)
@@ -263,7 +294,7 @@ class ModuleContentStore:
         module_totals = {}
         owners = {}
         entries = []
-        cached = self.available_hashes()
+        cached = self.available_hashes({file.sha256 for module in selected.modules for file in module.files})
         for module in selected.modules:
             for file in module.files:
                 if file.sha256 not in cached and file.sha256 not in missing and file.size:

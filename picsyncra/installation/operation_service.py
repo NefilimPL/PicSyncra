@@ -98,6 +98,7 @@ class InstalledOperationService:
                     if request_path.exists():
                         operation_id = json.loads(request_path.read_text(encoding='utf-8'))['operation_id']
                         if self._module_maintenance_id is None:
+                            self._maintenance = MaintenanceCoordinator(self._maintenance_gate, self._presence, countdown_seconds=0)
                             self._maintenance.begin(operation_id, initiator_id='module-controller')
                             self._module_maintenance_id = operation_id
                         if self._module_maintenance_id == operation_id:

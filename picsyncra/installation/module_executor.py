@@ -176,19 +176,17 @@ class ModuleExecutor:
             previous = self.status()
             if previous and previous['state'] not in {'committed', 'rolled_back', 'failed'}:
                 raise ModuleExecutionError('Najpierw należy odzyskać poprzednią operację.')
-            if self.revalidate: self.revalidate(plan, restore_backup_id)
             if plan.migration_ids and self.migrate is None:
                 raise ModuleExecutionError('Brak zweryfikowanego wykonawcy migracji bazy.')
             if restore_backup_id: verified_backup(self.context, restore_backup_id)
             from .module_preflight import check_operation_preflight
-            check_operation_preflight(self.context, plan.target, active, self.content)
+            check_operation_preflight(self.context, plan.target, active, self.content, inspect_cache=False)
             marker = json.loads(safe_path(self.context.program_root, 'active.json').read_text(encoding='utf-8'))
             record = dict(operation_id=plan.plan_id, action=plan.action, previous=module_set_payload(active),
                           previous_marker=marker, target=module_set_payload(plan.target), backup_id=None,
                           data_changed=False, backend_was_running=bool(self.controller.snapshot()['backend_running']), error=None)
             self._write(record, 'downloading')
             try:
-                self.content.seed(active, allow_incomplete=True)
                 progress_path = safe_path(self.context.state_root, 'module-progress/' + plan.plan_id + '.json')
                 last_progress = None
                 last_report = 0.0
@@ -214,7 +212,11 @@ class ModuleExecutor:
                                     getattr(exc, 'winerror', None) or exc.errno)
                             progress_warning = True
                         last_progress, last_report = value, now
-                self.content.assemble(plan.target, on_progress=report_progress)
+                from concurrent.futures import ThreadPoolExecutor
+                with ThreadPoolExecutor(max_workers=1, thread_name_prefix='ModuleValidation') as validation:
+                    checked = validation.submit(self.revalidate, plan, restore_backup_id) if self.revalidate else None
+                    self.content.stage_update(active, plan.target, on_progress=report_progress)
+                    if checked: checked.result()
                 self._write(record, 'draining')
                 self.quiesce(plan.plan_id)
                 self._write(record, 'stopping')
@@ -234,15 +236,21 @@ class ModuleExecutor:
                     self.migrate(plan)
                 activate_module_set(self.context, plan.target, expected_revision=plan.expected_revision)
                 # The old backend is stopped, so it can no longer replace the
-                # acknowledgement. Clear the handshake before the new backend
-                # starts, otherwise its watcher may inherit a completed drain.
-                self.clear_maintenance()
+                # acknowledgement. Drop its readiness acknowledgement, but keep
+                # admission closed in the new backend until health is verified.
+                remove_file(safe_path(self.context.state_root, 'module-maintenance-ready.json'))
                 # Starting selected code can itself migrate the DB. Journal the
                 # need to restore data before launching any application code.
                 self._write(record, 'validating', data_changed=True)
                 self.controller.start_backend()
                 if not self.healthy(): raise ModuleExecutionError('Nowy backend nie przeszedł kontroli działania.')
+                plan_path = safe_path(self.context.state_root, 'module-plans/' + plan.plan_id + '.json')
+                if plan_path.exists():
+                    notice = json.loads(plan_path.read_text(encoding='utf-8')).get('release_notice')
+                    if notice:
+                        atomic_json(safe_path(self.context.state_root, 'release-notice.json'), notice, replace=True)
                 self._write(record, 'committed')
+                self.clear_maintenance()
             except Exception as exc:
                 record['error_details'] = getattr(exc, 'details', None)
                 self._rollback(record, str(exc))
@@ -270,13 +278,15 @@ class ModuleExecutor:
             if record['data_changed']:
                 if not record['backup_id']: raise ModuleExecutionError('Brak kopii do odzyskania danych.')
                 restore_backup(self.context, record['backup_id'])
+            self.content.seed(previous, allow_incomplete=True)
             self.content.assemble(previous)
             atomic_json(safe_path(self.context.program_root, 'active.json'), marker, replace=True)
-            self.clear_maintenance()
+            remove_file(safe_path(self.context.state_root, 'module-maintenance-ready.json'))
             if record['backend_was_running']:
                 self.controller.start_backend()
                 if not self.healthy(): raise ModuleExecutionError('Poprzedni backend nie przeszedł kontroli po odzyskaniu danych.')
             self._write(record, 'rolled_back')
+            self.clear_maintenance()
         except Exception as exc:
             if getattr(exc, 'details', None):
                 record['error_details'] = dict(record.get('error_details') or {}, recovery=exc.details)

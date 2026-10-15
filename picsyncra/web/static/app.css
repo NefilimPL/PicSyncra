@@ -5051,3 +5051,19 @@ body[data-theme="dark"] .pimcore-runtime-conflict input {
 .module-version-pair a { overflow-wrap: anywhere; }
 .module-ocr-install { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 12px 0; }
 @media (max-width: 800px) { .module-update-row { grid-template-columns: 1fr; } }
+#installationMaintenanceNotice {
+  position: sticky;
+  top: 0;
+  z-index: 10000;
+  padding: 16px;
+  background: #453b12;
+  color: #fff;
+  border: 2px solid #dcb943;
+}
+
+.release-notice-body {
+  white-space: pre-wrap;
+  max-height: 60vh;
+  overflow: auto;
+  max-width: 75vw;
+}
