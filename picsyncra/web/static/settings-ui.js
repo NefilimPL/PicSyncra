@@ -1569,7 +1569,11 @@ function renderSettingsOcr() {
       }
       livePreview.dispose();
       results.textContent = "";
-      const result = { ...(finalSnapshot.result || {}), image_url: URL.createObjectURL(selected) };
+      const result = {
+        message: finalSnapshot.error || "",
+        ...(finalSnapshot.result || {}),
+        image_url: URL.createObjectURL(selected),
+      };
       results.appendChild(renderOcrDiagnostics(result));
       status.textContent = finalSnapshot.state === "paused"
         ? "Test OCR wstrzymany przez prog uruchomienia zasobow."

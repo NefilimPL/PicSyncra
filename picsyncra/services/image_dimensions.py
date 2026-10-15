@@ -637,8 +637,11 @@ def bundled_ocr_model_cache_path() -> str | None:
 
 
 def ocr_model_cache_path() -> str:
-    """Choose a stable local cache, preferring models embedded in an EXE."""
+    """Locate installed/bundled models independently of the writable runtime cache."""
 
+    installed_models = str(os.environ.get("PICSYNCRA_OCR_MODEL_ROOT") or "").strip()
+    if installed_models:
+        return str(Path(installed_models))
     bundled = bundled_ocr_model_cache_path()
     if bundled:
         return bundled
@@ -945,18 +948,35 @@ class PaddleImageDimensionRecognizer:
     """
 
     def __init__(self, profile_id: object = "fast") -> None:
-        bundled_models = bundled_ocr_model_cache_path()
-        if bundled_models:
-            os.environ["PADDLE_PDX_CACHE_HOME"] = bundled_models
+        self.profile = ocr_profile(profile_id)
+        packaged_models = str(os.environ.get("PICSYNCRA_OCR_MODEL_ROOT") or "").strip() or bundled_ocr_model_cache_path()
+        model_arguments = {}
+        if packaged_models:
+            model_root = Path(packaged_models)
+            if not _model_cache_has_profile(str(model_root), self.profile):
+                raise ImageDimensionUnavailable(
+                    f"Brakuje lokalnych modeli OCR ({self.profile.id}). Zainstaluj ponownie komponent OCR przez Setup."
+                )
+            # PaddleX writes temp/locks during import. Installed model files are
+            # immutable; pass their paths explicitly and keep its cache writable.
+            cache = str(os.environ.get("PADDLE_PDX_CACHE_HOME") or "").strip()
+            if not cache or Path(cache).resolve().is_relative_to(model_root.resolve()):
+                local_data = os.environ.get("LOCALAPPDATA")
+                cache_root = Path(local_data) if local_data else Path.home() / ".cache"
+                os.environ["PADDLE_PDX_CACHE_HOME"] = str(cache_root / "PicSyncra" / "ocr-cache")
+            os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "True"
+            model_arguments = {
+                "text_detection_model_dir": str(model_root / "official_models" / self.profile.detector_model),
+                "text_recognition_model_dir": str(model_root / "official_models" / self.profile.recognizer_model),
+            }
         else:
             os.environ.setdefault("PADDLE_PDX_CACHE_HOME", ocr_model_cache_path())
         try:
             import cv2
             from paddleocr import PaddleOCR
         except ImportError as exc:  # pragma: no cover - runtime optionality
-            raise ImageDimensionUnavailable from exc
+            raise ImageDimensionUnavailable(f"Nie mozna zaladowac silnika OCR: {exc}") from exc
         self._cv2 = cv2
-        self.profile = ocr_profile(profile_id)
         # PaddleOCR enables oneDNN by default on CPU.  PaddlePaddle 3.3 can
         # fail on OCR model PIR attributes in that backend, so prefer the
         # standard CPU executor for reliable local dimension extraction.
@@ -966,6 +986,7 @@ class PaddleImageDimensionRecognizer:
         self._ocr = PaddleOCR(
             text_detection_model_name=self.profile.detector_model,
             text_recognition_model_name=self.profile.recognizer_model,
+            **model_arguments,
             enable_mkldnn=False,
             use_doc_orientation_classify=False,
             use_doc_unwarping=False,

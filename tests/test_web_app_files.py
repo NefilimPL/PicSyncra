@@ -2770,7 +2770,8 @@ class WebAppFileTests(unittest.TestCase):
         submit_lock = threading.Lock()
         materialize_calls = 0
         materialize_lock = threading.Lock()
-        snapshot = web_app._ProcessFormSnapshot()
+        snapshot = web_app._ProcessFormSnapshot(fields=_similar_product_payload())
+        form_data = {**snapshot.fields, "ean": "5901234567890"}
         result = {"timing": {"stages": []}, "ftp": {}, "sql": {}, "local_delete": {}}
 
         def track_submit(*args, **kwargs):
@@ -2798,7 +2799,7 @@ class WebAppFileTests(unittest.TestCase):
             try:
                 foreground_result["response"] = TestClient(web_app.app).post(
                     "/api/process",
-                    data={"ean": "5901234567890"},
+                    data=form_data,
                 )
             except BaseException as exc:  # pragma: no cover - reported by the assertion below
                 foreground_result["error"] = exc
@@ -2818,7 +2819,7 @@ class WebAppFileTests(unittest.TestCase):
                 queue.submit = track_submit
                 background = background_client.post(
                     "/api/process/background",
-                    data={"ean": "5901234567890"},
+                    data=form_data,
                 )
                 self.assertEqual(background.status_code, 200)
                 self.assertTrue(first_started.wait(timeout=5))
@@ -2829,7 +2830,7 @@ class WebAppFileTests(unittest.TestCase):
 
                 rejected = background_client.post(
                     "/api/process/background",
-                    data={"ean": "5901234567890"},
+                    data=form_data,
                 )
                 self.assertEqual(rejected.status_code, 429)
                 self.assertEqual(rejected.headers["Retry-After"], "2")

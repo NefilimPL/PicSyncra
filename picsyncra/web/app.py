@@ -33,6 +33,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Stre
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
+from starlette.requests import ClientDisconnect
 
 from .. import brand, common, config, data_store, encryption, settings, sqlite_backup, storage_settings
 from ..bootstrap import initialize_application_runtime
@@ -3122,7 +3123,7 @@ def _logs_response(limit: int) -> Dict[str, Any]:
     return {"logs": logs, "events": events, "summary": _logs_summary(events)}
 
 
-def _snapshot_entry_payload(form: _ProcessFormSnapshot) -> Dict[str, str]:
+def _snapshot_entry_payload(form: Any) -> Dict[str, str]:
     return {
         "product_id": str(form.get("product_id") or ""),
         "name": str(form.get("name") or ""),
@@ -3380,17 +3381,7 @@ def _process_upload_snapshot(
                     content_fit=_optional_form_bool(form, f"slot_fit_{prefix}"),
                 )
             )
-        product = WebProductForm(
-            name=str(form.get("name") or ""),
-            type_name=str(form.get("type_name") or ""),
-            model=str(form.get("model") or ""),
-            color1=str(form.get("color1") or ""),
-            color2=str(form.get("color2") or ""),
-            color3=str(form.get("color3") or ""),
-            extra=str(form.get("extra") or ""),
-            ean=str(form.get("ean") or ""),
-            product_id=str(form.get("product_id") or ""),
-        )
+        product = WebProductForm(**_snapshot_entry_payload(form))
         product = effective_product_form(product, field_settings)
         errors = validate_product_form(product, field_settings)
         if errors:
@@ -3911,8 +3902,17 @@ async def _stage_process_form(request: Request) -> _ProcessFormSnapshot:
     )
     try:
         resolve_path_within_roots(temp_dir, [_PROCESS_JOB_ROOT])
-        form = await request.form()
-        snapshot = await _materialize_process_form(form, temp_dir)
+        async with request.form() as form:
+            # A queue acknowledgement lets the browser clear its draft. Reject invalid
+            # fields before that acknowledgement and before copying any staged uploads.
+            field_settings = _active_product_field_settings()
+            product = effective_product_form(
+                WebProductForm(**_snapshot_entry_payload(form)), field_settings
+            )
+            errors = validate_product_form(product, field_settings)
+            if errors:
+                raise HTTPException(status_code=400, detail=" ".join(errors))
+            snapshot = await _materialize_process_form(form, temp_dir)
     except Exception:
         _cleanup_process_job_directory(temp_dir)
         raise
@@ -5367,6 +5367,11 @@ def create_app() -> FastAPI:
             now=time.monotonic,
         )
         return scheduler.run_once()
+
+    @app.exception_handler(ClientDisconnect)
+    async def _client_disconnected(request: Request, exc: ClientDisconnect) -> Response:
+        # Superseded lookups are routinely aborted by the browser while typing.
+        return Response(status_code=499)
 
     @app.exception_handler(Exception)
     async def _unhandled_application_error(

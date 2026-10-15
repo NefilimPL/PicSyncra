@@ -40,6 +40,22 @@ def staged_host_features(context, modules):
     return selected
 
 
+def test_ocr_host_separates_installed_models_from_writable_runtime_cache(context, monkeypatch):
+    from picsyncra import install_paths
+    from picsyncra.installation import module_bootstrap, module_state, ocr_entrypoint
+    selected = staged_host_features(context, ['ocr_runtime', 'ocr_models'])
+    monkeypatch.setattr(install_paths, 'resolve_install_context', lambda _: context)
+    monkeypatch.setattr(module_bootstrap, 'bootstrap_installed_modules', lambda *a, **kw: (context, selected))
+    monkeypatch.setattr(sys, 'executable', 'PicSyncra-OCR.exe')
+    for key in ('PICSYNCRA_OCR_ENABLED', 'PICSYNCRA_OCR_MODEL_ROOT', 'PADDLE_PDX_CACHE_HOME'):
+        monkeypatch.setenv(key, 'old-value')
+    observed = {}
+    monkeypatch.setattr(ocr_entrypoint, 'main', lambda: observed.update(os.environ))
+    runpy.run_path(str(Path(__file__).resolve().parents[1] / 'installer/installed_host.py'))['run_application']()
+    assert observed['PICSYNCRA_OCR_MODEL_ROOT'] == str(module_state.module_set_root(context, selected) / 'models/ocr')
+    assert Path(observed['PADDLE_PDX_CACHE_HOME']).is_relative_to(context.state_root / 'cache')
+
+
 @pytest.mark.parametrize('missing', ['runtime/ocr/PicSyncra-OCR.exe','models/ocr/model.bin'])
 def test_missing_ocr_payload_hides_feature_even_when_manifest_lists_components(context, monkeypatch, missing):
     from picsyncra import install_paths
