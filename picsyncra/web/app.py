@@ -5326,6 +5326,13 @@ def create_app() -> FastAPI:
         else None
     )
     app.state.installation_service = installation_service
+    installation_problem_reporter = None
+    app.state.installation_problem_observer = None
+    if installed_context is not None:
+        from .installation_events import InstallationProblemObserver, InstallationProblemReporter
+        installation_problem_reporter = InstallationProblemReporter()
+        app.state.installation_problem_observer = InstallationProblemObserver(installed_context.state_root,
+                                                                             installation_problem_reporter)
     app.state.maintenance_request_admission = (
         MaintenanceRequestAdmission(installation_service.maintenance_gate)
         if installation_service is not None
@@ -5605,10 +5612,14 @@ def create_app() -> FastAPI:
             log_error(f"WEB observability pruning failed: {exc}\n{traceback.format_exc()}")
         _start_backup_scheduler()
         start_notification_worker()
+        if app.state.installation_problem_observer is not None:
+            app.state.installation_problem_observer.start()
 
     @app.on_event("shutdown")
     def _shutdown() -> None:
         global _OCR_EXECUTION_SERVICE
+        if app.state.installation_problem_observer is not None:
+            app.state.installation_problem_observer.stop()
         if installation_service is not None:
             installation_service.stop_module_maintenance_watch()
         app.state.ocr_queue_stop.set()
@@ -5664,6 +5675,7 @@ def create_app() -> FastAPI:
                     ],
                     submit_operation=lambda request, actor_id: installation_service.submit(request, actor_id=actor_id),
                     read_operation=installation_service.read_operation,
+                    record_problem=installation_problem_reporter,
                     force_operation=installation_service.force_operation,
                     change_channel=installation_service.change_channel,
                     set_autostart=installation_service.set_autostart,

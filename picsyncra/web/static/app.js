@@ -11517,7 +11517,9 @@ function renderInstalledUpdateControls(panel) {
   if (snapshot.module_mode && window.PicSyncra?.ModuleUpdatesPanel) {
     if (!state.moduleUpdatesPanel) {
       state.moduleUpdatesPanel = window.PicSyncra.ModuleUpdatesPanel.create({
-        requestJson, onChanged: () => loadInstallationUpdates().then(() => renderSettings()).catch(() => {}),
+        requestJson, onChanged: ({preservePanel = false} = {}) => loadInstallationUpdates().then(() => {
+          if (!preservePanel) renderSettings();
+        }).catch(() => {}),
       });
       state.moduleUpdatesPanel.refresh();
     }

@@ -5043,6 +5043,20 @@ body[data-theme="dark"] .pimcore-runtime-conflict input {
 .module-updates-controls { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0; }
 .module-updates-conflicts { margin-top: 12px; }
 .module-updates-conflicts button { margin-right: 8px; }
+.module-update-alert {
+  margin: 16px 0;
+  padding: 16px;
+  border: 2px solid var(--danger);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--danger) 15%, var(--surface));
+  color: var(--text);
+  scroll-margin-top: 80px;
+  overflow-wrap: anywhere;
+}
+.module-update-alert[hidden] { display: none; }
+.module-update-alert:focus { outline: 3px solid var(--danger); outline-offset: 3px; }
+.module-update-alert h4 { margin-top: 0; }
+.module-update-alert pre { white-space: pre-wrap; }
 .module-update-operation { grid-column: 1 / -1; width: 100%; padding: 8px 0; }
 .module-update-operation progress { width: 100%; max-width: 560px; display: block; margin: 6px 0; }
 .module-update-operation progress[hidden] { display: none; }

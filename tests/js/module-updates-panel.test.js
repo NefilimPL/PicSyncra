@@ -12,11 +12,138 @@ class Element {
   addEventListener(name, callback) { this.events[name] = callback; }
   replaceChildren(...items) { this.children = items; }
   setAttribute(name, value) { this[name] = value; }
+  focus() { this.focusCount = (this.focusCount || 0) + 1; }
+  scrollIntoView() { this.scrollCount = (this.scrollCount || 0) + 1; }
   removeAttribute(name) { if (name === 'href') delete this._href; else delete this[name]; }
   get href() { return Object.hasOwn(this, '_href') ? new URL(this._href, 'http://localhost:8010/').href : ''; }
   set href(value) { this._href = value; }
 }
 function find(item, predicate) { return predicate(item) ? item : item.children?.map(child => find(child, predicate)).find(Boolean); }
+
+test('critical update alert stays at the top and focuses only once for a repeated failure', async t => {
+  resetBrowserGlobals(); global.document = {createElement:tag => new Element(tag)};
+  loadBrowserScript('picsyncra/web/static/module-updates-panel.js');
+  let fail = false;
+  const panel = window.PicSyncra.ModuleUpdatesPanel.create({requestJson:async url => {
+    if (url.endsWith('/modules')) return {modules:[]};
+    if (fail) throw new Error('Brak miejsca na kopię danych.');
+    return {operation_id:'a'.repeat(32),state:'preparing',action:'apply'};
+  }});
+  t.after(() => panel.dispose());
+  const alert = find(panel.element, child => child.role === 'alert');
+  assert.ok(alert);
+  assert.equal(alert.hidden, true);
+  assert.equal(alert.focusCount || 0, 0);
+  fail = true;
+  await panel.prepare('apply');
+  assert.equal(alert.hidden, false);
+  assert.equal(panel.element.children[2], alert);
+  assert.equal(alert.tabindex, '-1');
+  assert.match(find(alert, child => child.tagName === 'p').textContent, /Brak miejsca/);
+  assert.equal(alert.focusCount, 1);
+  assert.equal(alert.scrollCount, 1);
+  await panel.refresh();
+  assert.equal(alert.hidden, false);
+  assert.equal(alert.focusCount, 1);
+  assert.equal(alert.scrollCount, 1);
+  await panel.prepare('apply');
+  assert.equal(alert.focusCount, 2);
+  assert.equal(alert.scrollCount, 2);
+});
+
+test('resolved catalog errors clear their red block', async t => {
+  resetBrowserGlobals(); global.document = {createElement:tag => new Element(tag)};
+  loadBrowserScript('picsyncra/web/static/module-updates-panel.js');
+  let unavailable = true;
+  const panel = window.PicSyncra.ModuleUpdatesPanel.create({requestJson:async () => {
+    if (unavailable) throw new Error('Kontroler niedostępny.');
+    return {modules:[]};
+  }});
+  t.after(() => panel.dispose());
+  await panel.refresh();
+  const alert = find(panel.element, child => child.role === 'alert');
+  assert.equal(alert.hidden, false);
+  unavailable = false;
+  await panel.refresh();
+  assert.equal(alert.hidden, true);
+  unavailable = true;
+  await panel.refresh();
+  assert.equal(alert.focusCount, 2);
+});
+
+test('catalog recovery preserves an unresolved asynchronous operation failure', async t => {
+  resetBrowserGlobals(); global.document = {createElement:tag => new Element(tag)};
+  loadBrowserScript('picsyncra/web/static/module-updates-panel.js');
+  let catalogDown = true;
+  const panel = window.PicSyncra.ModuleUpdatesPanel.create({requestJson:async url => {
+    if (url.endsWith('/modules')) {
+      if (catalogDown) throw new Error('Kontroler niedostępny.');
+      return {modules:[]};
+    }
+    if (url.endsWith('/module-updates')) return {operation_id:'a'.repeat(32),state:'preparing',action:'apply'};
+    return {operation_id:'a'.repeat(32),state:'failed',action:'apply',error:'Brak miejsca na kopię danych.'};
+  }});
+  t.after(() => panel.dispose());
+  await panel.prepare('apply'); await new Promise(resolve => setImmediate(resolve));
+  const alert = find(panel.element, child => child.role === 'alert');
+  assert.equal(alert.hidden, false);
+  assert.match(find(alert, child => child.tagName === 'p').textContent, /Brak miejsca/);
+  catalogDown = false;
+  await panel.refresh();
+  assert.equal(alert.hidden, false);
+  assert.match(find(alert, child => child.tagName === 'p').textContent, /Brak miejsca/);
+});
+
+test('successful channel retry clears the recovered channel failure', async t => {
+  resetBrowserGlobals(); global.document = {createElement:tag => new Element(tag)};
+  loadBrowserScript('picsyncra/web/static/module-updates-panel.js');
+  let unavailable = true;
+  const panel = window.PicSyncra.ModuleUpdatesPanel.create({requestJson:async url => {
+    if (url.endsWith('/channel')) {
+      if (unavailable) throw new Error('Zmiana kanału nie powiodła się.');
+      return {channel:'dev'};
+    }
+    return {modules:[], channel:'stable'};
+  }});
+  t.after(() => panel.dispose());
+  const channel = find(panel.element, child => child.tagName === 'select' && child['aria-label'] === 'Kanał aktualizacji');
+  channel.value = 'dev'; await channel.events.change();
+  const alert = find(panel.element, child => child.role === 'alert');
+  assert.equal(alert.hidden, false);
+  unavailable = false;
+  channel.value = 'dev'; await channel.events.change();
+  assert.equal(alert.hidden, true);
+});
+
+test('repeated asynchronous conflicts focus once and a successful retry clears the alert', async t => {
+  resetBrowserGlobals(); global.document = {createElement:tag => new Element(tag)};
+  const callbacks = [];
+  const original = global.setTimeout;
+  global.setTimeout = callback => { callbacks.push(callback); return 0; };
+  t.after(() => { panel.dispose(); global.setTimeout = original; });
+  loadBrowserScript('picsyncra/web/static/module-updates-panel.js');
+  let committed = false;
+  const failure = {operation_id:'a'.repeat(32),state:'rolling_back',action:'apply',error:'Plan zawiera konflikty zgodności.',
+    conflicts:[{code:'controller_outdated',module_id:'core',requirement:'Wymagany kontroler 6; obecny 5.'}]};
+  const panel = window.PicSyncra.ModuleUpdatesPanel.create({requestJson:async url => {
+    if (url.endsWith('/modules')) return {modules:[]};
+    if (url.endsWith('/module-updates')) return {operation_id:'a'.repeat(32),state:'preparing',action:'apply'};
+    return committed ? {operation_id:'a'.repeat(32),state:'committed',action:'apply'} : failure;
+  }});
+  await panel.prepare('apply');
+  await new Promise(resolve => setImmediate(resolve));
+  const alert = find(panel.element, child => child.role === 'alert');
+  assert.equal(alert.hidden, false);
+  assert.equal(alert.focusCount, 1);
+  const setupLink = find(alert, child => child.tagName === 'a' && child.textContent.includes('Setup'));
+  assert.ok(setupLink);
+  await callbacks.shift()();
+  assert.equal(alert.focusCount, 1);
+  assert.equal(find(alert, child => child.tagName === 'a' && child.textContent.includes('Setup')), setupLink);
+  committed = true;
+  await callbacks.shift()();
+  assert.equal(alert.hidden, true);
+});
 
 test('missing OCR shows Setup instructions and no download or version selection', async () => {
   resetBrowserGlobals(); global.document = {createElement:tag => new Element(tag)};
