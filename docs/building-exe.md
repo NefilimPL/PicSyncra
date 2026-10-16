@@ -137,6 +137,14 @@ pozostają zachowane. Odznaczenie składnika przy kolejnej instalacji nie usuwa
 wcześniej zainstalowanego OCR. Zwykły aktualizator aktualizuje już zainstalowane
 moduły OCR, ale nie doinstalowuje brakującego składnika.
 Build z `--without-ocr` nie oferuje checkboxa OCR.
+
+Przy pakowaniu OCR hook `installer/hooks/hook-paddlex.py` dołącza metadane
+dystrybucji dla `paddlex[ocr-core]` i jego zależności, także zagnieżdżonych extras.
+Samo zebranie modułów przez `--collect-all` nie wystarcza do kontroli zależności
+wykonywanej przez PaddleX. Brak wymaganej dystrybucji przerywa build.
+Przy błędzie tworzenia pipeline tester OCR pokazuje również przyczynę wyjątku,
+zamiast samego ogólnego komunikatu PaddleOCR.
+
 Przed kompilacją Setup generator uruchamia skompilowanego pomocnika dla każdej
 dostępnej kombinacji składników i sprawdza bazę oraz aktywowany zestaw.
 Skrypt tworzy `active.json` dla wydania i

@@ -76,6 +76,39 @@ def test_runtime_reader_tolerates_bounded_library_output_before_the_result(tmp_p
     assert process.terminated is False
 
 
+def test_installed_ocr_preserves_pipeline_dependency_cause(tmp_path):
+    image = tmp_path / "input.png"
+    image.write_bytes(b"image")
+    commands = StringIO(json.dumps({
+        "kind": "job", "run_id": "dependency-error", "path": str(image),
+        "work_root": str(tmp_path), "profile_ids": ["fast"],
+    }) + '\n')
+    responses = StringIO()
+
+    def fail(_job):
+        try:
+            raise ModuleNotFoundError("No module named 'ocr_engine'")
+        except ImportError as exc:
+            raise RuntimeError("A dependency error occurred during pipeline creation.") from exc
+
+    serve_ocr_runtime(commands, responses, build_id="build", component_id="ocr", run_job=fail)
+    result = json.loads(responses.getvalue().splitlines()[-1])
+    assert "ocr_engine" in result["message"]
+    assert "pipeline creation" in result["message"]
+
+
+def test_multi_profile_failure_keeps_the_underlying_dependency_error():
+    def fail(_profile):
+        try:
+            raise ModuleNotFoundError("missing OCR dependency")
+        except ImportError as exc:
+            raise RuntimeError("pipeline creation failed") from exc
+
+    recognizer = image_dimensions.MultiProfileImageDimensionRecognizer(["fast"], recognizer_factory=fail)
+    with pytest.raises(image_dimensions.ImageDimensionUnavailable, match="missing OCR dependency"):
+        recognizer.detect("input.png")
+
+
 @pytest.mark.parametrize("frame_bytes", [16384, 65536], ids=["at-limit", "oversized"])
 def test_result_reader_enforces_its_frame_limit_with_a_size_respecting_stream(tmp_path, monkeypatch, frame_bytes):
     monkeypatch.setattr(ocr_runtime, "MAX_OCR_EVENT_BYTES", 16384)

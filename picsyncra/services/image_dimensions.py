@@ -17,6 +17,7 @@ import re
 import sys
 from typing import Callable, Iterable, Mapping, Protocol
 
+from .ocr_errors import format_ocr_error
 from .ocr_values import comparison_key
 from .ocr_profiles import available_ocr_profiles, normalize_ocr_profile_ids, ocr_profile
 
@@ -512,7 +513,7 @@ class MultiProfileImageDimensionRecognizer:
             try:
                 detected = self._recognizer_factory(profile_id).detect(path)
             except Exception as exc:
-                message = str(exc).strip()
+                message = format_ocr_error(exc).strip()
                 failures.append(message or f"Nie udalo sie uruchomic profilu OCR {profile_id}.")
                 continue
             for box in detected:

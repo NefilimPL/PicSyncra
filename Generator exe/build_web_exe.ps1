@@ -107,6 +107,7 @@ Invoke-Native $Python "-m" "PyInstaller" "--noconfirm" "--clean" "--log-level=WA
     --workpath $WorkPath `
     --icon $IconPath `
     --version-file $VersionInfoPath `
+    --additional-hooks-dir (Join-Path $RepoRoot "installer/hooks") `
     --collect-submodules picsyncra `
     --collect-submodules mysql.connector `
     --collect-submodules uvicorn `

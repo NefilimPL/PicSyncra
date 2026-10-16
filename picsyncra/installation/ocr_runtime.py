@@ -663,10 +663,12 @@ def serve_ocr_runtime(
                 {"kind": "result", "run_id": job["run_id"], "diagnostics": diagnostics},
             )
         except Exception as exc:
+            from .ocr_errors import format_ocr_error
+
             _write_runtime_message(
                 stdout, {
                     "kind": "error", "run_id": job["run_id"], "code": "job_failed",
-                    "message": f"{type(exc).__name__}: {exc}"[:2048],
+                    "message": format_ocr_error(exc),
                 }
             )
     return 0
