@@ -62,6 +62,9 @@ class OcrExecutionService:
     def start(self) -> None:
         self._worker.start()
 
+    def diagnostic_counts(self) -> dict[str, int]:
+        return self._registry.diagnostic_counts()
+
     def submit_test(self, *, path: str) -> str:
         return self._submit(kind="test", job_id=None, path=path)
 

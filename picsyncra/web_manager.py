@@ -1108,6 +1108,9 @@ def stop_web_as_admin(port: int) -> ActionResult:
 
 
 def run_service_mode(port: int, host: str) -> int:
+    from .memory_diagnostics import start_memory_reporting
+
+    start_memory_reporting('backend')
     root = app_root()
     os.chdir(root)
     log_dir(root).mkdir(parents=True, exist_ok=True)
@@ -1763,6 +1766,9 @@ def main(argv: list[str] | None = None) -> int:
         return run_service_mode(args.port, args.host)
     if args.stop_panel:
         return 0 if stop_web(args.port).ok else 1
+    from .memory_diagnostics import start_memory_reporting
+
+    start_memory_reporting('manager')
     try:
         WebManagerApp().run()
     except ModuleNotFoundError as exc:

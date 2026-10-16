@@ -72,6 +72,9 @@ def _serialize_report(report: Any, diagnostics: Any) -> dict[str, object]:
 def _worker_main(commands: Any, events: Any, cpu_percent: int, telemetry: Any) -> None:
     """Run inside the child process; keep model imports out of the web process."""
 
+    from ..memory_diagnostics import start_memory_reporting
+
+    start_memory_reporting('ocr')
     limits = WindowsJobLimits()
     capability = limits.apply_to_process(pid=os.getpid(), cpu_percent=cpu_percent)
     events.put(
