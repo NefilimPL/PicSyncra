@@ -8,6 +8,7 @@ from queue import Empty
 import os
 from typing import Any
 
+from .ocr_errors import format_ocr_error
 from .ocr_values import comparison_key
 from .ocr_resource_policy import OcrResourcePolicy, ResourceTelemetry
 from .windows_job_limits import WindowsJobLimits
@@ -160,7 +161,7 @@ def _worker_main(commands: Any, events: Any, cpu_percent: int, telemetry: Any) -
                         available=False,
                         dimensions={},
                         candidates=[],
-                        message=str(exc) or "Local OCR is unavailable.",
+                        message=format_ocr_error(exc) or "Local OCR is unavailable.",
                     )
                     payload = _serialize_diagnostics(diagnostics)
                 except Exception as exc:
@@ -168,7 +169,7 @@ def _worker_main(commands: Any, events: Any, cpu_percent: int, telemetry: Any) -
                         available=False,
                         dimensions={},
                         candidates=[],
-                        message=f"Local OCR failed: {exc}",
+                        message=f"Local OCR failed: {format_ocr_error(exc)}",
                     )
                     payload = _serialize_diagnostics(diagnostics)
                 payload.setdefault("regions", [])
@@ -181,7 +182,7 @@ def _worker_main(commands: Any, events: Any, cpu_percent: int, telemetry: Any) -
                     }
                 )
             except Exception as exc:
-                events.put({"kind": "error", "run_id": run_id, "message": str(exc)})
+                events.put({"kind": "error", "run_id": run_id, "message": format_ocr_error(exc)})
     finally:
         limits.close()
 

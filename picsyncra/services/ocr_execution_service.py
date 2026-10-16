@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 import time
-from threading import Thread
+from threading import Thread, RLock
 from typing import Protocol
 
 from .ocr_progress import OcrProgressRegistry, OcrRunSnapshot
@@ -57,6 +57,7 @@ class OcrExecutionService:
         self._inflight_run_ids: set[str] = set()
         self._maintenance_leases: dict[str, MaintenanceLease] = {}
         self._pending_dispatch: set[str] = set()
+        self._pump_lock = RLock()
 
     def start(self) -> None:
         self._worker.start()
@@ -149,6 +150,10 @@ class OcrExecutionService:
 
     def pump(self) -> None:
         """Move all currently available child-process messages into the registry."""
+        with self._pump_lock:
+            self._pump()
+
+    def _pump(self) -> None:
 
         self._worker.update_telemetry(self._telemetry())
         for event in self._worker.poll_events():

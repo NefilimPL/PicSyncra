@@ -8,6 +8,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 
 from ..installation.contracts import OperationRequest
 
@@ -28,6 +29,7 @@ class InstallationApiDependencies:
     heartbeat: Callable[[str, str], dict[str, Any]]
     public_status: Callable[[], dict[str, Any]]
     module_client: Any = None
+    record_problem: Callable[[dict[str, Any]], None] = lambda _snapshot: None
 
 
 def _require_installed(dependencies: InstallationApiDependencies) -> None:
@@ -67,6 +69,10 @@ def build_installation_router(dependencies: InstallationApiDependencies) -> APIR
     """Build installed-update routes without coupling portable WEB to updates."""
     router = APIRouter()
 
+    def report_problem(request, snapshot):
+        admin = dependencies.require_admin(request)
+        dependencies.record_problem(dict(snapshot, username=str(admin.get('username') or admin.get('id') or '')))
+
     def modules(request, *, mutation=False):
         _require_installed(dependencies)
         dependencies.require_admin(request)
@@ -79,7 +85,9 @@ def build_installation_router(dependencies: InstallationApiDependencies) -> APIR
     def installation_modules(request: Request):
         client = modules(request)
         try: return client.module_catalog()
-        except RuntimeError as exc: raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            report_problem(request, dict(action='catalog', state='failed', error=str(exc)))
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @router.post('/api/installation/module-plans')
     async def installation_module_plan(request: Request):
@@ -88,11 +96,33 @@ def build_installation_router(dependencies: InstallationApiDependencies) -> APIR
         try:
             payload = await request.json()
             validate_module_payload('module_plan', payload)
-            return client.module_plan(**payload)
+            result = await run_in_threadpool(client.module_plan, **payload)
+            await run_in_threadpool(report_problem, request, result)
+            return result
         except ValueError as exc: raise HTTPException(status_code=400, detail=str(exc)) from exc
         except RuntimeError as exc:
             detail = dict(message=str(exc), **(getattr(exc, 'details', None) or {}))
+            if detail.get('code') != 'permission_required':
+                await run_in_threadpool(report_problem, request, dict(state='failed', error=str(exc), error_details=detail))
             raise HTTPException(status_code=409, detail=detail) from exc
+
+    @router.post('/api/installation/module-updates')
+    async def installation_module_submit(request: Request):
+        client = modules(request, mutation=True)
+        from ..installation.control_protocol import validate_module_payload
+        try:
+            if not callable(getattr(client, 'module_submit', None)):
+                await run_in_threadpool(report_problem, request, dict(state='failed', error='Aktualizacje w tle wymagają nowszego kontrolera. Uruchom pełny instalator Setup na istniejącej instalacji.'))
+                raise HTTPException(status_code=409, detail=dict(code='setup_required', message='Aktualizacje w tle wymagają nowszego kontrolera. Uruchom pełny instalator Setup na istniejącej instalacji.'))
+            payload = await request.json()
+            validate_module_payload('module_submit', payload)
+            result = await run_in_threadpool(client.module_submit, **payload)
+            return JSONResponse(result, status_code=202)
+        except ValueError as exc: raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            if (getattr(exc, 'details', None) or {}).get('code') != 'permission_required':
+                await run_in_threadpool(report_problem, request, dict(state='failed', error=str(exc), error_details=getattr(exc, 'details', None)))
+            raise HTTPException(status_code=409, detail=dict(message=str(exc), **(getattr(exc, 'details', None) or {}))) from exc
 
     @router.post('/api/installation/module-authorization')
     async def installation_module_authorization(request: Request):
@@ -103,7 +133,9 @@ def build_installation_router(dependencies: InstallationApiDependencies) -> APIR
             validate_module_payload('module_authorization_request', payload)
             return client.module_authorization_request(**payload)
         except ValueError as exc: raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except RuntimeError as exc: raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            await run_in_threadpool(report_problem, request, dict(action='authorization', state='failed', error=str(exc)))
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @router.get('/api/installation/module-authorization/{request_id}')
     def installation_module_authorization_status(request: Request, request_id: str):
@@ -113,7 +145,9 @@ def build_installation_router(dependencies: InstallationApiDependencies) -> APIR
             validate_module_payload('module_authorization_status', dict(request_id=request_id))
             return client.module_authorization_status(request_id)
         except ValueError as exc: raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except RuntimeError as exc: raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            report_problem(request, dict(operation_id=request_id, action='authorization', state='failed', error=str(exc)))
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @router.post('/api/installation/module-authorization/{request_id}/cancel')
     def installation_module_authorization_cancel(request: Request, request_id: str):
@@ -136,7 +170,10 @@ def build_installation_router(dependencies: InstallationApiDependencies) -> APIR
             validate_module_payload('module_execute', dict(body, plan_id=plan_id))
             return JSONResponse(client.module_execute(plan_id, **body), status_code=202)
         except ValueError as exc: raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except RuntimeError as exc: raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            await run_in_threadpool(report_problem, request, dict(plan_id=plan_id, state='failed', error=str(exc),
+                                                                error_details=getattr(exc, 'details', None)))
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @router.get("/api/installation")
     def installation_status(request: Request) -> dict[str, Any]:
@@ -178,6 +215,7 @@ def build_installation_router(dependencies: InstallationApiDependencies) -> APIR
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         if result is None:
             raise HTTPException(status_code=404, detail="Nie znaleziono operacji.")
+        report_problem(request, result)
         return result
 
     @router.post("/api/installation/operations/{operation_id}/force")
@@ -202,6 +240,7 @@ def build_installation_router(dependencies: InstallationApiDependencies) -> APIR
         try:
             return dependencies.change_channel(channel)
         except RuntimeError as exc:
+            await run_in_threadpool(report_problem, request, dict(action='channel', state='failed', error=str(exc)))
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @router.post("/api/installation/autostart")

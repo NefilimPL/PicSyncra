@@ -6791,6 +6791,7 @@ async function loadBootstrap(options = {}) {
   };
   rerenderPanelTimestampViews();
   state.csrfToken = payload.csrf_token || state.csrfToken || "";
+  showReleaseNotice(payload.release_notice);
   state.ocrEnabledSlots = Array.isArray(payload.ocr_enabled_slots)
     ? payload.ocr_enabled_slots.map(String)
     : state.ocrEnabledSlots;
@@ -11516,7 +11517,9 @@ function renderInstalledUpdateControls(panel) {
   if (snapshot.module_mode && window.PicSyncra?.ModuleUpdatesPanel) {
     if (!state.moduleUpdatesPanel) {
       state.moduleUpdatesPanel = window.PicSyncra.ModuleUpdatesPanel.create({
-        requestJson, onChanged: () => loadInstallationUpdates().then(() => renderSettings()).catch(() => {}),
+        requestJson, onChanged: ({preservePanel = false} = {}) => loadInstallationUpdates().then(() => {
+          if (!preservePanel) renderSettings();
+        }).catch(() => {}),
       });
       state.moduleUpdatesPanel.refresh();
     }
@@ -11616,13 +11619,41 @@ async function startInstalledPresenceHeartbeat() {
     renderInstallationMaintenanceNotice(payload);
     return payload;
   };
-  createPoller("installation-presence", 15000, heartbeat).schedule(0);
+  createPoller("installation-presence", 2000, heartbeat).schedule(0);
+}
+
+function showReleaseNotice(notice) {
+  if (!notice || document.querySelector('#releaseNoticeDialog')) return;
+  const dialog = document.createElement('dialog');
+  dialog.id = 'releaseNoticeDialog';
+  const title = document.createElement('h2'); title.textContent = `Zmiany w ${notice.tag}`;
+  const body = document.createElement('pre'); body.textContent = notice.body || 'Opis zmian jest dostępny na stronie wydania.';
+  body.className = 'release-notice-body';
+  const link = document.createElement('a');
+  link.textContent = 'Otwórz wydanie i changelog na GitHub';
+  if (/^https:\/\/github\.com\/NefilimPL\/PicSyncra\/releases\/tag\//.test(notice.url || '')) link.href = notice.url;
+  link.target = '_blank'; link.rel = 'noopener noreferrer';
+  const close = document.createElement('button'); close.type = 'button'; close.textContent = 'Rozumiem';
+  const acknowledge = async event => {
+    event.preventDefault(); close.disabled = true;
+    try {
+      await requestJson('/api/installation/release-notice/read', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({version_id:notice.version_id})});
+      dialog.close(); dialog.remove();
+    } catch (error) { close.disabled = false; showError(error); }
+  };
+  close.addEventListener('click', acknowledge); dialog.addEventListener('cancel', acknowledge);
+  dialog.append(title, body, link, close); document.body.append(dialog); dialog.showModal();
 }
 
 function renderInstallationMaintenanceNotice(payload) {
   const source = payload && typeof payload === "object" ? payload : {};
   const stateName = String(source.state || "idle");
+  const previous = state.installationMaintenanceState;
   state.installationMaintenanceState = stateName;
+  if (stateName === 'idle' && previous !== 'idle') {
+    requestJson('/api/installation/release-notice').then(value => showReleaseNotice(value.notice)).catch(() => {});
+    loadRecentProcessJobs().catch(() => {});
+  }
   let notice = document.querySelector("#installationMaintenanceNotice");
   if (!notice && stateName !== "idle") {
     notice = document.createElement("div");
@@ -11634,11 +11665,11 @@ function renderInstallationMaintenanceNotice(payload) {
   if (!notice) return;
   notice.hidden = stateName === "idle";
   if (stateName === "countdown") {
-    notice.textContent = "Trwa przygotowanie aktualizacji. Backend zostanie uruchomiony ponownie za około 2 minuty; zapisz bieżącą pracę.";
+    notice.textContent = "Trwa aktualizacja aplikacji. Kolejka jest wstrzymana. Pracę będzie można kontynuować po zakończeniu aktualizacji; możesz zamknąć kartę.";
   } else if (stateName === "draining") {
-    notice.textContent = "Trwa oczekiwanie na zakończenie zadań przed aktualizacją.";
+    notice.textContent = "Trwa aktualizacja aplikacji. Rozpoczęte zadania zostaną ukończone, a oczekujące pozostają wstrzymane. Pracę będzie można kontynuować po aktualizacji. Wpisane dane pozostają w formularzu.";
   } else {
-    notice.textContent = "Trwa konserwacja aplikacji. Zapisy są chwilowo wstrzymane.";
+    notice.textContent = "Trwa aktualizacja aplikacji. Kolejka i zapisy są wstrzymane. Pracę będzie można kontynuować po zakończeniu aktualizacji.";
   }
 }
 

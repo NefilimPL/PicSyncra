@@ -31,7 +31,10 @@ class ProcessApiDependencies:
 def _reserve_process_capacity(queue: Any, cache_scope: str) -> Any:
     try:
         return queue.reserve(cache_scope)
-    except (ProcessQueueFull, OwnerQueueLimit, MaintenanceInProgress) as exc:
+    except MaintenanceInProgress as exc:
+        raise HTTPException(status_code=503, detail='Trwa aktualizacja aplikacji. Nowe zadania są wstrzymane; spróbuj po jej zakończeniu.',
+                            headers={'Retry-After':'2'}) from exc
+    except (ProcessQueueFull, OwnerQueueLimit) as exc:
         retry_after = getattr(exc, "retry_after_seconds", None)
         if retry_after is None:
             limits = getattr(queue, "limits", None)
@@ -69,7 +72,7 @@ def build_process_router(dependencies: ProcessApiDependencies) -> APIRouter:
             reservation.release()
             raise
         try:
-            job = dependencies.job_store(
+            job = await run_in_threadpool(dependencies.job_store,
                 username=username,
                 cache_scope=cache_scope,
                 form=form,

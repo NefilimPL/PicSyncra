@@ -15,7 +15,23 @@ class RequestStub:
         return self._payload
 
 
-def app_with_dependencies(*, installed: bool = True, module_client=None, installation_status=None, read_operation=None):
+def test_background_submit_is_csrf_protected_and_old_hosts_get_setup_instruction():
+    payload = dict(action='apply', selected={}, excluded=[], restore_backup_id=None)
+    class Client:
+        def module_submit(self, **kwargs): return dict(operation_id='a'*32, state='preparing')
+    routes, _ = app_with_dependencies(module_client=Client())
+    with pytest.raises(HTTPException) as failure:
+        asyncio.run(routes['/api/installation/module-updates'](RequestStub(payload)))
+    assert failure.value.status_code == 403
+    response = asyncio.run(routes['/api/installation/module-updates'](RequestStub(payload, csrf='valid')))
+    assert response.status_code == 202
+    routes, _ = app_with_dependencies(module_client=object())
+    with pytest.raises(HTTPException) as failure:
+        asyncio.run(routes['/api/installation/module-updates'](RequestStub(payload, csrf='valid')))
+    assert failure.value.detail['code'] == 'setup_required'
+
+
+def app_with_dependencies(*, installed: bool = True, module_client=None, installation_status=None, read_operation=None, record_problem=lambda _:None):
     from picsyncra.web.installation_api import InstallationApiDependencies, build_installation_router
 
     calls: list[object] = []
@@ -49,6 +65,7 @@ def app_with_dependencies(*, installed: bool = True, module_client=None, install
         heartbeat=lambda user_id, session_id: {"user": user_id, "session": session_id},
         public_status=lambda: {"state": "countdown", "deadline_utc": "2026-09-16T12:00:00Z"},
         module_client=module_client,
+        record_problem=record_problem,
     ))
     return {route.path: route.endpoint for route in router.routes}, calls
 
@@ -112,10 +129,50 @@ def test_status_returns_service_unavailable_when_controller_disconnects():
 def test_operation_poll_returns_service_unavailable_instead_of_critical_error():
     from picsyncra.installation.control_pipe import ControlPipeError
     def unavailable(operation_id): raise ControlPipeError('Brak połączenia z kontrolerem.')
-    routes, _ = app_with_dependencies(read_operation=unavailable)
+    reported = []
+    routes, _ = app_with_dependencies(read_operation=unavailable, record_problem=reported.append)
     with pytest.raises(HTTPException) as error:
         routes['/api/installation/operations/{operation_id}'](RequestStub(), 'a' * 32)
     assert error.value.status_code == 503
+    assert reported == []
+
+
+def test_compatibility_conflicts_are_reported_for_both_plan_and_operation_status():
+    conflicts = [dict(code='controller_outdated', module_id='core', requirement='Wymagany kontroler 6; obecny 5.')]
+    class Client:
+        def module_plan(self, **_): return dict(plan_id='a'*32, conflicts=conflicts)
+    reported = []
+    result = dict(operation_id='a'*32, state='failed', error='Plan zawiera konflikty zgodności.', conflicts=conflicts)
+    routes, _ = app_with_dependencies(module_client=Client(), read_operation=lambda _:result, record_problem=reported.append)
+    payload = dict(action='apply', selected={}, excluded=[], restore_backup_id=None)
+    asyncio.run(routes['/api/installation/module-plans'](RequestStub(payload, csrf='valid')))
+    routes['/api/installation/operations/{operation_id}'](RequestStub(), 'a'*32)
+    assert len(reported) == 2
+    assert all(item['conflicts'] == conflicts and item['username'] == 'admin' for item in reported)
+
+
+def test_execute_rejection_is_logged_with_plan_identity():
+    class Client:
+        def module_execute(self, plan_id, **_): raise RuntimeError('Instalacja zmieniła się. Przygotuj nowy plan.')
+    reported = []
+    routes, _ = app_with_dependencies(module_client=Client(), record_problem=reported.append)
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(routes['/api/installation/module-plans/{plan_id}/execute'](
+            RequestStub(dict(restore_backup_id=None, acknowledge_data_loss=False), csrf='valid'), 'a'*32))
+    assert error.value.status_code == 409
+    assert len(reported) == 1
+    assert reported[0]['plan_id'] == 'a'*32
+
+
+def test_catalog_errors_shown_in_the_alert_are_reported():
+    class Client:
+        def module_catalog(self): raise RuntimeError('Kontroler niedostępny.')
+    reported = []
+    routes, _ = app_with_dependencies(module_client=Client(), record_problem=reported.append)
+    with pytest.raises(HTTPException) as failure:
+        routes['/api/installation/modules'](RequestStub())
+    assert failure.value.status_code == 409
+    assert reported[0]['action'] == 'catalog'
 
 
 def test_installation_status_and_release_channel_require_admin() -> None:

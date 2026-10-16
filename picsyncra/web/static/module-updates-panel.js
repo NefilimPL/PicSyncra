@@ -31,6 +31,17 @@
     const errorDetails = node('details'); errorDetails.hidden = true;
     const errorSummary = node('summary', 'Szczegóły błędu pobierania');
     const errorText = node('pre'); errorDetails.append(errorSummary, errorText);
+    const problem = node('div', undefined, 'module-update-alert');
+    problem.hidden = true;
+    problem.setAttribute('role', 'alert');
+    problem.setAttribute('tabindex', '-1');
+    const problemTitle = node('h4', 'Nie można wykonać aktualizacji');
+    const problemSummary = node('p', '');
+    const transientSummary = node('p', ''); transientSummary.hidden = true;
+    const focusedProblems = new Set();
+    let attempt = 0;
+    let visibleProblem = null, visibleConflict = null, problemSource = null;
+    let transientSource = null, transientKey = null;
     const table = node('div', undefined, 'module-updates-rows');
     const controls = node('div', undefined, 'module-updates-controls');
     const channelLabel = node('label', 'Kanał aktualizacji: ');
@@ -45,12 +56,66 @@
       try {
         const result = await post('/api/installation/channel', {channel:channel.value});
         currentChannel = result.channel;
+        clearTransientProblem('channel');
         await refresh(); onChanged();
-      } catch (error) { channel.value = currentChannel; status.textContent = error.message; }
+      } catch (error) { channel.value = currentChannel; status.textContent = error.message; showProblem(error.message, error.detail, null, 'channel'); }
       finally { busy = false; synchronize(); }
     });
     channelLabel.append(channel);
     const conflicts = node('div', undefined, 'module-updates-conflicts');
+    function clearTransientProblem(source) {
+      if (transientSource === source) {
+        transientSummary.hidden = true;
+        transientSummary.textContent = '';
+        focusedProblems.delete(transientKey);
+        transientSource = transientKey = null;
+      }
+      if (problemSource === source) clearProblem();
+    }
+    function clearProblem() {
+      if (problemSource !== 'operation') focusedProblems.delete(visibleProblem);
+      focusedProblems.delete(transientKey);
+      transientSummary.hidden = true;
+      transientSummary.textContent = '';
+      transientSource = transientKey = null;
+      problem.hidden = true;
+      visibleProblem = visibleConflict = problemSource = null;
+      problemSummary.textContent = '';
+      conflicts.replaceChildren();
+      errorDetails.hidden = true;
+      errorText.textContent = '';
+    }
+    function presentProblem(message, details, identity) {
+      const key = JSON.stringify([identity || `attempt:${attempt}`, message, details || null]);
+      if (!problem.hidden && visibleProblem === key) return;
+      visibleProblem = key;
+      problemSummary.textContent = message;
+      errorDetails.hidden = !details;
+      errorText.textContent = details ? JSON.stringify(details, null, 2) : '';
+      problem.hidden = false;
+      focusProblem(key);
+    }
+    function focusProblem(key) {
+      if (!focusedProblems.has(key)) {
+        focusedProblems.add(key);
+        problem.focus?.({preventScroll:true});
+        problem.scrollIntoView?.({block:'center'});
+      }
+    }
+    function showProblem(message, details, identity, source = 'operation') {
+      if (source !== 'operation' && !problem.hidden && problemSource === 'operation') {
+        transientSource = source;
+        transientKey = JSON.stringify([visibleProblem, source, message]);
+        transientSummary.textContent = message;
+        transientSummary.hidden = false;
+        focusProblem(transientKey);
+        return;
+      }
+      visibleConflict = null;
+      problemSource = source;
+      conflicts.replaceChildren();
+      presentProblem(message, details, identity);
+    }
     const selected = new Map(), rows = new Map(), selectedVersions = new Map();
     let busy = false, timer = null, catalogTimer = null, disposed = false, operationId = null, restoreBackupId = null, terminalMessage = null;
     let lastOperation = null, retryAction = null;
@@ -73,7 +138,8 @@
         endAuthorization('Logowanie anulowane przed instalacją.');
       } catch (error) { if (authorizationId === identifier) status.textContent = error.message; }
     }); authorizationCancel.hidden = true;
-    operationBox.append(status, progressbar, errorDetails, retry, authorizationLink, authorizationCancel);
+    operationBox.append(status, progressbar, retry, authorizationLink, authorizationCancel);
+    problem.append(problemTitle, problemSummary, transientSummary, conflicts, errorDetails);
     const ocrSection = node('div', undefined, 'module-ocr-install');
     const ocrNote = node('p', '', 'settings-note');
     ocrSection.append(node('strong', 'Silnik i modele OCR'), ocrNote, ocr);
@@ -83,7 +149,7 @@
     const backups = node('select'); backups.setAttribute('aria-label', 'Kopia bazy do odtworzenia');
     backups.addEventListener('change', () => { restoreBackupId = backups.value || null; });
     backupLabel.append(backups);
-    element.append(title, controls, note, channelLabel, operationBox, table, ocrSection, backupLabel, conflicts);
+    element.append(title, controls, problem, note, channelLabel, operationBox, table, ocrSection, backupLabel);
     function placeProgress(action, moduleId) {
       const row = rows.get(action === 'install_ocr' ? 'ocr' : moduleId);
       const target = row?.element || (action === 'install_ocr' ? ocrSection : element);
@@ -92,7 +158,7 @@
     function showProgress(operation) {
       lastOperation = operation;
       placeProgress(operation.action, operation.progress?.module_id);
-      const labels = {accepted:'Operacja przyjęta — oczekiwanie na rozpoczęcie.', downloading:'Pobieranie',
+      const labels = {preparing:'Sprawdzanie zgodności i przygotowanie aktualizacji.', accepted:'Operacja przyjęta — oczekiwanie na rozpoczęcie.', downloading:'Pobieranie',
         draining:'Oczekiwanie na zakończenie zadań.', stopping:'Zatrzymywanie backendu.',
         backing_up:'Tworzenie kopii bazy i konfiguracji.', installing:'Instalowanie',
         restoring:'Odtwarzanie bazy i konfiguracji.', migrating:'Migracja bazy.',
@@ -116,9 +182,14 @@
         } else text += ' · obliczanie prędkości i czasu…';
       } else progressbar.removeAttribute('value');
       status.textContent = text + (operation.error ? ` — ${operation.error}` : '');
+      if (!['committed','rolled_back','failed','recovery_required'].includes(operation.state)) {
+        status.textContent += ' Aktualizacja działa w tle — możesz zamknąć kartę.';
+      }
       const details = operation.error_details;
-      errorDetails.hidden = !details;
-      errorText.textContent = details ? JSON.stringify(details, null, 2) : '';
+      if (operation.conflicts?.length) conflictDialog(operation);
+      else if (operation.error || ['failed','recovery_required'].includes(operation.state)) {
+        showProblem(operation.error || labels[operation.state], details, operation.operation_id);
+      } else if (operation.state === 'committed') clearProblem();
       if (details?.http_status) status.textContent += ` (HTTP ${details.http_status})`;
       const canRetry = operation.error && ['failed', 'rolled_back'].includes(operation.state) &&
         (operation.action === 'install_ocr' || details?.retryable === true);
@@ -176,7 +247,7 @@
         }
         if (request.state === 'cancelled') { endAuthorization('Logowanie lub plan instalacji anulowano.'); return; }
       } catch (error) {
-        if (authorizationId === identifier) endAuthorization(error.message);
+        if (authorizationId === identifier) { endAuthorization(error.message); showProblem(error.message, error.detail); }
         return;
       }
       timer = setTimeout(pollAuthorization, 1500);
@@ -202,6 +273,7 @@
       if (!operationId) status.textContent = 'Pobieranie katalogu wersji z GitHuba…';
       try {
         const snapshot = await requestJson('/api/installation/modules');
+        clearTransientProblem('catalog');
         currentChannel = snapshot.channel || currentChannel;
         channel.value = currentChannel;
         if (!operationId && snapshot.operation && !['committed','rolled_back','failed','recovery_required'].includes(snapshot.operation.state)) {
@@ -276,9 +348,14 @@
           `${snapshot.catalog_error?.message || 'Nie udało się pobrać katalogu GitHuba.'} Pokazywany jest katalog lokalny; brakujące pliki wymagają połączenia.` :
           snapshot.blocked_releases?.length && !snapshot.modules.some(m => m.latest) ? 'Brak kompletnego podpisanego wydania modułów w Release.' : '');
         synchronize();
-      } catch (error) { status.textContent = error.message; }
+      } catch (error) { status.textContent = error.message; showProblem(error.message, error.detail, null, 'catalog'); }
     }
     function conflictDialog(plan) {
+      const identity = JSON.stringify([plan.operation_id || plan.plan_id || `attempt:${attempt}`, plan.conflicts,
+        plan.error || 'Plan zawiera konflikty zgodności.', plan.error_details || null]);
+      if (!problem.hidden && visibleConflict === identity) return;
+      visibleConflict = identity;
+      problemSource = 'operation';
       conflicts.replaceChildren(node('h4', 'Konflikty zgodności'));
       for (const item of plan.conflicts) conflicts.append(node('p', `${item.module_id} ${item.selected_version || ''}${item.dependency_id ? ` ↔ ${item.dependency_id} ${item.dependency_version || 'brak'}` : ''}: ${item.requirement}`));
       if (plan.conflicts.some(item => ['controller_outdated', 'launcher_outdated'].includes(item.code))) {
@@ -290,28 +367,34 @@
       } else {
         conflicts.append(node('p', 'Zmień wybory wersji wskazanych modułów i ponów aktualizację. Blokady pozostają zachowane.'));
       }
-      const cancel = button('Nie aktualizuj', () => conflicts.replaceChildren());
+      const cancel = button('Zamknij komunikat', clearProblem);
       conflicts.append(cancel);
+      presentProblem(plan.error || 'Plan zawiera konflikty zgodności.', plan.error_details,
+        identity);
     }
     async function prepare(action) {
       if (busy) return;
-      busy = true; synchronize(); conflicts.replaceChildren();
+      busy = true; attempt++; synchronize(); clearProblem();
       placeProgress(action, null);
       retry.hidden = true; errorDetails.hidden = true;
       progressbar.hidden = false; progressbar.removeAttribute('value');
       status.textContent = action === 'install_ocr' ? 'Sprawdzanie zgodności i przygotowanie instalacji OCR…' : 'Sprawdzanie zgodności i przygotowanie planu…';
       try {
+        if (!restoreBackupId) {
+          const operation = await post('/api/installation/module-updates', {action,
+            selected: ['apply','rollback_modules'].includes(action) ? Object.fromEntries(selected) : {},
+            excluded: action === 'update' ? [...selected.keys()] : [], restore_backup_id:null});
+          operationId = operation.operation_id;
+          terminalMessage = null;
+          showProgress(operation);
+          try { window.sessionStorage?.setItem('picsyncra-module-operation', operationId); } catch (_) {}
+          poll(); return operation;
+        }
         const plan = await post('/api/installation/module-plans', {action,
           selected: ['apply','rollback_modules'].includes(action) ? Object.fromEntries(selected) : {},
           excluded: action === 'update' ? [...selected.keys()] : [], restore_backup_id:restoreBackupId});
         if (plan.conflicts.length) { status.textContent = 'Plan zawiera konflikty zgodności.'; conflictDialog(plan); return plan; }
         if (plan.has_changes === false) { status.textContent = 'Wszystkie wybrane moduły są aktualne. Blokady zostały zachowane.'; return plan; }
-        let changes = (plan.changes || []).map(item => `${item.module_id}: ${item.current || 'brak'} → ${item.target}`).join('\n');
-        if (action === 'update_all') {
-          const overridden = new Set([...selected.keys(), ...[...rows.values()].filter(row => row.module.pinned).map(row => row.module.module_id)]);
-          if (overridden.size) changes += `\nAktualizacje zostaną włączone, a wybory cofnięcia pominięte dla: ${[...overridden].sort().join(', ')}.`;
-        }
-        if (!await confirm(`${changes || 'Zgodny zestaw modułów.'}\nDo pobrania: ${plan.download_bytes.toLocaleString('pl-PL')} bajtów.\nZatwierdzić operację?`)) { status.textContent = 'Operacja anulowana przed rozpoczęciem.'; return plan; }
         let acknowledged = false;
         if (restoreBackupId) {
           acknowledged = await confirm('Odtworzenie starszej bazy usunie dane zapisane po wykonaniu wybranej kopii. Potwierdzasz utratę tych nowszych danych?');
@@ -328,8 +411,8 @@
         status.textContent = error.message;
         if (error.detail?.code === 'permission_required') {
           try { await requestAuthorization(action); }
-          catch (authorizationError) { status.textContent = authorizationError.message; }
-        }
+          catch (authorizationError) { status.textContent = authorizationError.message; showProblem(authorizationError.message, authorizationError.detail); }
+        } else showProblem(error.message, error.detail);
         retryAction = action; retry.hidden = action !== 'install_ocr';
       }
       finally { if (!operationId && !authorizationId) { busy = false; progressbar.hidden = true; } synchronize(); }
@@ -344,7 +427,7 @@
           if (operation.state === 'committed') { selected.clear(); selectedVersions.clear(); restoreBackupId = null; }
           operationId = null; busy = false;
           try { window.sessionStorage?.removeItem('picsyncra-module-operation'); } catch (_) {}
-          await refresh(); onChanged(); return;
+          await refresh(); onChanged({preservePanel:!problem.hidden}); return;
         }
       } catch (_) { status.textContent = 'Oczekiwanie na panel po restarcie backendu…'; }
       timer = setTimeout(poll, 2000);

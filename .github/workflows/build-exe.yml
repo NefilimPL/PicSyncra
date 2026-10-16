@@ -420,6 +420,7 @@ jobs:
             --workpath "build/output-web" `
             --icon $webIcon `
             --version-file "build/version-info/PicSyncra-WEB.version.txt" `
+            --additional-hooks-dir "installer/hooks" `
             --collect-submodules picsyncra `
             --collect-submodules mysql.connector `
             --collect-submodules uvicorn `

@@ -25,7 +25,7 @@ else:
     vision_hidden, vision_binaries = [], []
 a = Analysis([str(ROOT / 'installer' / 'installed_host.py')], pathex=[str(ROOT)],
     binaries=vision_binaries, datas=datas, hiddenimports=collect_submodules('picsyncra') + vision_hidden,
-    hookspath=[], hooksconfig={}, runtime_hooks=[], excludes=[], noarchive=False)
+    hookspath=[str(ROOT / 'installer' / 'hooks')], hooksconfig={}, runtime_hooks=[], excludes=[], noarchive=False)
 # Dependency discovery must not silently turn independently installed Python
 # modules into embedded application code. The stable importer also fails closed.
 def stable(name):

@@ -6,8 +6,10 @@
 # Version 5 adds direct application entries and bounded/lazy OCR startup.
 # The module updater never replaces these binaries, even if application modules
 # already display a newer release tag.
-CONTROLLER_VERSION = 5
-LAUNCHER_VERSION = 5
+# Version 6 owns preparation and parallel downloads, with maintenance spanning
+# validation and durable waiting queues in the selected WEB application.
+CONTROLLER_VERSION = 6
+LAUNCHER_VERSION = 6
 
 
 __all__ = ["CONTROLLER_VERSION", "LAUNCHER_VERSION"]

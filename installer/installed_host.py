@@ -29,7 +29,8 @@ def run_application():
             main()
         elif name == 'PicSyncra-OCR':
             from picsyncra.installation.module_state import module_set_root
-            os.environ['PADDLE_PDX_CACHE_HOME'] = str(module_set_root(context, selected) / 'models/ocr')
+            os.environ['PICSYNCRA_OCR_MODEL_ROOT'] = str(module_set_root(context, selected) / 'models/ocr')
+            os.environ['PADDLE_PDX_CACHE_HOME'] = str(context.state_root / 'cache' / 'paddlex')
             from picsyncra.installation.ocr_entrypoint import main
             main()
         elif name == 'PicSyncra':

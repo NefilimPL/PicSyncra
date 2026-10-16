@@ -360,7 +360,7 @@ class WebSmokeCiTests(unittest.TestCase):
 
     def test_synchronous_process_endpoint_persists_correlated_success(self) -> None:
         snapshot = web_app._ProcessFormSnapshot(
-            fields={"ean": "5901234567890", "name": "Created product"}
+            fields={"ean": "5901234567890", "name": "Created product", "type_name": "TEST", "model": "M1", "color1": "WHITE"}
         )
         result = {
             "timing": {"stages": [{"key": "prepare", "elapsed_ms": 12}]},
@@ -378,7 +378,7 @@ class WebSmokeCiTests(unittest.TestCase):
             patch.object(web_app, "record_job") as record_job,
             patch.object(web_app, "emit_event") as emit_event,
         ):
-            response = client.post("/api/process", data={})
+            response = client.post("/api/process", data=snapshot.fields)
 
         self.assertEqual(response.status_code, 200)
         job_id = process.call_args.kwargs["job_id"]
@@ -396,7 +396,9 @@ class WebSmokeCiTests(unittest.TestCase):
         self.assertEqual(result_event.kwargs["job_id"], job_id)
 
     def test_synchronous_process_failure_is_job_correlated_and_returns_safe_500(self) -> None:
-        snapshot = web_app._ProcessFormSnapshot(fields={"ean": "5901234567890"})
+        snapshot = web_app._ProcessFormSnapshot(
+            fields={"ean": "5901234567890", "name": "Created product", "type_name": "TEST", "model": "M1", "color1": "WHITE"}
+        )
         client = TestClient(web_app.app, raise_server_exceptions=False)
 
         with (
@@ -410,7 +412,7 @@ class WebSmokeCiTests(unittest.TestCase):
             patch.object(web_app, "emit_event") as emit_event,
             patch.object(web_app, "log_error"),
         ):
-            response = client.post("/api/process", data={})
+            response = client.post("/api/process", data=snapshot.fields)
 
         self.assertEqual(response.status_code, 500)
         self.assertEqual(response.json()["detail"], "Wystapil nieoczekiwany blad aplikacji.")

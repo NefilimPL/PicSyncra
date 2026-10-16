@@ -100,9 +100,9 @@ class ModuleService:
         self.schedule(work)
         return dict(operation_id=operation_id, state='accepted', action='recover', error=None)
 
-    def _environment(self, restore_backup_id=None):
-        inspection = inspect_database(self.context.database_path)
-        if not inspection.integrity_ok or not inspection.is_picsyncra:
+    def _environment(self, restore_backup_id=None, *, check_integrity=True):
+        inspection = inspect_database(self.context.database_path, check_integrity=check_integrity)
+        if inspection.integrity_ok is False or not inspection.is_picsyncra:
             raise ModuleExecutionError('Baza PicSyncra nie przeszła sprawdzania spójności.')
         if restore_backup_id:
             backup, schema = verified_backup(self.context, restore_backup_id)
@@ -168,6 +168,7 @@ class ModuleService:
         operation = self.operation(self.current_operation_id) if self.busy and self.current_operation_id else None
         from .ocr_component import installed_ocr_files_present
         return dict(revision=active.revision, channel=channel, modules=rows,
+                    background_updates=True,
                     catalog_refreshing=bool(catalog_state and catalog_state['refreshing']),
                     offline=catalog_state['offline'] if catalog_state else self.source.offline,
                     catalog_error=catalog_state['error'] if catalog_state else getattr(self.source, 'error', None), backups=backups, operation=operation,
@@ -181,9 +182,9 @@ class ModuleService:
         with inventory():
             return self._prepare(action=action, selected=selected, excluded=excluded, restore_backup_id=restore_backup_id)
 
-    def _prepare(self, *, action, selected, excluded, restore_backup_id=None):
+    def _prepare(self, *, action, selected, excluded, restore_backup_id=None, operation_id=None):
         from .module_preflight import check_update_access
-        if self.busy: raise ModuleExecutionError('Inna operacja modułów jest w toku.')
+        if self.busy and self.current_operation_id != operation_id: raise ModuleExecutionError('Inna operacja modułów jest w toku.')
         if action == 'install_ocr' and self._ocr_management() == 'setup':
             if not {'ocr_runtime','ocr_models'} <= {m.module_id for m in read_module_set(self.context).modules}:
                 raise ModuleExecutionError('Moduł OCR nie zainstalowany. Uruchom pełny Setup i zaznacz składnik OCR.')
@@ -194,11 +195,14 @@ class ModuleService:
             error = (getattr(self.source, 'error', None) or {}).get('message')
             raise ModuleExecutionError((error or 'Nie udało się pobrać katalogu GitHuba.') +
                                        ' Brak lokalnego katalogu pozwalającego przygotować operację. Ponów sprawdzenie wersji.')
-        environment = self._environment(restore_backup_id)
+        environment = self._environment(restore_backup_id, check_integrity=operation_id is None)
         plan = plan_module_operation(active, releases, environment, action=action,
                                       selected=selected, excluded=frozenset(excluded),
-                                      available_hashes=self.content.available_hashes() | self.content.local_hashes(active))
-        if not plan.conflicts:
+                                      available_hashes=(frozenset() if operation_id else
+                                          self.content.available_hashes() | self.content.local_hashes(active)))
+        if operation_id:
+            plan = replace(plan, plan_id=operation_id)
+        if not plan.conflicts and operation_id is None:
             from .module_preflight import check_operation_preflight
             check_operation_preflight(self.context, plan.target, active, self.content)
         migrations=[]
@@ -219,6 +223,10 @@ class ModuleService:
                        has_changes=({m.module_id: m.version_id for m in active.modules} !=
                                     {m.module_id: m.version_id for m in plan.target.modules} or
                                     active.pinned != plan.target.pinned or bool(restore_backup_id) or action == 'install_ocr'))
+        entry = next((entry for entry in self.entries if entry.release_id == plan.target.release_id), None)
+        if entry and active.release_id != plan.target.release_id:
+            payload['release_notice'] = dict(version_id='release:' + str(entry.release_id), release_id=entry.release_id,
+                tag=entry.tag, body=entry.release_notes, url=release_link(entry.tag))
         atomic_json(safe_path(self.context.state_root, 'module-plans/' + plan.plan_id + '.json'), payload)
         old = {m.module_id: m for m in active.modules}
         return dict(plan_id=plan.plan_id, action=plan.action, expected_revision=plan.expected_revision,
@@ -343,6 +351,60 @@ class ModuleService:
                               cwd=host.parent,timeout=600,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
         if result.returncode: raise ModuleExecutionError('Migracja nie przeszła kontroli; przywracanie danych z kopii.')
 
+    def submit(self, *, action, selected, excluded, restore_backup_id=None):
+        """Accept work before preparation; the controller owns its entire lifetime."""
+        from .module_preflight import check_update_access
+        if restore_backup_id:
+            raise ModuleExecutionError('Odtworzenie starszej bazy wymaga osobnego potwierdzenia.')
+        previous = self.executor.status()
+        if previous and previous['state'] not in {'committed', 'rolled_back', 'failed'}:
+            raise ModuleExecutionError('Najpierw należy odzyskać poprzednią operację.')
+        check_update_access(self.context)
+        identifier = uuid4().hex
+        path = safe_path(self.context.state_root, 'module-operations/' + identifier + '.json')
+        accepted = dict(operation_id=identifier, state='preparing', action=action, error=None)
+        with self._lock:
+            if self.busy: raise ModuleExecutionError('Inna operacja modułów jest w toku.')
+            self.busy, self.current_operation_id = True, identifier
+        try:
+            atomic_json(path, accepted)
+            atomic_json(safe_path(self.context.state_root, 'module-maintenance-request.json'),
+                        dict(operation_id=identifier), replace=True)
+            def work():
+                try:
+                    with self.content.inventory_scope():
+                        result = self._prepare(action=action, selected=selected, excluded=excluded,
+                                               operation_id=identifier)
+                    if result['conflicts']:
+                        failed = dict(accepted, state='failed', error='Plan zawiera konflikty zgodności.',
+                                      conflicts=result['conflicts'], setup_release_url=result['setup_release_url'])
+                        atomic_json(path, failed, replace=True)
+                    else:
+                        _, execute = self._accept_execution(identifier, restore_backup_id=None,
+                            acknowledge_data_loss=False, authorized=False, owned=True)
+                        if execute: execute()
+                except Exception as exc:
+                    atomic_json(path, dict(accepted, state='failed', error=str(exc),
+                        error_details=getattr(exc, 'details', None)), replace=True)
+                finally:
+                    try:
+                        status = self.executor.status()
+                        if not status or status['state'] in {'committed', 'rolled_back', 'failed'}:
+                            self.executor.clear_maintenance()
+                    except OSError as exc:
+                        from .module_preflight import ModuleAccessError
+                        error = ModuleAccessError('maintenance_ready', exc)
+                        atomic_json(path, dict(accepted, state='recovery_required', error=str(error),
+                                              error_details=error.details), replace=True)
+                    finally:
+                        with self._lock: self.busy = False
+            self.schedule(work)
+        except Exception:
+            self.executor.clear_maintenance()
+            with self._lock: self.busy = False
+            raise
+        return accepted
+
     def execute(self, plan_id, *, restore_backup_id=None, acknowledge_data_loss=False):
         with self._authorization_lock:
             for identifier, request in tuple(self._authorization_requests.items()):
@@ -377,7 +439,7 @@ class ModuleService:
             if token: token.close()
             raise
 
-    def _accept_execution(self, plan_id, *, restore_backup_id, acknowledge_data_loss, authorized):
+    def _accept_execution(self, plan_id, *, restore_backup_id, acknowledge_data_loss, authorized, owned=False):
         payload = self._load_plan(plan_id)
         if payload.get('requires_authorization') and not authorized:
             raise ModuleExecutionError('Jednorazowe logowanie wygasło lub zostało już użyte. Przygotuj nowy plan.')
@@ -395,14 +457,15 @@ class ModuleService:
             return result, None
         plan = ModulePlan(plan_id, payload['action'], payload['expected_revision'], target, (), (), payload['download_bytes'], tuple(payload['migration_ids']))
         with self._lock:
-            if self.busy: raise ModuleExecutionError('Inna operacja modułów jest w toku.')
+            if self.busy and not (owned and self.current_operation_id == plan_id): raise ModuleExecutionError('Inna operacja modułów jest w toku.')
             self.busy = True
             self.current_operation_id = plan_id
         accepted = dict(operation_id=plan_id, state='accepted', action=plan.action, error=None)
         operation_path = safe_path(self.context.state_root, 'module-operations/' + plan_id + '.json')
         try: atomic_json(operation_path, accepted, replace=True)
         except Exception:
-            with self._lock: self.busy = False
+            with self._lock:
+                if not owned: self.busy = False
             raise
         def work():
             try:
@@ -423,19 +486,21 @@ class ModuleService:
                     if status:
                         self.executor._write(status, 'recovery_required', error=str(error), error_details=error.details)
                 finally:
-                    with self._lock: self.busy = False
+                    with self._lock:
+                        if not owned: self.busy = False
             atomic_json(operation_path, result, replace=True)
         return accepted, work
 
     def operation(self, operation_id):
-        self._load_plan(operation_id)
+        if not isinstance(operation_id, str) or not re.fullmatch('[a-f0-9]{32}', operation_id):
+            raise ModuleExecutionError('Nieprawidłowa operacja.')
         current = self.executor.status()
         if current and current['operation_id'] == operation_id:
             result = {key: current.get(key) for key in ('operation_id', 'state', 'action', 'error', 'error_details')}
         else:
             path = safe_path(self.context.state_root, 'module-operations/' + operation_id + '.json')
             result = json.loads(path.read_text(encoding='utf-8')) if path.exists() else None
-        if result is not None and result['state'] == 'accepted' and self.current_operation_id != operation_id:
+        if result is not None and result['state'] in {'accepted', 'preparing'} and self.current_operation_id != operation_id:
             # Accepted work belongs to this controller instance's worker. A
             # restarted host must not leave old clients polling forever or
             # silently execute a plan whose live preflight may have changed.

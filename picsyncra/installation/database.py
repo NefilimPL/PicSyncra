@@ -25,7 +25,7 @@ class DatabaseSnapshotError(RuntimeError):
 @dataclass(frozen=True)
 class DatabaseInspection:
     schema_version: int
-    integrity_ok: bool
+    integrity_ok: bool | None
     is_picsyncra: bool
 
 
@@ -46,8 +46,8 @@ def _read_only_connection(path: Path) -> sqlite3.Connection:
     return connection
 
 
-def _inspect(connection: sqlite3.Connection) -> DatabaseInspection:
-    integrity_ok = connection.execute("PRAGMA integrity_check").fetchall() == [("ok",)]
+def _inspect(connection: sqlite3.Connection, *, check_integrity=True) -> DatabaseInspection:
+    integrity_ok = connection.execute("PRAGMA integrity_check").fetchall() == [("ok",)] if check_integrity else None
     tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     is_picsyncra = {"schema_version", "app_config_values"}.issubset(tables)
     schema = 0
@@ -56,11 +56,11 @@ def _inspect(connection: sqlite3.Connection) -> DatabaseInspection:
     return DatabaseInspection(schema, integrity_ok, is_picsyncra)
 
 
-def inspect_database(path: Path, *, cancel_check=None) -> DatabaseInspection:
+def inspect_database(path: Path, *, cancel_check=None, check_integrity=True) -> DatabaseInspection:
     """Inspect an existing database without instantiating the migrating store."""
     with closing(_read_only_connection(Path(path))) as connection:
         if cancel_check: connection.set_progress_handler(lambda: int(cancel_check()), 1000)
-        return _inspect(connection)
+        return _inspect(connection, check_integrity=check_integrity)
 
 
 def create_database_snapshot(

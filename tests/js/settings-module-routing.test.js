@@ -56,3 +56,26 @@ test('controller status failure offers retry and renders modules after successfu
   assert.equal(state.installationUpdates.module_mode,true);
   assert.equal(state.installationUpdatesError,'');
 });
+
+test('critical update callback refreshes status without detaching the focused panel', async () => {
+  const source = fs.readFileSync(path.join(__dirname, '../../picsyncra/web/static/app.js'), 'utf8');
+  const start = source.indexOf('function renderInstalledUpdateControls(panel) {');
+  const end = source.indexOf('\nfunction ', start + 1);
+  let onChanged, loads = 0, renders = 0;
+  const state = {installationUpdatesChecked:true, installationUpdates:{module_mode:true}};
+  const context = vm.createContext({state, requestJson:()=>{},
+    installationUpdatesUtilities:()=>({}),
+    loadInstallationUpdates:async()=>{loads++;}, renderSettings:()=>{renders++;},
+    window:{PicSyncra:{ModuleUpdatesPanel:{create:options=>{
+      onChanged = options.onChanged;
+      return {element:{}, refresh(){}};
+    }}}},
+  });
+  vm.runInContext(source.slice(start,end),context);
+  context.renderInstalledUpdateControls({appendChild(){}});
+  await onChanged({preservePanel:true});
+  assert.equal(loads,1);
+  assert.equal(renders,0);
+  await onChanged();
+  assert.equal(renders,1);
+});

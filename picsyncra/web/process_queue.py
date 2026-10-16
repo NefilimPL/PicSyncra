@@ -94,13 +94,13 @@ class ProcessQueueService:
             for worker in self._workers:
                 worker.start()
 
-    def reserve(self, owner_id: str) -> QueueReservation:
+    def reserve(self, owner_id: str, *, restoring: bool = False) -> QueueReservation:
         maintenance_lease = (
             self._maintenance_gate.try_admit("process")
-            if self._maintenance_gate is not None
+            if self._maintenance_gate is not None and not restoring
             else None
         )
-        if self._maintenance_gate is not None and maintenance_lease is None:
+        if self._maintenance_gate is not None and maintenance_lease is None and not restoring:
             raise MaintenanceInProgress("maintenance is in progress")
 
         with self._condition:
@@ -149,6 +149,8 @@ class ProcessQueueService:
         reservation: QueueReservation,
         job_id: str,
         run: Callable[[str, threading.Event], None],
+        *,
+        on_submit: Callable[[], None] | None = None,
     ) -> int:
         with self._condition:
             if reservation._queue is not self or reservation.state != "reserved":
@@ -158,14 +160,18 @@ class ProcessQueueService:
             if job_id in self._jobs_by_id:
                 raise ValueError(f"process job already exists: {job_id}")
 
+            if on_submit is not None:
+                on_submit()
+
             job = _QueuedJob(reservation, job_id, run, threading.Event())
             reservation.state = "submitted"
             self._jobs.append(job)
             self._jobs_by_id[job_id] = job
             if reservation._maintenance_lease is not None:
-                reservation._maintenance_lease.set_cancel_callback(
-                    lambda: self.cancel(job_id)
-                )
+                # Staging is complete. Waiting jobs are durable and must not
+                # hold the drain open or be cancelled by an update.
+                reservation._maintenance_lease.finish()
+                reservation._maintenance_lease = None
             self._condition.notify()
             return len(self._jobs)
 
@@ -212,9 +218,17 @@ class ProcessQueueService:
         while True:
             with self._condition:
                 self._condition.wait_for(lambda: self._stopping or bool(self._jobs))
-                if self._stopping and not self._jobs:
+                if self._stopping:
                     return
+                lease = self._maintenance_gate.try_admit('process') if self._maintenance_gate else None
+                if self._maintenance_gate and lease is None:
+                    # Bounded wait also observes reopening after a failed update.
+                    self._condition.wait(timeout=.1)
+                    continue
                 job = self._jobs.popleft()
+                job.reservation._maintenance_lease = lease
+                if lease is not None:
+                    lease.set_cancel_callback(job.cancel_event.set)
                 job.state = "running"
 
             try:

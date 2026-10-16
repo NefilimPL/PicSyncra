@@ -18,7 +18,12 @@ class MaintenanceRequestAdmission:
         self._gate = gate
 
     def requires_admission(self, method: str, path: str) -> bool:
-        return method.upper() not in self._READ_METHODS and not path.startswith("/api/installation/")
+        # These endpoints own staging/running leases in ProcessQueueService.
+        # A synchronous request can wait for a queued job across maintenance;
+        # counting that wait as a writer would deadlock the drain.
+        return (method.upper() not in self._READ_METHODS
+                and not path.startswith("/api/installation/")
+                and path not in {'/api/process', '/api/process/background'})
 
     def admit(self, method: str, path: str) -> MaintenanceLease | None:
         if not self.requires_admission(method, path):

@@ -96,13 +96,36 @@ def test_maintenance_waits_for_admitted_reservation_and_rejects_new_one() -> Non
     assert gate.wait_for_drain(timeout=0.01) is True
 
 
-def test_force_maintenance_cancels_an_admitted_queued_job() -> None:
+def test_maintenance_preserves_waiting_job_without_counting_it_as_running() -> None:
     gate = MaintenanceGate()
     queue = ProcessQueueService(start_workers=False, maintenance_gate=gate)
     reservation = queue.reserve("owner-a")
     queue.submit(reservation, "job-1", lambda _job_id, _cancel: None)
 
     gate.begin("update-1", initiator_id="admin")
-    assert gate.request_force_cancel() == 1
+    assert gate.request_force_cancel() == 0
     assert gate.wait_for_drain(timeout=0.01) is True
-    assert queue.position("job-1") is None
+    assert queue.position("job-1") == 1
+
+
+def test_maintenance_finishes_running_work_and_resumes_pending_only_after_completion():
+    gate = MaintenanceGate()
+    queue = ProcessQueueService(maintenance_gate=gate)
+    started, release, pending = threading.Event(), threading.Event(), threading.Event()
+    def first(_id, _cancel):
+        started.set()
+        assert release.wait(5)
+    try:
+        queue.submit(queue.reserve('a'), 'first', first)
+        assert started.wait(5)
+        queue.submit(queue.reserve('b'), 'next', lambda *_: pending.set())
+        gate.begin('update', initiator_id='admin')
+        release.set()
+        assert gate.wait_for_drain(timeout=5)
+        assert not pending.wait(.25)
+        assert queue.position('next') == 1
+        gate.complete('update')
+        assert pending.wait(5)
+    finally:
+        release.set()
+        queue.shutdown()

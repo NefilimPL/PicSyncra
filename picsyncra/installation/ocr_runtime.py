@@ -20,6 +20,8 @@ from .ocr_component import resolve_active_ocr_component
 
 OCR_PROTOCOL_VERSION = 1
 MAX_OCR_MESSAGE_BYTES = 8 * 1024
+# Commands contain paths and profile IDs; results also contain every OCR box.
+MAX_OCR_EVENT_BYTES = 8 * 1024 * 1024
 _MESSAGE_KINDS = frozenset(
     {
         "hello",
@@ -53,10 +55,10 @@ def _launch_runtime(arguments: list[str]) -> subprocess.Popen[str]:
     )
 
 
-def parse_ocr_message(raw: str) -> dict[str, object]:
+def parse_ocr_message(raw: str, *, max_bytes: int = MAX_OCR_MESSAGE_BYTES) -> dict[str, object]:
     """Decode one bounded JSON message without accepting arbitrary commands."""
 
-    if not isinstance(raw, str) or len(raw.encode("utf-8")) > MAX_OCR_MESSAGE_BYTES:
+    if not isinstance(raw, str) or len(raw.encode("utf-8")) > max_bytes:
         raise OcrRuntimeProtocolError("OCR runtime message is too large.")
     try:
         payload = json.loads(raw)
@@ -304,13 +306,16 @@ class InstalledOcrWorker:
         if stdout is None:
             return
         while True:
-            line = stdout.readline()
+            line = stdout.readline(MAX_OCR_EVENT_BYTES + 1)
             if not line:
                 return
             try:
-                self._events.put(parse_ocr_message(line.rstrip("\r\n")))
+                self._events.put(parse_ocr_message(line.rstrip("\r\n"), max_bytes=MAX_OCR_EVENT_BYTES))
             except OcrRuntimeProtocolError:
                 self._events.put({"kind": "error", "code": "invalid_runtime_message"})
+                if len(line.rstrip("\r\n").encode("utf-8")) > MAX_OCR_EVENT_BYTES:
+                    self._terminate(process)
+                    return
 
     @staticmethod
     def _terminate(process: object) -> None:
@@ -578,7 +583,7 @@ def create_installed_ocr_worker(
 
 def _write_runtime_message(stdout: TextIO, message: dict[str, object]) -> None:
     encoded = json.dumps(message, separators=(",", ":"))
-    if len(encoded.encode("utf-8")) > MAX_OCR_MESSAGE_BYTES:
+    if len(encoded.encode("utf-8")) > MAX_OCR_EVENT_BYTES:
         raise OcrRuntimeProtocolError("OCR runtime response is too large.")
     stdout.write(encoded + "\n")
     stdout.flush()
@@ -657,15 +662,21 @@ def serve_ocr_runtime(
                 stdout,
                 {"kind": "result", "run_id": job["run_id"], "diagnostics": diagnostics},
             )
-        except Exception:
+        except Exception as exc:
+            from .ocr_errors import format_ocr_error
+
             _write_runtime_message(
-                stdout, {"kind": "error", "run_id": job["run_id"], "code": "job_failed"}
+                stdout, {
+                    "kind": "error", "run_id": job["run_id"], "code": "job_failed",
+                    "message": format_ocr_error(exc),
+                }
             )
     return 0
 
 
 __all__ = [
     "MAX_OCR_MESSAGE_BYTES",
+    "MAX_OCR_EVENT_BYTES",
     "OCR_PROTOCOL_VERSION",
     "OcrRuntimeProtocolError",
     "InstalledOcrWorker",

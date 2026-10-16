@@ -257,6 +257,9 @@
           return;
         }
         if (!["ArrowDown", "ArrowUp", "Enter"].includes(event.key)) return;
+        // Enter belongs to this field even when a new value has no suggestions.
+        // Letting it reach the browser's default action submits the whole draft.
+        if (event.key === "Enter") event.preventDefault();
         if (!panel.classList.contains("active")) {
           if (event.key === "Enter") return;
           refresh();

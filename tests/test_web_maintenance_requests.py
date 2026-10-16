@@ -26,3 +26,11 @@ def test_request_admission_leaves_read_and_installed_maintenance_routes_availabl
 
     assert admission.admit("GET", "/api/products") is None
     assert admission.admit("POST", "/api/installation/operations/op-1/force") is None
+
+
+def test_foreground_process_wait_is_owned_by_queue_and_cannot_deadlock_drain():
+    from picsyncra.web.maintenance_requests import MaintenanceRequestAdmission
+    admission = MaintenanceRequestAdmission(MaintenanceGate())
+    assert not admission.requires_admission('POST', '/api/process')
+    assert not admission.requires_admission('POST', '/api/process/background')
+    assert admission.requires_admission('POST', '/api/products')

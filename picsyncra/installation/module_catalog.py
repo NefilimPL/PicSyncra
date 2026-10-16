@@ -13,6 +13,7 @@ class ModuleCatalogEntry:
     published_at: str
     release: ModuleRelease | None
     blocked_reason: str | None = None
+    release_notes: str = ''
 
 
 def catalog_module_releases(records: Sequence[object], *, channel: str, manifest_loader,
@@ -46,5 +47,6 @@ def catalog_module_releases(records: Sequence[object], *, channel: str, manifest
                        or assets[file.asset_name]['size'] != file.asset_size for file in module.files):
                     reason = 'content_unavailable'
                     break
-        result.append(ModuleCatalogEntry(record['id'], record['tag_name'], str(record.get('published_at', '')), release, reason))
+        result.append(ModuleCatalogEntry(record['id'], record['tag_name'], str(record.get('published_at', '')), release, reason,
+                                        str(record.get('body') or '')[:100000]))
     return tuple(result)

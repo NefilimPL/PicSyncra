@@ -115,6 +115,9 @@ class InstallationControlClient:
     def module_plan(self, *, action, selected, excluded, restore_backup_id=None):
         return self._module_request('module_plan', dict(action=action, selected=selected, excluded=excluded, restore_backup_id=restore_backup_id))
 
+    def module_submit(self, *, action, selected, excluded, restore_backup_id=None):
+        return self._module_request('module_submit', dict(action=action, selected=selected, excluded=excluded, restore_backup_id=restore_backup_id))
+
     def module_execute(self, plan_id, *, restore_backup_id=None, acknowledge_data_loss=False):
         return self._module_request('module_execute', dict(plan_id=plan_id, restore_backup_id=restore_backup_id, acknowledge_data_loss=acknowledge_data_loss))
 

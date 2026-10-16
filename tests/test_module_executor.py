@@ -122,6 +122,26 @@ def test_failed_health_and_crash_recovery_restore_exact_previous_pins(context):
     assert executor.recover() is None
 
 
+def test_first_update_can_rollback_offline_using_original_set_files(context):
+    from tests.module_fixtures import module_payload
+    active, store, _ = prepare(context)
+    for path in store.root.iterdir(): path.unlink()
+    modules = [module_payload(content=b'new-code', source=5),
+               module_payload('migrator', 'apps/migrator/PicSyncra-Migrator.exe', b'new-code', source=5)]
+    release = parse_module_manifest(release_payload(5, modules))
+    from tests.test_module_content import Response
+    store.fetch = lambda url, start, size, total: Response(b'new-code', start, total)
+    plan = plan_module_operation(active, (release,), ENV, action='update_all', selected={}, excluded=frozenset(), available_hashes=frozenset())
+    calls = []
+    def healthy():
+        calls.append(True)
+        store.fetch = lambda *_: pytest.fail('rollback must use the intact local previous set')
+        return len(calls) > 1
+    executor = ModuleExecutor(context, Controller(), content=store, quiesce=lambda _: None, healthy=healthy)
+    assert executor.execute(plan)['state'] == 'rolled_back'
+    assert read_module_set(context) == active
+
+
 def test_stale_plan_cannot_backup_or_switch(context):
     active, store, plan = prepare(context)
     executor = ModuleExecutor(context, Controller(), content=store, quiesce=lambda op: None, healthy=lambda: True)

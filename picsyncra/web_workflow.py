@@ -132,6 +132,7 @@ class WebUploadedSlot:
     filename_label: str = ""
     content_fit: bool | None = None
     preprocessed: bool = False
+    original_source_path: str = ""
 
 
 @dataclass(frozen=True)

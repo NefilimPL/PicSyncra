@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 datas, binaries, hiddenimports = collect_all("picsyncra")
-for package in ("certifi", "cv2", "numpy", "paddle", "paddleocr"):
+for package in ("certifi", "cv2", "numpy", "paddle", "paddleocr", "paddlex"):
     package_datas, package_binaries, package_hiddenimports = collect_all(package)
     datas += package_datas
     binaries += package_binaries
@@ -26,7 +26,7 @@ a = Analysis(
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
-    hookspath=[],
+    hookspath=[str(ROOT / "installer" / "hooks")],
     hooksconfig={},
     runtime_hooks=[],
     excludes=[],
