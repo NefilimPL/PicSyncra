@@ -13,6 +13,7 @@ import socket
 import subprocess
 import sys
 import threading
+from queue import Empty, SimpleQueue
 import time
 import webbrowser
 from dataclasses import dataclass
@@ -1202,6 +1203,8 @@ class WebManagerApp:
         self.tk = tk
         self.ttk = ttk
         self.root = tk.Tk()
+        self._ui_thread_id = threading.get_ident()
+        self._ui_callbacks = SimpleQueue()
         self.root.title(f"{WEB_APP_NAME} {get_display_version()}")
         self.root.geometry("1040x760")
         self.root.minsize(860, 620)
@@ -1221,6 +1224,7 @@ class WebManagerApp:
         self.close_check_in_progress = False
         self.close_progress = None
         self._build()
+        self.root.after(100, self._drain_ui_callbacks)
         self.request_refresh(clear_status=True)
         self.root.after(10000, self._auto_refresh)
 
@@ -1402,6 +1406,31 @@ class WebManagerApp:
     def _host(self) -> str:
         return self.host_var.get().strip() or DEFAULT_HOST
 
+    def _post_ui(self, callback, *args) -> None:
+        """Send UI work without entering Tcl from a short-lived worker thread."""
+        if self.closing:
+            return
+        if threading.get_ident() == self._ui_thread_id:
+            callback(*args)
+        else:
+            self._ui_callbacks.put((callback, args))
+
+    def _drain_ui_callbacks(self) -> None:
+        if self.closing:
+            return
+        try:
+            for _ in range(100):
+                try:
+                    callback, args = self._ui_callbacks.get_nowait()
+                except Empty:
+                    break
+                callback(*args)
+                if self.closing:
+                    break
+        finally:
+            if not self.closing:
+                self.root.after(100, self._drain_ui_callbacks)
+
     def _run_action(self, action) -> None:
         if self.busy:
             return
@@ -1413,7 +1442,7 @@ class WebManagerApp:
                 result = action()
             except Exception as exc:
                 result = ActionResult(False, str(exc))
-            self.root.after(0, lambda: self._finish_action(result))
+            self._post_ui(self._finish_action, result)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1431,7 +1460,7 @@ class WebManagerApp:
                 port,
                 host,
                 prefer_system_service=True,
-                progress=lambda message: self.root.after(0, self.status_var.set, message),
+                progress=lambda message: self._post_ui(self.status_var.set, message),
             )
         )
 
@@ -1449,14 +1478,14 @@ class WebManagerApp:
         host = self._host()
 
         def action() -> ActionResult:
-            self.root.after(0, self.status_var.set, "Zatrzymuje poprzedni proces panelu WWW...")
+            self._post_ui(self.status_var.set, "Zatrzymuje poprzedni proces panelu WWW...")
             stop_web(port)
             time.sleep(1)
             return start_web(
                 port,
                 host,
                 prefer_system_service=True,
-                progress=lambda message: self.root.after(0, self.status_var.set, message),
+                progress=lambda message: self._post_ui(self.status_var.set, message),
             )
 
         self._run_action(action)
@@ -1520,7 +1549,7 @@ class WebManagerApp:
                 status = current_status(port)
             except Exception as exc:
                 status = {"error": str(exc)}
-            self.root.after(0, lambda: self._apply_status(status))
+            self._post_ui(self._apply_status, status)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1623,8 +1652,8 @@ class WebManagerApp:
                     image,
                     WEB_APP_NAME,
                     menu=pystray.Menu(
-                        pystray.MenuItem("Pokaz okno", lambda _icon, _item: self.root.after(0, self.show_from_tray)),
-                        pystray.MenuItem("Zamknij menedzer", lambda _icon, _item: self.root.after(0, self.close_window)),
+                        pystray.MenuItem("Pokaz okno", lambda _icon, _item: self._post_ui(self.show_from_tray)),
+                        pystray.MenuItem("Zamknij menedzer", lambda _icon, _item: self._post_ui(self.close_window)),
                     ),
                 )
                 self.tray_icon.run_detached()
@@ -1686,7 +1715,7 @@ class WebManagerApp:
 
     def _check_close_status_worker(self, port: int) -> None:
         running = web_panel_running_for_close(port)
-        self.root.after(0, lambda: self._finish_close_check(running))
+        self._post_ui(self._finish_close_check, running)
 
     def _stop_web_for_close_worker(self, port: int) -> None:
         try:
@@ -1705,7 +1734,7 @@ class WebManagerApp:
                 result = stop_web(port)
         except Exception as exc:
             result = ActionResult(False, str(exc))
-        self.root.after(0, lambda: self._finish_close_stop(result))
+        self._post_ui(self._finish_close_stop, result)
 
     def _finish_close_check(self, web_panel_running: bool) -> None:
         self._stop_close_feedback()

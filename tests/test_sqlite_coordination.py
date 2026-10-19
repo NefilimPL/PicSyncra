@@ -153,3 +153,26 @@ raise SystemExit(0)
         )
 
     assert completed.returncode == 0, completed.stderr
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Windows ctypes lock regression')
+def test_repeated_windows_activity_does_not_retain_new_ctypes_types(tmp_path):
+    import ctypes
+    import gc
+
+    database_path = tmp_path / 'memory.sqlite'
+    sqlite3.connect(database_path).close()
+    with database_activity(database_path):
+        pass
+    gc.collect()
+    def database_pointer_types():
+        return {kind for kind in ctypes._pointer_type_cache.copy()
+                if getattr(kind, '__module__', '') == sqlite_coordination.__name__}
+    before = database_pointer_types()
+
+    for _ in range(200):
+        with database_activity(database_path):
+            pass
+    gc.collect()
+
+    assert database_pointer_types() == before

@@ -11,6 +11,7 @@ from pathlib import Path
 import runpy
 import subprocess
 import sys
+import threading
 import types
 from unittest.mock import patch
 
@@ -250,6 +251,8 @@ class _FakeProgressbar:
 def _app_without_tk() -> web_manager.WebManagerApp:
     app = object.__new__(web_manager.WebManagerApp)
     app.root = _FakeRoot()
+    app._ui_thread_id = threading.get_ident()
+    app._ui_callbacks = web_manager.SimpleQueue()
     app.tray_icon = None
     app.status_var = _FakeStringVar()
     app.close_progress = _FakeProgressbar()
@@ -257,6 +260,54 @@ def _app_without_tk() -> web_manager.WebManagerApp:
     app.close_check_in_progress = False
     app._port = lambda: 8010
     return app
+
+
+def test_refresh_worker_never_calls_tk_and_ui_applies_queued_results(monkeypatch):
+    app = _app_without_tk()
+    app.refreshing = False
+    app.pending_refresh = False
+    scheduled = []
+    applied = []
+    workers = []
+    real_thread = threading.Thread
+    app.root.after = lambda delay, callback: scheduled.append((delay, callback))
+    monkeypatch.setattr(web_manager, 'current_status', lambda port: {'port': port})
+
+    def apply(status):
+        applied.append((threading.get_ident(), status))
+        app.refreshing = False
+    app._apply_status = apply
+
+    def make_worker(**kwargs):
+        worker = real_thread(**kwargs)
+        workers.append(worker)
+        return worker
+    monkeypatch.setattr(web_manager.threading, 'Thread', make_worker)
+
+    for iteration in range(10):
+        app.request_refresh()
+        workers[-1].join(3)
+        assert not workers[-1].is_alive()
+        assert not scheduled, 'background thread must not call Tk.after'
+        assert len(applied) == iteration
+        app._drain_ui_callbacks()
+        assert applied[-1] == (threading.get_ident(), {'port': 8010})
+        assert scheduled[0][0] == 100
+        scheduled.clear()
+
+
+def test_queued_ui_work_is_discarded_after_manager_closes():
+    app = _app_without_tk()
+    called = []
+    worker = threading.Thread(target=lambda: app._post_ui(lambda: called.append('queued')))
+    worker.start()
+    worker.join(3)
+    assert not worker.is_alive()
+    assert not app._ui_callbacks.empty()
+    app.closing = True
+    app._post_ui(lambda: called.append('late'))
+    app._drain_ui_callbacks()
+    assert called == []
 
 
 def test_web_manager_tray_uses_the_picsyncra_web_icon(monkeypatch) -> None:
