@@ -1,12 +1,26 @@
 # Diagnostyka narastania RAM
 
-Nowe kompilacje EXE automatycznie zbierają lokalny raport pamięci. Nie wymaga to
-logowania do panelu ani otwartej przeglądarki. Raport jest narzędziem diagnostycznym;
-nie naprawia zatrzymywania wyników OCR ani nie dowodzi przyczyny wzrostu RAM.
+W zwykłych wydaniach portable i instalowanych oraz przy uruchamianiu ze źródeł
+raportowanie pamięci jest domyślnie wyłączone. Włącza je zmienna środowiskowa
+`PICSYNCRA_MEMORY_REPORT=1`. Poprawki wycieków działają niezależnie od raportowania.
+Zbieranie nie wymaga logowania do panelu ani otwartej przeglądarki. Raport jest
+narzędziem diagnostycznym; sam nie dowodzi przyczyny wzrostu RAM.
+
+Wcześniejsze testowe EXE `v0.5.6-ram-diagnostic-20261016` oraz
+`v0.5.6-ram-fix-20261019` miały raportowanie domyślnie włączone. Zmiana ustawienia
+domyślnego dotyczy kolejnych kompilacji.
 
 ## Zbieranie na urządzeniu testowym
 
-1. Uruchom nowy portable w osobnym katalogu. Zachowaj tę samą konfigurację,
+1. Przed uruchomieniem ustaw `PICSYNCRA_MEMORY_REPORT=1` w środowisku procesu.
+   Przykład dla portable w PowerShell:
+
+   ```powershell
+   $env:PICSYNCRA_MEMORY_REPORT = "1"
+   .\PicSyncra-WEB.exe
+   ```
+
+   Uruchom nowy portable w osobnym katalogu. Zachowaj tę samą konfigurację,
    dane, ustawienia OCR i sposób używania co przy v0.5.5. Backendów porównywanych
    wersji nie uruchamiaj jednocześnie: konkurowałyby o RAM i port serwera.
 2. Sprawdź, czy w `logs/memory` obok EXE pojawiają się pliki
@@ -20,6 +34,10 @@ nie naprawia zatrzymywania wyników OCR ani nie dowodzi przyczyny wzrostu RAM.
    `.jsonl.1` i `.jsonl.2`, przed ponownym uruchomieniem programu. Pliki można
    kopiować podczas pracy: zapisywane są pojedyncze wiersze JSON. Jeżeli ostatni
    wiersz jest niepełny, pomiń go podczas analizy.
+
+Usługa lub zadanie uruchomione wcześniej nie dziedziczy zmiennych z nowego okna
+PowerShell. W instalacji zarządzanej zmienna musi być dostępna w środowisku
+uruchamiającym właściwy backend; po jej ustawieniu uruchom go ponownie.
 
 Raport pozostaje na tym komputerze; aplikacja go nie wysyła. Zawiera nazwy
 plików kodu i bibliotek, PID-y, wersję aplikacji i Pythona, czasy oraz liczniki.
@@ -81,13 +99,13 @@ Opcje środowiska, ustawiane przed uruchomieniem aplikacji:
 
 | Zmienna | Znaczenie |
 | --- | --- |
-| `PICSYNCRA_MEMORY_REPORT=0` | Wyłącz raportowanie w EXE. |
-| `PICSYNCRA_MEMORY_REPORT=1` | Włącz także podczas uruchamiania ze źródeł. |
+| `PICSYNCRA_MEMORY_REPORT=0` | Wyłącz raportowanie (ustawienie domyślne). |
+| `PICSYNCRA_MEMORY_REPORT=1` | Włącz w portable, instalacji zarządzanej lub przy uruchamianiu ze źródeł. |
 | `PICSYNCRA_MEMORY_TRACE=0` | Zbieraj metryki procesów bez uruchamiania tracera Pythona. |
 | `PICSYNCRA_MEMORY_REPORT_DIR` | Wspólny katalog raportów, dziedziczony przez proces OCR. |
 
-Źródłowe uruchomienia domyślnie nie włączają raportera, aby testy i generowanie
-pakietów nie tworzyły diagnostycznych wątków. Tracer nie obejmuje alokacji sprzed
+Bez jawnego włączenia żaden wariant nie uruchamia wątku raportera ani tracera
+i nie tworzy katalogu raportów. Tracer nie obejmuje alokacji sprzed
 jego uruchomienia; zaczyna pracę przed obsługą zadań, a w workerze OCR przed
 załadowaniem modeli. Starsze EXE v0.5.5 nie otrzymują raportera przez podmianę
 samego pliku konfiguracyjnego — potrzebna jest nowa kompilacja.

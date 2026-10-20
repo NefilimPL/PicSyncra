@@ -1,6 +1,8 @@
 import json
 from types import SimpleNamespace
 
+import pytest
+
 from picsyncra import memory_diagnostics as diagnostics
 
 
@@ -143,11 +145,39 @@ def test_stop_wakes_worker_without_waiting_a_minute(tmp_path):
     assert not monitor.thread.is_alive()
 
 
-def test_explicit_disable_overrides_frozen_default(monkeypatch, tmp_path):
+def test_explicit_disable_prevents_frozen_reporting(monkeypatch, tmp_path):
     monkeypatch.setattr(diagnostics.sys, 'frozen', True, raising=False)
     monkeypatch.setenv('PICSYNCRA_MEMORY_REPORT', '0')
     assert diagnostics.start_memory_reporting('backend', directory=tmp_path) is None
     assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize('frozen', [False, True])
+def test_reporting_is_off_by_default_for_source_and_frozen_builds(monkeypatch, tmp_path, frozen):
+    monkeypatch.setattr(diagnostics.sys, 'frozen', frozen, raising=False)
+    monkeypatch.delenv('PICSYNCRA_MEMORY_REPORT', raising=False)
+    calls = []
+    monkeypatch.setattr(diagnostics.tracemalloc, 'start', lambda _: calls.append('trace'))
+    monkeypatch.setattr(diagnostics, 'MemoryReporter', lambda *args, **kwargs: calls.append('reporter'))
+    assert diagnostics.start_memory_reporting('backend', directory=tmp_path / 'reports') is None
+    assert not calls
+    assert not (tmp_path / 'reports').exists()
+
+
+@pytest.mark.parametrize('frozen', [False, True])
+def test_reporting_can_be_explicitly_enabled_in_either_build(monkeypatch, tmp_path, frozen):
+    monkeypatch.setattr(diagnostics.sys, 'frozen', frozen, raising=False)
+    monkeypatch.setenv('PICSYNCRA_MEMORY_REPORT', '1')
+    monkeypatch.setenv('PICSYNCRA_MEMORY_TRACE', '0')
+    monkeypatch.delenv('PICSYNCRA_MEMORY_REPORT_DIR', raising=False)
+    monkeypatch.setattr(diagnostics, '_reporter', None)
+    monitor = diagnostics.start_memory_reporting('backend', directory=tmp_path)
+    try:
+        assert monitor is not None
+        assert monitor.thread.is_alive()
+    finally:
+        if monitor is not None:
+            monitor.stop()
 
 
 def test_source_runs_require_explicit_enable(monkeypatch, tmp_path):

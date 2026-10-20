@@ -61,6 +61,33 @@ def test_ftp_only_edit_preserves_sql_and_model_identities_and_all_ranges_reconst
                 assert pack.read(file.size)==(root/file.path).read_bytes()
 
 
+def test_shared_memory_fixes_are_delivered_in_mandatory_core_module(tmp_path):
+    repo = Path(__file__).resolve().parents[1]
+    paths = (
+        'picsyncra/sqlite_coordination.py',
+        'picsyncra/web_manager.py',
+        'picsyncra/memory_diagnostics.py',
+    )
+    source = tmp_path / 'source'
+    for relative in paths:
+        target = source / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes((repo / relative).read_bytes())
+    migrator = source / 'apps/migrator/PicSyncra-Migrator.exe'
+    migrator.parent.mkdir(parents=True)
+    migrator.write_bytes(b'test host')
+    output = tmp_path / 'modules'
+    modules = build_module_payloads(source, output, release_id=1, tag='v1')
+    core = next(module for module in modules if module.module_id == 'core')
+    files = {file.path: file for file in core.files}
+    assert set(paths) <= files.keys()
+    for relative in paths:
+        file = files[relative]
+        with (output / file.asset_name).open('rb') as pack:
+            pack.seek(file.asset_offset)
+            assert pack.read(file.size) == (repo / relative).read_bytes()
+
+
 def generated_release():
     from tools.build_installed_modules import generate_module_release_manifest
     from picsyncra.installation.module_manifest import parse_module_manifest

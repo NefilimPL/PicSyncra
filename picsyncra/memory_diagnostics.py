@@ -269,12 +269,12 @@ class MemoryReporter:
 
 
 def start_memory_reporting(role: str, *, directory=None, context=None):
-    """Start once per process: frozen builds default on, source runs opt in."""
+    """Start once per process only when explicitly enabled, in any build."""
     global _reporter
     enabled = os.environ.get('PICSYNCRA_MEMORY_REPORT', '').strip().lower()
     if enabled in {'0', 'false', 'off', 'no'}:
         return None
-    if enabled not in {'1', 'true', 'on', 'yes'} and not getattr(sys, 'frozen', False):
+    if enabled not in {'1', 'true', 'on', 'yes'}:
         return None
     owns_tracer = False
     try:
