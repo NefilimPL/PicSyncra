@@ -45,6 +45,9 @@ def initialize_application_runtime(*, interactive=None):
     """Initialize runtime paths and configuration explicitly."""
 
     settings.initialize_runtime(interactive=interactive)
+    from .memory_diagnostics import start_memory_reporting
+
+    start_memory_reporting('application', directory=Path(settings.LOG_DIR) / 'memory')
     _clear_completed_legacy_handover_markers()
     config.initialize_config(interactive=interactive)
     if settings.BASE_DIR_OVERRIDE_WARNING:

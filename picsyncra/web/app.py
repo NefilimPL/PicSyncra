@@ -4513,6 +4513,22 @@ def _resource_monitor_context() -> dict[str, int]:
     }
 
 
+def _memory_diagnostic_context() -> dict[str, int]:
+    """Report sizes of long-lived collections, never their contents."""
+    counters = _resource_monitor_context()
+    with _PROCESS_JOBS_LOCK:
+        counters['retained_process_jobs'] = len(_PROCESS_JOBS)
+        counters['process_completion_events'] = len(_PROCESS_JOB_COMPLETIONS)
+    with _RATE_LIMITS_LOCK:
+        counters['rate_limit_keys'] = len(_RATE_LIMITS)
+    counters['upload_scan_results'] = len(_UPLOAD_SCAN_RESULTS)
+    counters['browser_import_scopes'] = len(_BROWSER_EXTENSION_IMPORTS)
+    execution = _OCR_EXECUTION_SERVICE
+    if execution is not None:
+        counters.update(execution.diagnostic_counts())
+    return counters
+
+
 def _emit_resource_event(
     severity: str, event_type: str, details: dict[str, object]
 ) -> bool:
@@ -5555,6 +5571,9 @@ def create_app() -> FastAPI:
                 installation_service.maintenance_gate.begin(identifier, initiator_id='module-controller')
             installation_service.start_module_maintenance_watch()
         os.environ.setdefault("PICSYNCRA_HEADLESS", "1")
+        from ..memory_diagnostics import start_memory_reporting
+
+        start_memory_reporting('backend', context=_memory_diagnostic_context)
         runtime_info = initialize_application_runtime(interactive=False)
         app.state.runtime_info = runtime_info
         _ensure_active_client_registry()

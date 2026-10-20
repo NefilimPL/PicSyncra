@@ -500,6 +500,9 @@ def run_controller(installation_id: str, *, stop_requested: Callable[[], bool] |
     context = load_registered_install_context(installation_id)
     if context is None:
         raise ControllerHostError("The registered installation is unavailable.")
+    from ..memory_diagnostics import start_memory_reporting
+
+    start_memory_reporting('controller', directory=context.state_root / 'logs' / 'memory')
     supervisor = ActiveBackendSupervisor(context)
     controller = InstallationController(context, supervisor, backend_port=8010)
     from .module_service import ModuleService

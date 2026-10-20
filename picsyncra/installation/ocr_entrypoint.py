@@ -75,6 +75,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--build-id", required=True)
     parser.add_argument("--component-id", required=True)
     args = parser.parse_args(argv)
+    from ..memory_diagnostics import start_memory_reporting
+
+    start_memory_reporting('ocr')
     return serve_ocr_runtime(
         sys.stdin,
         sys.stdout,

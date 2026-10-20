@@ -27,6 +27,38 @@ _GATES_LOCK = threading.Lock()
 _LOCK_OFFSET = 0x3FFFFFFF
 
 
+if os.name == 'nt':
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    class _Overlapped(ctypes.Structure):
+        _fields_ = [
+            ('internal', ctypes.c_size_t),
+            ('internal_high', ctypes.c_size_t),
+            ('offset', wintypes.DWORD),
+            ('offset_high', wintypes.DWORD),
+            ('event', wintypes.HANDLE),
+        ]
+
+    # ctypes retains pointer types globally. Creating this Structure in every
+    # lock operation leaks a new type (and its pointer) on every database read.
+    # Reuse the ABI types and bindings; each lock still owns its own instance.
+    _KERNEL32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    _LOCK_FILE_EX = _KERNEL32.LockFileEx
+    _LOCK_FILE_EX.argtypes = (
+        wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD,
+        wintypes.DWORD, wintypes.DWORD, ctypes.POINTER(_Overlapped),
+    )
+    _LOCK_FILE_EX.restype = wintypes.BOOL
+    _UNLOCK_FILE_EX = _KERNEL32.UnlockFileEx
+    _UNLOCK_FILE_EX.argtypes = (
+        wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD,
+        wintypes.DWORD, ctypes.POINTER(_Overlapped),
+    )
+    _UNLOCK_FILE_EX.restype = wintypes.BOOL
+
+
 def _gate_for(path: str | Path) -> _DatabaseGate:
     key = str(Path(path).resolve()).casefold()
     with _GATES_LOCK:
@@ -84,33 +116,9 @@ def _database_file_lock(path: str | Path, *, exclusive: bool):
     windows_lock = None
     try:
         if os.name == "nt":
-            import ctypes
-            import msvcrt
-            from ctypes import wintypes
-
-            class _Overlapped(ctypes.Structure):
-                _fields_ = [
-                    ("internal", ctypes.c_size_t),
-                    ("internal_high", ctypes.c_size_t),
-                    ("offset", wintypes.DWORD),
-                    ("offset_high", wintypes.DWORD),
-                    ("event", wintypes.HANDLE),
-                ]
-
-            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-            lock_file_ex = kernel32.LockFileEx
-            lock_file_ex.argtypes = (
-                wintypes.HANDLE,
-                wintypes.DWORD,
-                wintypes.DWORD,
-                wintypes.DWORD,
-                wintypes.DWORD,
-                ctypes.POINTER(_Overlapped),
-            )
-            lock_file_ex.restype = wintypes.BOOL
             windows_lock = _Overlapped(offset=_LOCK_OFFSET)
             flags = 0x00000001 | (0x00000002 if exclusive else 0x00000000)
-            if not lock_file_ex(
+            if not _LOCK_FILE_EX(
                 msvcrt.get_osfhandle(descriptor),
                 flags,
                 0,
@@ -130,21 +138,7 @@ def _database_file_lock(path: str | Path, *, exclusive: bool):
         try:
             if locked:
                 if os.name == "nt":
-                    import ctypes
-                    import msvcrt
-                    from ctypes import wintypes
-
-                    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-                    unlock_file_ex = kernel32.UnlockFileEx
-                    unlock_file_ex.argtypes = (
-                        wintypes.HANDLE,
-                        wintypes.DWORD,
-                        wintypes.DWORD,
-                        wintypes.DWORD,
-                        ctypes.POINTER(type(windows_lock)),
-                    )
-                    unlock_file_ex.restype = wintypes.BOOL
-                    unlock_file_ex(
+                    _UNLOCK_FILE_EX(
                         msvcrt.get_osfhandle(descriptor),
                         0,
                         1,
