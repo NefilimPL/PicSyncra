@@ -145,6 +145,13 @@ wykonywanej przez PaddleX. Brak wymaganej dystrybucji przerywa build.
 Przy błędzie tworzenia pipeline tester OCR pokazuje również przyczynę wyjątku,
 zamiast samego ogólnego komunikatu PaddleOCR.
 
+Hook `installer/hooks/hook-chardet.py` dołącza również wszystkie podmoduły
+`chardet`, dane modeli i rozszerzenia mypyc. W kołach Windows skompilowane
+moduły mogą importować dynamicznie m.in. `chardet.models._format__mypyc`;
+zebranie samego `chardet.pipeline` pomija tę zależność. Wspólny katalog hooków
+jest używany przez lokalny build portable, workflow wydania i komponent OCR
+instalatora. Poprawka wymaga ponownego zbudowania EXE.
+
 Przed kompilacją Setup generator uruchamia skompilowanego pomocnika dla każdej
 dostępnej kombinacji składników i sprawdza bazę oraz aktywowany zestaw.
 Skrypt tworzy `active.json` dla wydania i
