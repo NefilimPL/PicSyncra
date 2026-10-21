@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Callable
 import time
+from threading import Thread, RLock
 from typing import Protocol
 
 from .ocr_progress import OcrProgressRegistry, OcrRunSnapshot
 from .ocr_resource_policy import OcrResourcePolicy, ResourceTelemetry
+from ..installation.maintenance import MaintenanceGate, MaintenanceLease
 
 
 class OcrWorker(Protocol):
@@ -44,16 +46,24 @@ class OcrExecutionService:
         settings: Callable[[], dict[str, object]],
         telemetry: Callable[[], ResourceTelemetry],
         on_worker_ready: Callable[[int], None] | None = None,
+        maintenance_gate: MaintenanceGate | None = None,
     ) -> None:
         self._worker = worker
         self._registry = registry
         self._settings = settings
         self._telemetry = telemetry
         self._on_worker_ready = on_worker_ready
+        self._maintenance_gate = maintenance_gate
         self._inflight_run_ids: set[str] = set()
+        self._maintenance_leases: dict[str, MaintenanceLease] = {}
+        self._pending_dispatch: set[str] = set()
+        self._pump_lock = RLock()
 
     def start(self) -> None:
         self._worker.start()
+
+    def diagnostic_counts(self) -> dict[str, int]:
+        return self._registry.diagnostic_counts()
 
     def submit_test(self, *, path: str) -> str:
         return self._submit(kind="test", job_id=None, path=path)
@@ -108,18 +118,45 @@ class OcrExecutionService:
             self._registry.publish(run_id, "error", message="No OCR profile selected.")
             self._registry.finalize(run_id, state="error", error="No OCR profile selected.")
             return run_id
+        lease = self._maintenance_gate.try_admit("ocr") if self._maintenance_gate is not None else None
+        if self._maintenance_gate is not None and lease is None:
+            raise RuntimeError("Trwa konserwacja aplikacji; nowe zadania OCR są wstrzymane.")
         self._registry.publish(run_id, "queued", stage="waiting_for_worker")
         self._inflight_run_ids.add(run_id)
-        self._worker.submit(
-            run_id=run_id,
-            path=str(path),
-            profile_ids=selected,
-            resource_settings=settings,
-        )
+        if lease is not None:
+            self._maintenance_leases[run_id] = lease
+            lease.set_cancel_callback(lambda: self.cancel(run_id))
+        def dispatch():
+            try:
+                if self._registry.is_cancel_requested(run_id):
+                    self._registry.finalize(run_id, state='cancelled')
+                    self._inflight_run_ids.discard(run_id)
+                    self._finish_maintenance_lease(run_id)
+                    return
+                self._worker.submit(run_id=run_id, path=str(path), profile_ids=selected, resource_settings=settings)
+                if self._registry.is_cancel_requested(run_id): self._worker.cancel(run_id)
+            except Exception as exc:
+                if self._registry.is_cancel_requested(run_id): self._registry.finalize(run_id, state='cancelled')
+                else:
+                    self._registry.publish(run_id, 'error', code='runtime_start_failed', message=str(exc))
+                    self._registry.finalize(run_id, state='error', error=str(exc))
+                self._inflight_run_ids.discard(run_id)
+                self._finish_maintenance_lease(run_id)
+            finally:
+                self._pending_dispatch.discard(run_id)
+        if getattr(self._worker, 'deferred_submission', False):
+            self._pending_dispatch.add(run_id)
+            Thread(target=dispatch, daemon=True, name='PicSyncraOCRDispatch').start()
+        else:
+            self._worker.submit(run_id=run_id, path=str(path), profile_ids=selected, resource_settings=settings)
         return run_id
 
     def pump(self) -> None:
         """Move all currently available child-process messages into the registry."""
+        with self._pump_lock:
+            self._pump()
+
+    def _pump(self) -> None:
 
         self._worker.update_telemetry(self._telemetry())
         for event in self._worker.poll_events():
@@ -141,11 +178,13 @@ class OcrExecutionService:
                 self._registry.publish(run_id, kind, **payload)
                 if kind == "result":
                     self._inflight_run_ids.discard(run_id)
+                    self._finish_maintenance_lease(run_id)
                     diagnostics = payload.get("diagnostics")
                     result = diagnostics if isinstance(diagnostics, dict) else {}
                     self._registry.finalize(run_id, state="completed", result=result)
                 elif kind == "error":
                     self._inflight_run_ids.discard(run_id)
+                    self._finish_maintenance_lease(run_id)
                     self._registry.finalize(
                         run_id, state="error", error=str(payload.get("message") or "OCR error")
                     )
@@ -187,6 +226,7 @@ class OcrExecutionService:
         suffix = f" (kod {exit_code})." if isinstance(exit_code, int) else "."
         message = "Proces OCR zakonczyl sie przed rozpoczeciem zadania" + suffix
         for run_id in tuple(self._inflight_run_ids):
+            if run_id in self._pending_dispatch: continue
             try:
                 self._registry.publish(run_id, "error", message=message)
                 self._registry.finalize(run_id, state="error", error=message)
@@ -194,3 +234,9 @@ class OcrExecutionService:
                 pass
             finally:
                 self._inflight_run_ids.discard(run_id)
+                self._finish_maintenance_lease(run_id)
+
+    def _finish_maintenance_lease(self, run_id: str) -> None:
+        lease = self._maintenance_leases.pop(run_id, None)
+        if lease is not None:
+            lease.finish()

@@ -63,6 +63,11 @@ if ($IncludeVisionModels) {
     $VisionModelCache = Join-Path $WorkPath "ocr-model-cache"
     New-Item -ItemType Directory -Path $VisionModelCache -Force | Out-Null
     $env:PADDLE_PDX_CACHE_HOME = $VisionModelCache
+    # Prefer the official archives; root HEAD probes can exclude a working source.
+    $env:PADDLE_PDX_MODEL_SOURCE = "bos"
+    $env:PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK = "True"
+    $env:HF_HUB_DISABLE_XET = "1"
+    Write-Host "OCR models: source=bos, Xet disabled, cache=$VisionModelCache"
     $PrepareVisionModels = @"
 import os
 from picsyncra.services.image_dimensions import _model_cache_has_profile
@@ -102,6 +107,7 @@ Invoke-Native $Python "-m" "PyInstaller" "--noconfirm" "--clean" "--log-level=WA
     --workpath $WorkPath `
     --icon $IconPath `
     --version-file $VersionInfoPath `
+    --additional-hooks-dir (Join-Path $RepoRoot "installer/hooks") `
     --collect-submodules picsyncra `
     --collect-submodules mysql.connector `
     --collect-submodules uvicorn `

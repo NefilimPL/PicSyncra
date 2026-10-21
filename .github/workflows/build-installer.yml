@@ -1,0 +1,103 @@
+name: Build signed installed packages
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release_id:
+        required: true
+        type: string
+      channel:
+        required: true
+        type: choice
+        options: [stable, dev]
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-publish:
+    runs-on: windows-latest
+    environment: installed-release-signing
+    if: github.event_name != 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve the actual target Release
+        id: release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_RELEASE_ID: ${{ github.event.release.id || inputs.release_id }}
+          REQUESTED_CHANNEL: ${{ inputs.channel }}
+        run: |
+          if ($env:TARGET_RELEASE_ID -notmatch '^[1-9][0-9]*$') { throw 'Invalid release ID' }
+          $release = gh api "repos/$env:GITHUB_REPOSITORY/releases/$env:TARGET_RELEASE_ID" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $release.draft) { throw 'Target Release unavailable' }
+          $channel = if ($release.prerelease) { 'dev' } else { 'stable' }
+          if ($env:REQUESTED_CHANNEL -and $channel -ne $env:REQUESTED_CHANNEL) { throw 'Release channel mismatch' }
+          # ConvertFrom-Json can deserialize ISO strings into date objects.
+          # Interpolation alone would emit a locale-dependent date for Python.
+          $publishedAt = $release.published_at
+          if ($publishedAt -is [datetime] -or $publishedAt -is [datetimeoffset]) {
+            $publishedAt = $publishedAt.ToUniversalTime().ToString('o', [Globalization.CultureInfo]::InvariantCulture)
+          }
+          "tag=$($release.tag_name)" >> $env:GITHUB_OUTPUT
+          "release_id=$($release.id)" >> $env:GITHUB_OUTPUT
+          "channel=$channel" >> $env:GITHUB_OUTPUT
+          "source_branch=$($release.target_commitish)" >> $env:GITHUB_OUTPUT
+          "published_at=$publishedAt" >> $env:GITHUB_OUTPUT
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ steps.release.outputs.tag }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Inject trusted public keys into installed build
+        shell: pwsh
+        env:
+          PICSYNCRA_RELEASE_PUBLIC_KEYS: ${{ vars.PICSYNCRA_RELEASE_PUBLIC_KEYS }}
+        run: python tools/write_trusted_release_keys.py --output picsyncra/installation/release_keys.py
+      - name: Build disjoint modules and base Setup EXE
+        shell: pwsh
+        env:
+          TARGET_RELEASE_ID: ${{ steps.release.outputs.release_id }}
+          TARGET_TAG: ${{ steps.release.outputs.tag }}
+          TARGET_CHANNEL: ${{ steps.release.outputs.channel }}
+          TARGET_BRANCH: ${{ steps.release.outputs.source_branch }}
+          TARGET_PUBLISHED_AT: ${{ steps.release.outputs.published_at }}
+          PYTHONHASHSEED: '0'
+        run: |
+          $commit = (git rev-parse HEAD).Trim()
+          $branch = if ($env:TARGET_CHANNEL -eq 'stable') { 'main' } else { $env:TARGET_BRANCH }
+          git merge-base --is-ancestor HEAD "origin/$branch"
+          if ($LASTEXITCODE -ne 0) { throw 'Release commit is not in its declared source branch' }
+          installer/build_installer.ps1 -ReleaseId $env:TARGET_RELEASE_ID -ReleaseTag $env:TARGET_TAG -ReleaseCommit $commit -Channel $env:TARGET_CHANNEL -SourceBranch $branch -PublishedAt $env:TARGET_PUBLISHED_AT -BuildOcr
+      - name: Sign module manifest
+        shell: pwsh
+        env:
+          PICSYNCRA_RELEASE_SIGNING_KEY: ${{ secrets.PICSYNCRA_RELEASE_SIGNING_KEY }}
+        run: |
+          python tools/sign_installed_release_manifest.py --input dist/installed/module-assets/PicSyncra-modules-manifest.json --output dist/installed/module-assets/PicSyncra-modules-manifest.json.sig
+          if ($LASTEXITCODE -ne 0) { throw 'Module manifest signing failed' }
+          Set-Content -NoNewline -Encoding ascii dist/installed/module-assets/PicSyncra-modules-manifest.json.key-id 'release-1'
+          python tools/verify_installed_modules.py --assets dist/installed/module-assets --signed
+          if ($LASTEXITCODE -ne 0) { throw 'Signed module publication failed verification' }
+      - name: Upload complete content and installer first
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release.outputs.tag }}
+          fail_on_unmatched_files: true
+          files: |
+            dist/installed/module-assets/content-*.bin
+            dist/installed/PicSyncra-Setup-*.exe
+      - name: Upload signed manifest last
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release.outputs.tag }}
+          fail_on_unmatched_files: true
+          files: |
+            dist/installed/module-assets/PicSyncra-modules-manifest.json
+            dist/installed/module-assets/PicSyncra-modules-manifest.json.sig
+            dist/installed/module-assets/PicSyncra-modules-manifest.json.key-id

@@ -1,0 +1,232 @@
+from __future__ import annotations
+
+import asyncio
+
+import pytest
+from fastapi import HTTPException, Request
+
+
+class RequestStub:
+    def __init__(self, payload=None, *, csrf: str = "") -> None:
+        self._payload = payload
+        self.headers = {"x-picsyncra-csrf": csrf}
+
+    async def json(self):
+        return self._payload
+
+
+def test_background_submit_is_csrf_protected_and_old_hosts_get_setup_instruction():
+    payload = dict(action='apply', selected={}, excluded=[], restore_backup_id=None)
+    class Client:
+        def module_submit(self, **kwargs): return dict(operation_id='a'*32, state='preparing')
+    routes, _ = app_with_dependencies(module_client=Client())
+    with pytest.raises(HTTPException) as failure:
+        asyncio.run(routes['/api/installation/module-updates'](RequestStub(payload)))
+    assert failure.value.status_code == 403
+    response = asyncio.run(routes['/api/installation/module-updates'](RequestStub(payload, csrf='valid')))
+    assert response.status_code == 202
+    routes, _ = app_with_dependencies(module_client=object())
+    with pytest.raises(HTTPException) as failure:
+        asyncio.run(routes['/api/installation/module-updates'](RequestStub(payload, csrf='valid')))
+    assert failure.value.detail['code'] == 'setup_required'
+
+
+def app_with_dependencies(*, installed: bool = True, module_client=None, installation_status=None, read_operation=None, record_problem=lambda _:None):
+    from picsyncra.web.installation_api import InstallationApiDependencies, build_installation_router
+
+    calls: list[object] = []
+
+    def require_admin(_request: Request):
+        return {"id": "admin-1", "username": "admin", "role": "admin"}
+
+    def require_user(_request: Request):
+        return "operator-1"
+
+    def require_csrf(request: Request):
+        if request.headers.get("x-picsyncra-csrf") != "valid":
+            raise HTTPException(status_code=403, detail="csrf")
+
+    def submit(payload, actor_id: str):
+        calls.append((payload, actor_id))
+        return {"operation_id": "op-1", "state": "downloading"}
+
+    router = build_installation_router(InstallationApiDependencies(
+        is_installed=lambda: installed,
+        require_admin=require_admin,
+        require_user=require_user,
+        require_csrf=require_csrf,
+        installation_status=installation_status or (lambda: {"channel": "stable", "build": "41"}),
+        list_releases=lambda channel: [{"release_id": 42, "channel": channel}],
+        submit_operation=submit,
+        read_operation=read_operation or (lambda operation_id: {"operation_id": operation_id, "state": "draining"}),
+        force_operation=lambda operation_id: {"operation_id": operation_id, "state": "draining", "force_allowed": True},
+        change_channel=lambda channel: {"channel": channel},
+        set_autostart=lambda enabled: {"autostart": enabled},
+        heartbeat=lambda user_id, session_id: {"user": user_id, "session": session_id},
+        public_status=lambda: {"state": "countdown", "deadline_utc": "2026-09-16T12:00:00Z"},
+        module_client=module_client,
+        record_problem=record_problem,
+    ))
+    return {route.path: route.endpoint for route in router.routes}, calls
+
+
+def test_module_plan_is_admin_csrf_protected_and_execution_is_separate():
+    class Client:
+        calls = []
+        def module_catalog(self): return {'modules': []}
+        def module_plan(self, **payload): self.calls.append(payload); return {'plan_id': 'a' * 32, 'conflicts': []}
+        def module_execute(self, plan_id, **payload): self.calls.append(plan_id); return {'state': 'accepted'}
+    client = Client()
+    routes, _ = app_with_dependencies(module_client=client)
+    payload = {'action': 'rollback_modules', 'selected': {'ftp': 'a' * 64}, 'excluded': [], 'restore_backup_id': None}
+    with pytest.raises(HTTPException):
+        asyncio.run(routes['/api/installation/module-plans'](RequestStub(payload)))
+    result = asyncio.run(routes['/api/installation/module-plans'](RequestStub(payload, csrf='valid')))
+    assert result['plan_id'] == 'a' * 32
+    assert client.calls == [payload]
+    result = asyncio.run(routes['/api/installation/module-plans/{plan_id}/execute'](
+        RequestStub({'restore_backup_id': None, 'acknowledge_data_loss': False}, csrf='valid'), 'a' * 32))
+    assert result.status_code == 202
+
+
+def test_web_authorization_exposes_nonce_only_and_requires_csrf():
+    class Client:
+        calls = []
+        def module_authorization_request(self, **payload): self.calls.append(payload); return {'request_id':'a' * 32}
+        def module_authorization_status(self, request_id): return {'state':'pending'}
+        def module_authorization_cancel(self, request_id): return {'state':'cancelled'}
+    client = Client(); routes, _ = app_with_dependencies(module_client=client)
+    payload = dict(action='apply', selected={}, excluded=[], restore_backup_id=None)
+    with pytest.raises(HTTPException) as failure:
+        asyncio.run(routes['/api/installation/module-authorization'](RequestStub(payload)))
+    assert failure.value.status_code == 403
+    result = asyncio.run(routes['/api/installation/module-authorization'](RequestStub(payload, csrf='valid')))
+    assert result == {'request_id': 'a' * 32} and client.calls == [payload]
+    with pytest.raises(HTTPException):
+        asyncio.run(routes['/api/installation/module-authorization'](RequestStub(dict(payload, password='secret'), csrf='valid')))
+    assert not any('credential' in route for route in routes)
+    with pytest.raises(HTTPException):
+        routes['/api/installation/module-authorization/{request_id}/cancel'](RequestStub(), 'a' * 32)
+
+
+def test_portable_runtime_does_not_expose_installed_update_endpoints() -> None:
+    routes, _calls = app_with_dependencies(installed=False)
+    with pytest.raises(HTTPException) as error:
+        routes["/api/installation"](RequestStub())
+    assert error.value.status_code == 404
+
+
+def test_status_returns_service_unavailable_when_controller_disconnects():
+    from picsyncra.installation.control_pipe import ControlPipeError
+    def unavailable(): raise ControlPipeError('Brak połączenia z kontrolerem instalacji.')
+    routes, _ = app_with_dependencies(installation_status=unavailable)
+    with pytest.raises(HTTPException) as error:
+        routes['/api/installation'](RequestStub())
+    assert error.value.status_code == 503
+    assert 'kontrolerem' in error.value.detail
+
+
+def test_operation_poll_returns_service_unavailable_instead_of_critical_error():
+    from picsyncra.installation.control_pipe import ControlPipeError
+    def unavailable(operation_id): raise ControlPipeError('Brak połączenia z kontrolerem.')
+    reported = []
+    routes, _ = app_with_dependencies(read_operation=unavailable, record_problem=reported.append)
+    with pytest.raises(HTTPException) as error:
+        routes['/api/installation/operations/{operation_id}'](RequestStub(), 'a' * 32)
+    assert error.value.status_code == 503
+    assert reported == []
+
+
+def test_compatibility_conflicts_are_reported_for_both_plan_and_operation_status():
+    conflicts = [dict(code='controller_outdated', module_id='core', requirement='Wymagany kontroler 6; obecny 5.')]
+    class Client:
+        def module_plan(self, **_): return dict(plan_id='a'*32, conflicts=conflicts)
+    reported = []
+    result = dict(operation_id='a'*32, state='failed', error='Plan zawiera konflikty zgodności.', conflicts=conflicts)
+    routes, _ = app_with_dependencies(module_client=Client(), read_operation=lambda _:result, record_problem=reported.append)
+    payload = dict(action='apply', selected={}, excluded=[], restore_backup_id=None)
+    asyncio.run(routes['/api/installation/module-plans'](RequestStub(payload, csrf='valid')))
+    routes['/api/installation/operations/{operation_id}'](RequestStub(), 'a'*32)
+    assert len(reported) == 2
+    assert all(item['conflicts'] == conflicts and item['username'] == 'admin' for item in reported)
+
+
+def test_execute_rejection_is_logged_with_plan_identity():
+    class Client:
+        def module_execute(self, plan_id, **_): raise RuntimeError('Instalacja zmieniła się. Przygotuj nowy plan.')
+    reported = []
+    routes, _ = app_with_dependencies(module_client=Client(), record_problem=reported.append)
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(routes['/api/installation/module-plans/{plan_id}/execute'](
+            RequestStub(dict(restore_backup_id=None, acknowledge_data_loss=False), csrf='valid'), 'a'*32))
+    assert error.value.status_code == 409
+    assert len(reported) == 1
+    assert reported[0]['plan_id'] == 'a'*32
+
+
+def test_catalog_errors_shown_in_the_alert_are_reported():
+    class Client:
+        def module_catalog(self): raise RuntimeError('Kontroler niedostępny.')
+    reported = []
+    routes, _ = app_with_dependencies(module_client=Client(), record_problem=reported.append)
+    with pytest.raises(HTTPException) as failure:
+        routes['/api/installation/modules'](RequestStub())
+    assert failure.value.status_code == 409
+    assert reported[0]['action'] == 'catalog'
+
+
+def test_installation_status_and_release_channel_require_admin() -> None:
+    routes, _calls = app_with_dependencies()
+    assert routes["/api/installation"](RequestStub()) == {"channel": "stable", "build": "41"}
+    assert routes["/api/installation/releases"](RequestStub(), "dev") == {"releases": [{"release_id": 42, "channel": "dev"}]}
+    with pytest.raises(HTTPException) as error:
+        routes["/api/installation/releases"](RequestStub(), "preview")
+    assert error.value.status_code == 400
+
+
+def test_operation_submission_requires_csrf_and_uses_server_actor_identity() -> None:
+    routes, calls = app_with_dependencies()
+    payload = {"request_id": "request-1", "action": "restart", "release_id": None,
+               "restore_backup_id": None, "acknowledge_data_loss": False}
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(routes["/api/installation/operations"](RequestStub(payload)))
+    assert error.value.status_code == 403
+    accepted = asyncio.run(routes["/api/installation/operations"](RequestStub(payload, csrf="valid")))
+    assert accepted.status_code == 202
+    assert b'"operation_id":"op-1"' in accepted.body
+    assert calls[0][1] == "admin-1"
+    assert not hasattr(calls[0][0], "actor_id")
+
+
+def test_force_channel_and_autostart_are_csrf_protected_admin_mutations() -> None:
+    routes, _calls = app_with_dependencies()
+    request = RequestStub(csrf="valid")
+    assert routes["/api/installation/operations/{operation_id}/force"](request, "op-1").status_code == 202
+    assert asyncio.run(routes["/api/installation/channel"](RequestStub({"channel": "dev"}, csrf="valid"))) == {"channel": "dev"}
+    assert asyncio.run(routes["/api/installation/autostart"](RequestStub({"enabled": True}, csrf="valid"))) == {"autostart": True}
+
+
+def test_channel_change_rejects_malformed_values_and_requires_csrf():
+    routes, _ = app_with_dependencies()
+    for channel in (['dev'], {}, None, 'preview'):
+        with pytest.raises(HTTPException) as error:
+            asyncio.run(routes['/api/installation/channel'](RequestStub({'channel':channel}, csrf='valid')))
+        assert error.value.status_code == 400
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(routes['/api/installation/channel'](RequestStub({'channel':'dev'})))
+    assert error.value.status_code == 403
+
+
+def test_presence_requires_logged_in_user_but_public_status_needs_no_session() -> None:
+    routes, _calls = app_with_dependencies()
+    assert routes["/api/installation/public-status"]() == {"state": "countdown", "deadline_utc": "2026-09-16T12:00:00Z"}
+    assert routes["/api/installation/presence"](RequestStub(), "tab-1") == {"user": "operator-1", "session": "tab-1"}
+
+
+def test_web_app_mounts_installation_routes_only_for_a_verified_installed_context() -> None:
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "picsyncra" / "web" / "app.py").read_text(encoding="utf-8")
+    assert "installed_context = resolve_install_context(Path(sys.executable))" in source
+    assert "if installation_service is not None:" in source
+    assert "app.include_router(" in source

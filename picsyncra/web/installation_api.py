@@ -1,0 +1,270 @@
+"""Authenticated WEB API for installed-only updates and remote restart."""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
+
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
+
+from ..installation.contracts import OperationRequest
+
+
+@dataclass(frozen=True)
+class InstallationApiDependencies:
+    is_installed: Callable[[], bool]
+    require_admin: Callable[[Request], dict[str, Any]]
+    require_user: Callable[[Request], str]
+    require_csrf: Callable[[Request], None]
+    installation_status: Callable[[], dict[str, Any]]
+    list_releases: Callable[[str], list[dict[str, Any]]]
+    submit_operation: Callable[[OperationRequest, str], dict[str, Any]]
+    read_operation: Callable[[str], dict[str, Any] | None]
+    force_operation: Callable[[str], dict[str, Any] | None]
+    change_channel: Callable[[str], dict[str, Any]]
+    set_autostart: Callable[[bool], dict[str, Any]]
+    heartbeat: Callable[[str, str], dict[str, Any]]
+    public_status: Callable[[], dict[str, Any]]
+    module_client: Any = None
+    record_problem: Callable[[dict[str, Any]], None] = lambda _snapshot: None
+
+
+def _require_installed(dependencies: InstallationApiDependencies) -> None:
+    if not dependencies.is_installed():
+        raise HTTPException(status_code=404, detail="Ta funkcja jest dostepna tylko w zainstalowanej aplikacji.")
+
+
+def _text(value: object, field: str) -> str:
+    if not isinstance(value, str) or not value.strip() or len(value.strip()) > 128:
+        raise HTTPException(status_code=400, detail=f"Niepoprawne pole {field}.")
+    return value.strip()
+
+
+def _operation(payload: object) -> OperationRequest:
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Niepoprawne dane operacji.")
+    allowed = {"request_id", "action", "release_id", "restore_backup_id", "acknowledge_data_loss"}
+    if not set(payload).issubset(allowed):
+        raise HTTPException(status_code=400, detail="Niepoprawne dane operacji.")
+    request_id = _text(payload.get("request_id"), "request_id")
+    action = payload.get("action")
+    release_id = payload.get("release_id")
+    restore_backup_id = payload.get("restore_backup_id")
+    acknowledged = payload.get("acknowledge_data_loss", False)
+    if action not in {"update", "downgrade", "install_ocr", "restart"}:
+        raise HTTPException(status_code=400, detail="Niepoprawny rodzaj operacji.")
+    if release_id is not None and (isinstance(release_id, bool) or not isinstance(release_id, int) or release_id <= 0):
+        raise HTTPException(status_code=400, detail="Niepoprawne wydanie.")
+    if restore_backup_id is not None:
+        restore_backup_id = _text(restore_backup_id, "restore_backup_id")
+    if not isinstance(acknowledged, bool):
+        raise HTTPException(status_code=400, detail="Niepoprawne potwierdzenie danych.")
+    return OperationRequest(request_id, action, release_id, restore_backup_id, acknowledged)  # type: ignore[arg-type]
+
+
+def build_installation_router(dependencies: InstallationApiDependencies) -> APIRouter:
+    """Build installed-update routes without coupling portable WEB to updates."""
+    router = APIRouter()
+
+    def report_problem(request, snapshot):
+        admin = dependencies.require_admin(request)
+        dependencies.record_problem(dict(snapshot, username=str(admin.get('username') or admin.get('id') or '')))
+
+    def modules(request, *, mutation=False):
+        _require_installed(dependencies)
+        dependencies.require_admin(request)
+        if mutation: dependencies.require_csrf(request)
+        if dependencies.module_client is None:
+            raise HTTPException(status_code=409, detail='Wymagany pełny instalator z obsługą modułów.')
+        return dependencies.module_client
+
+    @router.get('/api/installation/modules')
+    def installation_modules(request: Request):
+        client = modules(request)
+        try: return client.module_catalog()
+        except RuntimeError as exc:
+            report_problem(request, dict(action='catalog', state='failed', error=str(exc)))
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @router.post('/api/installation/module-plans')
+    async def installation_module_plan(request: Request):
+        client = modules(request, mutation=True)
+        from ..installation.control_protocol import validate_module_payload
+        try:
+            payload = await request.json()
+            validate_module_payload('module_plan', payload)
+            result = await run_in_threadpool(client.module_plan, **payload)
+            await run_in_threadpool(report_problem, request, result)
+            return result
+        except ValueError as exc: raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            detail = dict(message=str(exc), **(getattr(exc, 'details', None) or {}))
+            if detail.get('code') != 'permission_required':
+                await run_in_threadpool(report_problem, request, dict(state='failed', error=str(exc), error_details=detail))
+            raise HTTPException(status_code=409, detail=detail) from exc
+
+    @router.post('/api/installation/module-updates')
+    async def installation_module_submit(request: Request):
+        client = modules(request, mutation=True)
+        from ..installation.control_protocol import validate_module_payload
+        try:
+            if not callable(getattr(client, 'module_submit', None)):
+                await run_in_threadpool(report_problem, request, dict(state='failed', error='Aktualizacje w tle wymagają nowszego kontrolera. Uruchom pełny instalator Setup na istniejącej instalacji.'))
+                raise HTTPException(status_code=409, detail=dict(code='setup_required', message='Aktualizacje w tle wymagają nowszego kontrolera. Uruchom pełny instalator Setup na istniejącej instalacji.'))
+            payload = await request.json()
+            validate_module_payload('module_submit', payload)
+            result = await run_in_threadpool(client.module_submit, **payload)
+            return JSONResponse(result, status_code=202)
+        except ValueError as exc: raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            if (getattr(exc, 'details', None) or {}).get('code') != 'permission_required':
+                await run_in_threadpool(report_problem, request, dict(state='failed', error=str(exc), error_details=getattr(exc, 'details', None)))
+            raise HTTPException(status_code=409, detail=dict(message=str(exc), **(getattr(exc, 'details', None) or {}))) from exc
+
+    @router.post('/api/installation/module-authorization')
+    async def installation_module_authorization(request: Request):
+        client = modules(request, mutation=True)
+        from ..installation.control_protocol import validate_module_payload
+        try:
+            payload = await request.json()
+            validate_module_payload('module_authorization_request', payload)
+            return client.module_authorization_request(**payload)
+        except ValueError as exc: raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            await run_in_threadpool(report_problem, request, dict(action='authorization', state='failed', error=str(exc)))
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @router.get('/api/installation/module-authorization/{request_id}')
+    def installation_module_authorization_status(request: Request, request_id: str):
+        client = modules(request)
+        from ..installation.control_protocol import validate_module_payload
+        try:
+            validate_module_payload('module_authorization_status', dict(request_id=request_id))
+            return client.module_authorization_status(request_id)
+        except ValueError as exc: raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            report_problem(request, dict(operation_id=request_id, action='authorization', state='failed', error=str(exc)))
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @router.post('/api/installation/module-authorization/{request_id}/cancel')
+    def installation_module_authorization_cancel(request: Request, request_id: str):
+        client = modules(request, mutation=True)
+        from ..installation.control_protocol import validate_module_payload
+        try:
+            validate_module_payload('module_authorization_cancel', dict(request_id=request_id))
+            return client.module_authorization_cancel(request_id)
+        except ValueError as exc: raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc: raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @router.post('/api/installation/module-plans/{plan_id}/execute')
+    async def installation_module_execute(request: Request, plan_id: str):
+        client = modules(request, mutation=True)
+        from ..installation.control_protocol import validate_module_payload
+        try:
+            body = await request.json()
+            if not isinstance(body, dict) or set(body) != {'restore_backup_id', 'acknowledge_data_loss'}:
+                raise ValueError('Nieprawidłowe zatwierdzenie planu.')
+            validate_module_payload('module_execute', dict(body, plan_id=plan_id))
+            return JSONResponse(client.module_execute(plan_id, **body), status_code=202)
+        except ValueError as exc: raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            await run_in_threadpool(report_problem, request, dict(plan_id=plan_id, state='failed', error=str(exc),
+                                                                error_details=getattr(exc, 'details', None)))
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @router.get("/api/installation")
+    def installation_status(request: Request) -> dict[str, Any]:
+        _require_installed(dependencies)
+        dependencies.require_admin(request)
+        try:
+            return dependencies.installation_status()
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @router.get("/api/installation/releases")
+    def installation_releases(request: Request, channel: str = "stable") -> dict[str, Any]:
+        _require_installed(dependencies)
+        dependencies.require_admin(request)
+        if channel not in {"stable", "dev"}:
+            raise HTTPException(status_code=400, detail="Niepoprawny kanal wydan.")
+        return {"releases": dependencies.list_releases(channel)}
+
+    @router.post("/api/installation/operations")
+    async def installation_operation(request: Request) -> JSONResponse:
+        _require_installed(dependencies)
+        admin = dependencies.require_admin(request)
+        dependencies.require_csrf(request)
+        try:
+            result = dependencies.submit_operation(
+                _operation(await request.json()), str(admin.get("id") or admin.get("username") or "")
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return JSONResponse(result, status_code=202)
+
+    @router.get("/api/installation/operations/{operation_id}")
+    def installation_operation_status(request: Request, operation_id: str) -> dict[str, Any]:
+        _require_installed(dependencies)
+        dependencies.require_admin(request)
+        try:
+            result = dependencies.read_operation(_text(operation_id, "operation_id"))
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        if result is None:
+            raise HTTPException(status_code=404, detail="Nie znaleziono operacji.")
+        report_problem(request, result)
+        return result
+
+    @router.post("/api/installation/operations/{operation_id}/force")
+    def installation_force(request: Request, operation_id: str) -> JSONResponse:
+        _require_installed(dependencies)
+        dependencies.require_admin(request)
+        dependencies.require_csrf(request)
+        result = dependencies.force_operation(_text(operation_id, "operation_id"))
+        if result is None:
+            raise HTTPException(status_code=409, detail="Operacja nie moze zostac wymuszona.")
+        return JSONResponse(result, status_code=202)
+
+    @router.post("/api/installation/channel")
+    async def installation_channel(request: Request) -> dict[str, Any]:
+        _require_installed(dependencies)
+        dependencies.require_admin(request)
+        dependencies.require_csrf(request)
+        payload = await request.json()
+        channel = payload.get("channel") if isinstance(payload, dict) else None
+        if not isinstance(channel,str) or channel not in {"stable", "dev"}:
+            raise HTTPException(status_code=400, detail="Niepoprawny kanal wydan.")
+        try:
+            return dependencies.change_channel(channel)
+        except RuntimeError as exc:
+            await run_in_threadpool(report_problem, request, dict(action='channel', state='failed', error=str(exc)))
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @router.post("/api/installation/autostart")
+    async def installation_autostart(request: Request) -> dict[str, Any]:
+        _require_installed(dependencies)
+        dependencies.require_admin(request)
+        dependencies.require_csrf(request)
+        payload = await request.json()
+        enabled = payload.get("enabled") if isinstance(payload, dict) else None
+        if not isinstance(enabled, bool):
+            raise HTTPException(status_code=400, detail="Niepoprawna wartosc autostartu.")
+        return dependencies.set_autostart(enabled)
+
+    @router.get("/api/installation/presence")
+    def installation_presence(request: Request, session_id: str) -> dict[str, Any]:
+        _require_installed(dependencies)
+        return dependencies.heartbeat(dependencies.require_user(request), _text(session_id, "session_id"))
+
+    @router.get("/api/installation/public-status")
+    def installation_public_status() -> dict[str, Any]:
+        _require_installed(dependencies)
+        return dependencies.public_status()
+
+    return router
+
+
+__all__ = ["InstallationApiDependencies", "build_installation_router"]

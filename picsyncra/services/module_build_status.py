@@ -22,13 +22,13 @@ class ModuleDefinition:
 
 MODULES = (
     ModuleDefinition("application_data", "Aplikacja i dane", ("picsyncra",)),
-    ModuleDefinition("slots", "Sloty", ("picsyncra/web/static/app.js",)),
+    ModuleDefinition("slots", "Sloty", ("picsyncra/web/static/slot-ui.js",)),
     ModuleDefinition("ftp", "FTP", ("picsyncra/services/ftp_service.py",)),
     ModuleDefinition("sql", "SQL", ("picsyncra/services/sql_service.py",)),
     ModuleDefinition("pimcore", "Pimcore", ("picsyncra/services/pimcore_service.py",)),
     ModuleDefinition("ocr", "OCR", ("picsyncra/services/image_dimensions.py",)),
-    ModuleDefinition("ocr_tester", "Tester OCR", ("picsyncra/web/static/ocr-diagnostics.js",)),
-    ModuleDefinition("settings", "Ustawienia", ("picsyncra/web",)),
+    ModuleDefinition("ocr_tester", "Tester OCR", ("picsyncra/web/static/ocr-diagnostics.js", "picsyncra/web/static/ocr-tester-ui.js")),
+    ModuleDefinition("settings", "Ustawienia", ("picsyncra/settings.py", "picsyncra/storage_settings.py", "picsyncra/web/static/settings-ui.js")),
     ModuleDefinition("web_ui", "Interfejs web", ("picsyncra/web/static",)),
     ModuleDefinition("generator_local", "Generator lokalny", ("Generator exe/build_local_exe.ps1",)),
     ModuleDefinition("generator_web", "Generator web", ("Generator exe/build_web_exe.ps1",)),

@@ -1427,6 +1427,12 @@ class SqliteStore:
                     created_at TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS web_release_reads (
+                    user_id TEXT NOT NULL,
+                    version_id TEXT NOT NULL,
+                    PRIMARY KEY (user_id, version_id)
+                );
+
                 CREATE TABLE IF NOT EXISTS web_history_index (
                     id TEXT PRIMARY KEY,
                     ean TEXT NOT NULL,
@@ -4859,6 +4865,18 @@ class SqliteStore:
         self.initialize()
         with self.connection() as conn:
             return self._save_product_entry_conn(conn, payload)
+
+    def release_notice_seen(self, user_id: str, version_id: str) -> bool:
+        self.initialize()
+        with self.connection() as conn:
+            return conn.execute('SELECT 1 FROM web_release_reads WHERE user_id=? AND version_id=?',
+                                (user_id, version_id)).fetchone() is not None
+
+    def acknowledge_release_notice(self, user_id: str, version_id: str) -> None:
+        self.initialize()
+        with self.connection() as conn:
+            conn.execute('INSERT OR IGNORE INTO web_release_reads (user_id, version_id) VALUES (?, ?)',
+                         (user_id, version_id))
 
     def load_users(self) -> list[dict[str, Any]]:
         """Return stored web user records."""

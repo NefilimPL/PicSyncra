@@ -158,6 +158,15 @@ class OcrProgressRegistry:
                 del self._runs[run_id]
         return len(expired)
 
+    def diagnostic_counts(self) -> dict[str, int]:
+        """Count retained state without exposing OCR text or copying payloads."""
+        with self._lock:
+            return {
+                'ocr_retained_runs': len(self._runs),
+                'ocr_retained_events': sum(len(run.events) for run in self._runs.values()),
+                'ocr_retained_results': sum(run.result is not None for run in self._runs.values()),
+            }
+
     def _required_run(self, run_id: str) -> _Run:
         try:
             return self._runs[run_id]

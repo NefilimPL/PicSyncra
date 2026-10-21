@@ -11,6 +11,7 @@ from pathlib import Path
 import runpy
 import subprocess
 import sys
+import threading
 import types
 from unittest.mock import patch
 
@@ -250,6 +251,8 @@ class _FakeProgressbar:
 def _app_without_tk() -> web_manager.WebManagerApp:
     app = object.__new__(web_manager.WebManagerApp)
     app.root = _FakeRoot()
+    app._ui_thread_id = threading.get_ident()
+    app._ui_callbacks = web_manager.SimpleQueue()
     app.tray_icon = None
     app.status_var = _FakeStringVar()
     app.close_progress = _FakeProgressbar()
@@ -257,6 +260,54 @@ def _app_without_tk() -> web_manager.WebManagerApp:
     app.close_check_in_progress = False
     app._port = lambda: 8010
     return app
+
+
+def test_refresh_worker_never_calls_tk_and_ui_applies_queued_results(monkeypatch):
+    app = _app_without_tk()
+    app.refreshing = False
+    app.pending_refresh = False
+    scheduled = []
+    applied = []
+    workers = []
+    real_thread = threading.Thread
+    app.root.after = lambda delay, callback: scheduled.append((delay, callback))
+    monkeypatch.setattr(web_manager, 'current_status', lambda port: {'port': port})
+
+    def apply(status):
+        applied.append((threading.get_ident(), status))
+        app.refreshing = False
+    app._apply_status = apply
+
+    def make_worker(**kwargs):
+        worker = real_thread(**kwargs)
+        workers.append(worker)
+        return worker
+    monkeypatch.setattr(web_manager.threading, 'Thread', make_worker)
+
+    for iteration in range(10):
+        app.request_refresh()
+        workers[-1].join(3)
+        assert not workers[-1].is_alive()
+        assert not scheduled, 'background thread must not call Tk.after'
+        assert len(applied) == iteration
+        app._drain_ui_callbacks()
+        assert applied[-1] == (threading.get_ident(), {'port': 8010})
+        assert scheduled[0][0] == 100
+        scheduled.clear()
+
+
+def test_queued_ui_work_is_discarded_after_manager_closes():
+    app = _app_without_tk()
+    called = []
+    worker = threading.Thread(target=lambda: app._post_ui(lambda: called.append('queued')))
+    worker.start()
+    worker.join(3)
+    assert not worker.is_alive()
+    assert not app._ui_callbacks.empty()
+    app.closing = True
+    app._post_ui(lambda: called.append('late'))
+    app._drain_ui_callbacks()
+    assert called == []
 
 
 def test_web_manager_tray_uses_the_picsyncra_web_icon(monkeypatch) -> None:
@@ -732,6 +783,103 @@ def test_start_web_refuses_a_mismatched_backend_identity(monkeypatch) -> None:
 
     assert not result.ok
     assert "inna aplikacja" in result.message
+
+
+def test_start_web_uses_the_installed_controller_without_scanning_processes(
+    monkeypatch,
+) -> None:
+    """Catches an installed runtime returning to port scans and schtasks."""
+
+    calls: list[str] = []
+
+    class InstalledController:
+        def start_backend(self) -> None:
+            calls.append("start")
+
+    monkeypatch.setattr(
+        web_manager, "_installed_control_client", lambda: InstalledController(), raising=False
+    )
+    monkeypatch.setattr(
+        web_manager, "get_port_listeners", lambda _port: pytest.fail("must use controller")
+    )
+    monkeypatch.setattr(web_manager, "wait_web_ready", lambda *_args, **_kwargs: True)
+
+    result = web_manager.start_web(8010, "0.0.0.0")
+
+    assert result.ok
+    assert calls == ["start"]
+
+
+def test_stop_web_uses_the_installed_controller_without_taskkill(monkeypatch) -> None:
+    """Catches force-stopping arbitrary local processes in installed mode."""
+
+    calls: list[bool] = []
+
+    class InstalledController:
+        def stop_backend(self, *, force: bool = False) -> bool:
+            calls.append(force)
+            return True
+
+    monkeypatch.setattr(
+        web_manager, "_installed_control_client", lambda: InstalledController(), raising=False
+    )
+    monkeypatch.setattr(
+        web_manager, "_taskkill_process_tree", lambda _pid: pytest.fail("must use controller")
+    )
+
+    result = web_manager.stop_web(8010)
+
+    assert result.ok
+    assert calls == [False]
+
+
+def test_installed_autostart_is_confirmed_by_the_controller(monkeypatch) -> None:
+    """Catches changing a scheduler task instead of the installed backend service."""
+
+    requested: list[bool] = []
+
+    class InstalledController:
+        def set_autostart(self, enabled: bool) -> bool:
+            requested.append(enabled)
+            return enabled
+
+    monkeypatch.setattr(
+        web_manager, "_installed_control_client", lambda: InstalledController(), raising=False
+    )
+    monkeypatch.setattr(
+        web_manager, "_run_command", lambda *_args, **_kwargs: pytest.fail("must use controller")
+    )
+
+    result = web_manager.set_system_service_enabled(True)
+
+    assert result.ok
+    assert requested == [True]
+
+
+def test_installed_status_uses_the_controller_autostart_state(monkeypatch) -> None:
+    """Catches an installed GUI showing the legacy scheduled-task state."""
+
+    class InstalledController:
+        def snapshot(self) -> dict[str, bool]:
+            return {"backend_running": True, "autostart": True}
+
+    monkeypatch.setattr(
+        web_manager, "_installed_control_client", lambda: InstalledController(), raising=False
+    )
+    monkeypatch.setattr(web_manager, "get_port_listeners", lambda _port: [])
+    monkeypatch.setattr(web_manager, "check_http_health", lambda _port: {"ok": True})
+    monkeypatch.setattr(web_manager, "task_exists", lambda: pytest.fail("must use controller"))
+    monkeypatch.setattr(web_manager, "task_enabled", lambda: pytest.fail("must use controller"))
+    monkeypatch.setattr(web_manager, "lan_urls", lambda _port: [])
+    monkeypatch.setattr(web_manager, "read_metadata", lambda: {})
+    monkeypatch.setattr(web_manager, "read_active_clients", lambda: [])
+    monkeypatch.setattr(web_manager, "get_established_connections", lambda _port: [])
+
+    status = web_manager.current_status(8010)
+
+    assert status["running"] is True
+    assert status["task_exists"] is True
+    assert status["task_enabled"] is True
 
 
 def test_wait_web_ready_reports_each_startup_probe(monkeypatch) -> None:

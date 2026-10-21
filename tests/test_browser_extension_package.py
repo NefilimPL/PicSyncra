@@ -36,6 +36,7 @@ def test_browser_extension_popup_uploads_to_panel_endpoint() -> None:
     html = (EXTENSION_DIR / "popup.html").read_text(encoding="utf-8")
 
     assert "/api/browser-extension/upload-cache" in background
+    assert '"X-PicSyncra-Extension-Protocol": "1"' in background
     assert "/api/browser-extension/ping" in popup
     assert "collectImagesFromPage" in popup
     assert "visibleImageEntries" in popup
@@ -143,3 +144,18 @@ def test_web_exe_build_includes_browser_extension_assets() -> None:
 
     assert "picsyncra\\browser_extension;picsyncra\\browser_extension" in build_script
     assert "picsyncra/browser_extension;picsyncra/browser_extension" in workflow
+
+
+def test_incompatible_browser_extension_is_directed_to_the_current_download() -> None:
+    from fastapi.testclient import TestClient
+    from picsyncra.web import app as web_app
+
+    client = TestClient(web_app.app)
+    response = client.post(
+        "/api/browser-extension/upload-cache",
+        headers={"X-PicSyncra-Extension-Protocol": "999"},
+    )
+
+    assert response.status_code == 426
+    assert response.json()["update_required"] is True
+    assert response.json()["extension_download"] == "/api/browser-extension/download"

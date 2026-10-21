@@ -13,6 +13,7 @@ import socket
 import subprocess
 import sys
 import threading
+from queue import Empty, SimpleQueue
 import time
 import webbrowser
 from dataclasses import dataclass
@@ -37,6 +38,18 @@ LEGACY_TASK_NAME = "PicOrgFTP-SQL Web"
 class ActionResult:
     ok: bool
     message: str
+
+
+def _installed_control_client():
+    """Return a controller client only for a resolver-verified installation."""
+
+    from .install_paths import resolve_install_context
+    from .installation.launcher import InstallationControlClient
+
+    context = resolve_install_context(Path(sys.executable))
+    if context is None:
+        return None
+    return InstallationControlClient(context.installation_id)
 
 
 def app_root() -> Path:
@@ -593,6 +606,15 @@ def remove_system_service() -> ActionResult:
 
 
 def set_system_service_enabled(enabled: bool) -> ActionResult:
+    installed_controller = _installed_control_client()
+    if installed_controller is not None:
+        try:
+            confirmed = installed_controller.set_autostart(enabled)
+        except Exception:
+            return ActionResult(False, "Kontroler instalacji nie potwierdzil zmiany autostartu.")
+        if confirmed is not enabled:
+            return ActionResult(False, "Kontroler instalacji zwrocil niezgodny stan autostartu.")
+        return ActionResult(True, "Autostart wlaczony." if enabled else "Autostart wylaczony.")
     if os.name != "nt":
         return ActionResult(False, "Autostart uslugi jest dostepny tylko na Windows.")
     if not task_exists():
@@ -721,6 +743,17 @@ def start_web(
     prefer_system_service: bool = True,
     progress: Callable[[str], None] | None = None,
 ) -> ActionResult:
+    installed_controller = _installed_control_client()
+    if installed_controller is not None:
+        if progress is not None:
+            progress("Uruchamiam backend przez kontroler instalacji...")
+        try:
+            installed_controller.start_backend()
+        except Exception:
+            return ActionResult(False, "Kontroler instalacji nie uruchomil backendu WWW.")
+        if wait_web_ready(port, progress=progress, expected_application=PACKAGE_NAME):
+            return ActionResult(True, "Panel webowy dziala jako usluga instalacji.")
+        return ActionResult(False, "Kontroler uruchomil backend, ale strona nie odpowiedziala w limicie czasu.")
     if progress is not None:
         progress("Sprawdzam port i poprzedni proces panelu WWW...")
     listeners = get_port_listeners(port)
@@ -865,6 +898,15 @@ def stop_legacy_web(port: int) -> ActionResult:
 
 
 def stop_web(port: int) -> ActionResult:
+    installed_controller = _installed_control_client()
+    if installed_controller is not None:
+        try:
+            stopped = installed_controller.stop_backend(force=False)
+        except Exception:
+            return ActionResult(False, "Kontroler instalacji nie potwierdzil zatrzymania backendu WWW.")
+        if stopped:
+            return ActionResult(True, "Zatrzymano backend przez kontroler instalacji.")
+        return ActionResult(False, "Kontroler instalacji nie zatrzymal backendu WWW.")
     stopped = False
     data = read_metadata()
     failures: list[str] = []
@@ -954,6 +996,13 @@ def read_active_clients(root: Path | None = None, *, max_age_seconds: int = 180)
 
 
 def current_status(port: int) -> dict[str, Any]:
+    installed_controller = _installed_control_client()
+    installed_snapshot: dict[str, bool] | None = None
+    if installed_controller is not None:
+        try:
+            installed_snapshot = installed_controller.snapshot()
+        except Exception:
+            installed_snapshot = {"backend_running": False, "autostart": False}
     listeners = get_port_listeners(port)
     health = check_http_health(port)
     web_listeners = [
@@ -974,16 +1023,24 @@ def current_status(port: int) -> dict[str, Any]:
             str(item.get("ProcessName") or ""),
         )
     ]
+    running = bool(web_listeners and health.get("ok"))
+    if installed_snapshot is not None:
+        running = bool(installed_snapshot.get("backend_running", False) and health.get("ok"))
+        task_present = True
+        task_is_enabled = bool(installed_snapshot.get("autostart", False))
+    else:
+        task_present = task_exists()
+        task_is_enabled = task_enabled()
     return {
         "port": port,
         "listeners": listeners,
         "web_listeners": web_listeners,
         "legacy_web_listeners": legacy_listeners,
         "health": health,
-        "running": bool(web_listeners and health.get("ok")),
+        "running": running,
         "urls": [local_url(port), *lan_urls(port)],
-        "task_exists": task_exists(),
-        "task_enabled": task_enabled(),
+        "task_exists": task_present,
+        "task_enabled": task_is_enabled,
         "admin": is_admin(),
         "metadata": read_metadata(),
         "clients": read_active_clients(),
@@ -1052,6 +1109,9 @@ def stop_web_as_admin(port: int) -> ActionResult:
 
 
 def run_service_mode(port: int, host: str) -> int:
+    from .memory_diagnostics import start_memory_reporting
+
+    start_memory_reporting('backend')
     root = app_root()
     os.chdir(root)
     log_dir(root).mkdir(parents=True, exist_ok=True)
@@ -1143,6 +1203,8 @@ class WebManagerApp:
         self.tk = tk
         self.ttk = ttk
         self.root = tk.Tk()
+        self._ui_thread_id = threading.get_ident()
+        self._ui_callbacks = SimpleQueue()
         self.root.title(f"{WEB_APP_NAME} {get_display_version()}")
         self.root.geometry("1040x760")
         self.root.minsize(860, 620)
@@ -1162,6 +1224,7 @@ class WebManagerApp:
         self.close_check_in_progress = False
         self.close_progress = None
         self._build()
+        self.root.after(100, self._drain_ui_callbacks)
         self.request_refresh(clear_status=True)
         self.root.after(10000, self._auto_refresh)
 
@@ -1343,6 +1406,31 @@ class WebManagerApp:
     def _host(self) -> str:
         return self.host_var.get().strip() or DEFAULT_HOST
 
+    def _post_ui(self, callback, *args) -> None:
+        """Send UI work without entering Tcl from a short-lived worker thread."""
+        if self.closing:
+            return
+        if threading.get_ident() == self._ui_thread_id:
+            callback(*args)
+        else:
+            self._ui_callbacks.put((callback, args))
+
+    def _drain_ui_callbacks(self) -> None:
+        if self.closing:
+            return
+        try:
+            for _ in range(100):
+                try:
+                    callback, args = self._ui_callbacks.get_nowait()
+                except Empty:
+                    break
+                callback(*args)
+                if self.closing:
+                    break
+        finally:
+            if not self.closing:
+                self.root.after(100, self._drain_ui_callbacks)
+
     def _run_action(self, action) -> None:
         if self.busy:
             return
@@ -1354,7 +1442,7 @@ class WebManagerApp:
                 result = action()
             except Exception as exc:
                 result = ActionResult(False, str(exc))
-            self.root.after(0, lambda: self._finish_action(result))
+            self._post_ui(self._finish_action, result)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1372,7 +1460,7 @@ class WebManagerApp:
                 port,
                 host,
                 prefer_system_service=True,
-                progress=lambda message: self.root.after(0, self.status_var.set, message),
+                progress=lambda message: self._post_ui(self.status_var.set, message),
             )
         )
 
@@ -1390,14 +1478,14 @@ class WebManagerApp:
         host = self._host()
 
         def action() -> ActionResult:
-            self.root.after(0, self.status_var.set, "Zatrzymuje poprzedni proces panelu WWW...")
+            self._post_ui(self.status_var.set, "Zatrzymuje poprzedni proces panelu WWW...")
             stop_web(port)
             time.sleep(1)
             return start_web(
                 port,
                 host,
                 prefer_system_service=True,
-                progress=lambda message: self.root.after(0, self.status_var.set, message),
+                progress=lambda message: self._post_ui(self.status_var.set, message),
             )
 
         self._run_action(action)
@@ -1461,7 +1549,7 @@ class WebManagerApp:
                 status = current_status(port)
             except Exception as exc:
                 status = {"error": str(exc)}
-            self.root.after(0, lambda: self._apply_status(status))
+            self._post_ui(self._apply_status, status)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1564,8 +1652,8 @@ class WebManagerApp:
                     image,
                     WEB_APP_NAME,
                     menu=pystray.Menu(
-                        pystray.MenuItem("Pokaz okno", lambda _icon, _item: self.root.after(0, self.show_from_tray)),
-                        pystray.MenuItem("Zamknij menedzer", lambda _icon, _item: self.root.after(0, self.close_window)),
+                        pystray.MenuItem("Pokaz okno", lambda _icon, _item: self._post_ui(self.show_from_tray)),
+                        pystray.MenuItem("Zamknij menedzer", lambda _icon, _item: self._post_ui(self.close_window)),
                     ),
                 )
                 self.tray_icon.run_detached()
@@ -1627,7 +1715,7 @@ class WebManagerApp:
 
     def _check_close_status_worker(self, port: int) -> None:
         running = web_panel_running_for_close(port)
-        self.root.after(0, lambda: self._finish_close_check(running))
+        self._post_ui(self._finish_close_check, running)
 
     def _stop_web_for_close_worker(self, port: int) -> None:
         try:
@@ -1646,7 +1734,7 @@ class WebManagerApp:
                 result = stop_web(port)
         except Exception as exc:
             result = ActionResult(False, str(exc))
-        self.root.after(0, lambda: self._finish_close_stop(result))
+        self._post_ui(self._finish_close_stop, result)
 
     def _finish_close_check(self, web_panel_running: bool) -> None:
         self._stop_close_feedback()
@@ -1707,6 +1795,9 @@ def main(argv: list[str] | None = None) -> int:
         return run_service_mode(args.port, args.host)
     if args.stop_panel:
         return 0 if stop_web(args.port).ok else 1
+    from .memory_diagnostics import start_memory_reporting
+
+    start_memory_reporting('manager')
     try:
         WebManagerApp().run()
     except ModuleNotFoundError as exc:

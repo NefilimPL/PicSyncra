@@ -17,6 +17,9 @@ class _FakeWorker:
     def start(self) -> None:
         self.started = True
 
+    def stop(self, **kwargs):
+        self.alive = False
+
     def submit(self, **payload: object) -> None:
         self.submissions.append(payload)
 
@@ -39,6 +42,73 @@ class _FakeWorker:
 
 def _telemetry(cpu: float = 10) -> ResourceTelemetry:
     return ResourceTelemetry(cpu, 2_000, 10_000, 10)
+
+
+def test_first_installed_ocr_job_returns_and_can_be_polled_during_slow_start():
+    import threading
+    import time
+    from picsyncra.installation.ocr_runtime import LazyInstalledOcrWorker
+    entered, release = threading.Event(), threading.Event()
+    target = _FakeWorker()
+    def factory():
+        entered.set(); assert release.wait(3); return target
+    worker = LazyInstalledOcrWorker(factory)
+    registry = OcrProgressRegistry()
+    service = OcrExecutionService(worker=worker, registry=registry,
+        settings=lambda: {'model_profiles': ['fast']}, telemetry=_telemetry)
+    started = time.monotonic()
+    run_id = service.submit_test(path='image.png')
+    try:
+        assert time.monotonic() - started < 0.3
+        assert entered.wait(1)
+        assert service.snapshot(run_id).state == 'running'
+        service.cancel(run_id)
+    finally: release.set()
+    for _ in range(100):
+        if registry.snapshot(run_id).state == 'cancelled': break
+        time.sleep(0.01)
+    assert target.submissions == []
+    assert registry.snapshot(run_id).state == 'cancelled'
+
+
+def test_failed_lazy_start_is_reported_to_polling_and_next_job_can_retry():
+    import time
+    from picsyncra.installation.ocr_runtime import LazyInstalledOcrWorker
+    calls = []
+    def factory():
+        calls.append('verify')
+        raise RuntimeError('OCR handshake timed out')
+    registry = OcrProgressRegistry()
+    service = OcrExecutionService(worker=LazyInstalledOcrWorker(factory), registry=registry,
+        settings=lambda: {'model_profiles': ['fast']}, telemetry=_telemetry)
+    for _ in range(2):
+        run_id = service.submit_test(path='image.png')
+        for _ in range(100):
+            snapshot = service.snapshot(run_id)
+            if snapshot.state == 'error': break
+            time.sleep(0.01)
+        assert snapshot.state == 'error' and snapshot.error == 'OCR handshake timed out'
+    assert calls == ['verify', 'verify']
+
+
+def test_lazy_retry_finishes_old_generation_and_preserves_new_job():
+    import time
+    from picsyncra.installation.ocr_runtime import LazyInstalledOcrWorker
+    workers = [_FakeWorker(), _FakeWorker()]
+    remaining = iter(workers)
+    service = OcrExecutionService(worker=LazyInstalledOcrWorker(lambda: next(remaining)), registry=OcrProgressRegistry(),
+        settings=lambda: {'model_profiles': ['fast']}, telemetry=_telemetry)
+    first = service.submit_test(path='one.png')
+    for _ in range(100):
+        if workers[0].submissions: break
+        time.sleep(0.01)
+    workers[0].alive = False
+    second = service.submit_test(path='two.png')
+    for _ in range(100):
+        if workers[1].submissions: break
+        time.sleep(0.01)
+    assert service.snapshot(first).state == 'error'
+    assert service.snapshot(second).state == 'running'
 
 
 def test_execution_service_submits_selected_profiles_and_forwards_live_events():
@@ -181,3 +251,28 @@ def test_execution_service_can_limit_a_queue_job_to_the_fast_profile():
     )
 
     assert worker.submissions[0]["profile_ids"] == ["fast"]
+
+
+def test_execution_service_keeps_ocr_in_maintenance_drain_and_cancels_it_when_forced():
+    from picsyncra.installation.maintenance import MaintenanceGate
+
+    worker = _FakeWorker()
+    gate = MaintenanceGate()
+    service = OcrExecutionService(
+        worker=worker,
+        registry=OcrProgressRegistry(),
+        settings=lambda: {"model_profiles": ["fast"]},
+        telemetry=lambda: _telemetry(),
+        maintenance_gate=gate,
+    )
+
+    run_id = service.submit_test(path="C:/cache/test.png")
+    assert gate.snapshot()["active_by_kind"] == {"ocr": 1}
+
+    gate.begin("update-1", initiator_id="admin-1")
+    gate.request_force_cancel()
+    assert worker.cancelled == [run_id]
+
+    worker.events = [{"kind": "result", "run_id": run_id, "diagnostics": {}}]
+    service.pump()
+    assert gate.snapshot()["active_tasks"] == 0

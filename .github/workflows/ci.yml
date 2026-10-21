@@ -6,11 +6,13 @@ on:
       - main
       - master
       - dev
+      - dev2
   pull_request:
     branches:
       - main
       - master
       - dev
+      - dev2
 
 permissions:
   contents: read
@@ -62,7 +64,7 @@ jobs:
         shell: pwsh
         run: |
           $ci = Get-Content ".github/workflows/ci.yml" -Raw
-          foreach ($branch in @("main", "master", "dev")) {
+          foreach ($branch in @("main", "master", "dev", "dev2")) {
             if ($ci -notmatch "(?m)^\s+- $branch\s*$") {
               throw "CI workflow is missing branch '$branch'."
             }
@@ -90,6 +92,7 @@ jobs:
             requirements-build.txt
             requirements-web.txt
             requirements-qt.txt
+            requirements-installed.txt
 
       - name: Install dependencies
         run: |
@@ -98,6 +101,7 @@ jobs:
           python -m pip install -r requirements-build.txt
           python -m pip install -r requirements-web.txt
           python -m pip install -r requirements-qt.txt
+          python -m pip install -r requirements-installed.txt
 
       - name: Run pytest
         run: python -m pytest -q

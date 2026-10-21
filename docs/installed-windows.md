@@ -1,0 +1,228 @@
+# PicSyncra instalowana na Windows
+
+Wersja instalowana działa jako zwykły program Windows. WEB i Migrator są
+instalowane zawsze, a komponent LOCAL jest opcjonalny. OCR nie jest częścią
+instalacji bazowej: administrator pobiera go z zakładki **Wersje modułów**.
+Przycisk **Pobierz OCR** w WEB lub launcherze pobiera silnik i modele
+z Release odpowiadającego aktywnemu wydaniu aplikacji. Wymaga opublikowanego
+pakietu OCR oraz publicznego klucza podpisu wbudowanego w instalowaną aplikację.
+Samo lokalne wygenerowanie EXE nie zapewnia źródła tego pakietu.
+
+Pobieranie łączy sąsiadujące brakujące pliki z tego samego zasobu wydania
+w zakresy do 8 MiB i 256 plików (większy pojedynczy plik pobierany jest osobno).
+Ogranicza to narzut tysięcy małych żądań przy pobieraniu silnika OCR.
+Każdy plik przechodzi osobną kontrolę SHA-256. Ponowienie korzysta już ze
+zweryfikowanej zawartości; nie pobiera ponownie poprawnych plików ani luk
+między brakującymi zakresami. Wskazanie czasu jest szacunkiem na podstawie
+dotychczasowej średniej prędkości całej operacji pobierania.
+
+## Dane i konfiguracja
+
+Podczas instalacji można wskazać istniejącą bazę. Import konfiguracji portable
+jest osobną, domyślnie niezaznaczoną opcją. Po jej zaznaczeniu instalator prosi
+o istniejący katalog konfiguracji. Wybrane pliki są kopiowane do katalogu
+zarządzanego przez instalację, więc usunięcie starego folderu portable nie
+usuwa sekretów ani ustawień używanych przez zainstalowaną aplikację.
+Bez importu aplikacja korzysta z domyślnej konfiguracji w ProgramData.
+
+Lokalizacja zdjęć może nadal wskazywać udział sieciowy. Konto usługi musi mieć
+do niego dostęp; WEB instalowany przez kontroler działa jako `SYSTEM`. Użyj
+ścieżki UNC (na przykład `\\serwer\\zdjecia`) i nadaj uprawnienie kontu
+komputera lub skonfiguruj dostęp do udziału dla `SYSTEM`. Dyski mapowane tylko
+w sesji osoby instalującej nie są widoczne dla usługi.
+
+## Aktualizacje
+
+Aktualizacje modułów są dostępne w zainstalowanej aplikacji, w zakładce
+**Wersje modułów** oraz w niezależnym launcherze. Każdy wiersz pokazuje wersję
+obecną, najnowszą i listę wersji do cofnięcia. Link **Wydanie na GitHub**
+wskazuje Release będący źródłem wybranej wersji. Portable nadal aktualizuje
+się ręcznie przez pobranie nowego EXE.
+
+Samo wybranie wersji niczego nie instaluje ani nie pobiera. W panelu WEB
+**Aktualizuj** rozpoczyna przygotowanie i wykonanie operacji w kontrolerze,
+bez dodatkowego okna potwierdzenia. Po komunikacie o przyjęciu operacji można
+zamknąć kartę; ponowne otwarcie panelu pokazuje trwającą operację. Osobne
+potwierdzenie pozostaje wymagane przy odtwarzaniu starszej kopii bazy, które
+usuwa nowsze dane. Launcher zachowuje swój podgląd i zatwierdzanie planu.
+
+Aktywni użytkownicy otrzymują komunikat o aktualizacji. Rozpoczęte zadania
+kończą się, a kolejne zadania przetwarzania i kolejka OCR czekają. Formularze
+i zdjęcia oczekujących zadań są zachowywane na dysku i wznawiane po restarcie
+oraz pomyślnej kontroli backendu. W razie nieudanego pobrania kolejka rusza po
+odblokowaniu aplikacji. Przerwane przez awarię zadanie już wykonywane nie jest
+automatycznie powtarzane, ponieważ mogło zapisać dane w systemie zewnętrznym.
+
+Nowe pliki są pobierane równolegle ze sprawdzaniem bazy i przygotowaniem
+lokalnych plików. Kopia bazy i konfiguracji powstaje po zakończeniu aktywnych
+zapisów i zatrzymaniu backendu. Po zmianie wydania użytkownik otrzymuje opis
+z Release przy pierwszym wejściu do aplikacji. Potwierdzenie przeczytania jest
+zapisane dla konta i wydania, więc obowiązuje także w innej przeglądarce.
+Obsługa tego mechanizmu wymaga jednorazowej instalacji pełnego Setupu z
+kontrolerem i launcherem w wersji API 6; aktualizacja modułów ich nie wymienia.
+
+Kontroler sprawdza zależności API między modułami, schemat bazy, format
+konfiguracji, ABI runtime oraz wersje kontrolera i launchera. Przy konflikcie
+pokazuje wersje i wymagania. **Nie aktualizuj** zachowuje wybory i instalację.
+**Aktualizuj wszystko** przygotowuje nowy, ponownie sprawdzany plan; blokady
+są usuwane dopiero po jego pomyślnym wykonaniu. Nie omija to kontroli bazy.
+
+Przed pobieraniem sprawdzane jest miejsce na pliki, kopię danych i
+odzyskiwanie oraz możliwość zapisu we wszystkich lokalizacjach instalacji.
+LOCAL i Migrator blokują zmianę modułów przez cały czas działania — zamknij
+te aplikacje przed aktualizacją lub cofaniem. Wyświetlony błąd zachowuje
+przygotowane wybory. Cofnięte moduły pozostają wyłączone z kolejnych zwykłych
+aktualizacji, także po restarcie i w drugim interfejsie.
+
+Aktualizacja przechodzi bezpośrednio do docelowego wydania. Każdy plik ma
+właściciela, rozmiar i SHA256; zweryfikowane pliki są ponownie używane z
+lokalnego cache. Pobierane są tylko brakujące bajty, jako zakresy HTTP z
+podpisanych paczek zawartości. Brak obsługi zakresów zatrzymuje operację,
+zamiast powodować pobranie całej paczki. Modele OCR i biblioteki nie są
+pobierane ponownie, jeżeli ich zawartość się nie zmieniła.
+
+Workflow `.github/workflows/build-installer.yml` buduje rzeczywiste moduły
+FTP, SQL, Pimcore, Sloty, Ustawienia, WEB, OCR i pozostałe składniki. Publikuje
+`content-<SHA256>.bin`, bazowy `PicSyncra-Setup-<ID>.exe`, a na końcu
+`PicSyncra-modules-manifest.json`, podpis `.sig` i `.key-id`. Manifest opisuje
+niezależne wersje; liczba paczek nie odpowiada liczbie modułów. Przy ręcznym
+uruchomieniu Actions kod pochodzi z taga wskazanego Release.
+
+Stara instalacja z manifestem całego wydania wymaga jednorazowego przejścia
+przez pełny nowy instalator. Nie można bezpiecznie mieszać jej modułów bez
+deklaracji zgodności. Naprawa istniejącej instalacji modułowej zachowuje jej
+aktywny zestaw i blokady.
+
+Przy pierwszej instalacji kanał aktualizacji pochodzi z instalatora:
+Release oznaczony jako pre-release ustawia **Dev**, a zwykły Release **Stable**.
+Pole **Kanał aktualizacji** w panelu WEB i launcherze zmienia wspólne ustawienie
+oraz odświeża katalog podpisanych wersji. Nie rozpoczyna pobierania ani
+instalacji. Zmiana kanału jest blokowana podczas wykonywania operacji modułów.
+Naprawa instalacji zachowuje wcześniej wybrany kanał. Wybory cofnięcia i blokady
+modułów pozostają zachowane; wersja niewystępująca w nowym kanale jest jawnie
+oznaczona jako niedostępna, z zachowanym linkiem do jej Release.
+
+Publikowanie tych paczek wymaga aktywnego workflow w repozytorium oraz
+konfiguracji środowiska `installed-release-signing`: publicznych kluczy
+`PICSYNCRA_RELEASE_PUBLIC_KEYS` i prywatnego sekretu
+`PICSYNCRA_RELEASE_SIGNING_KEY`. Lokalny build bez wstrzykniętych publicznych
+kluczy nie akceptuje aktualizacji. Same pliki portable EXE w Release nie
+wystarczają do aktualizacji instalowanej aplikacji.
+
+Przed zmianą wydania powstaje kopia bazy i konfiguracji. Aplikacja zatrzymuje
+przyjmowanie nowych zadań, czeka na zakończenie aktualnych, a pozostałym
+użytkownikom wyświetla dwuminutowe ostrzeżenie. Zajęte zadania blokują zmianę
+kodu; po przekroczeniu czasu oczekiwania operacja jest zatrzymywana.
+
+Awaryjne cofnięcie można wykonać z launchera również przy niedziałającym
+WEB. Bez Internetu wymagany jest lokalny, ponownie zweryfikowany podpisany
+katalog oraz wszystkie pliki docelowych modułów. Brakujące pliki wymagają
+połączenia. Niepodpisane i niekompletne wydania nie są wybierane do instalacji.
+
+Przy cofnięciu nie następuje automatyczne odtworzenie starej bazy. Jeżeli
+potrzebna jest wcześniejsza baza, wybierz zweryfikowaną kopię w polu
+**Awaryjne odtworzenie bazy**. Plan sprawdza zgodność także z tą kopią, a przed
+wykonaniem wymaga osobnego potwierdzenia utraty nowszych danych. Nieudana
+operacja i przerwanie zasilania uruchamiają odzyskanie poprzedniego zestawu,
+blokad oraz zmienionych danych z obowiązkowej kopii sprzed operacji.
+
+Po nieudanym odzyskiwaniu uruchamianie backendu pozostaje zablokowane.
+Przycisk **Ponów odzyskiwanie** w launcherze ponawia tę operację przez
+kontroler. Kontroler działa także wtedy, gdy pliki WEB są uszkodzone lub
+brakuje aktywnego katalogu zestawu. Chroniona kopia metadanych umożliwia
+odtworzenie zestawu z kompletnego zweryfikowanego cache; brakujące bajty
+wymagają dostępu do ich Release. Niepodpisane pliki nie zastępują cache.
+
+Historyczna konfiguracja JSON ma format 1. Kontroler sprawdza poprawność
+zarządzanych dokumentów JSON, a jawna zmiana formatu jest opisana przez
+`config/module-config-schema.json` z polem `schema`. Weryfikacja wybranej
+kopii odczytuje format z tej kopii, nie z aktualnej konfiguracji.
+
+Jeżeli OCR był już doinstalowany, aktualizacja uwzględnia jego zgodność,
+pobierając wyłącznie zmienione pliki runtime lub modeli. Instalacja bez OCR
+nie pobiera silnika ani modeli automatycznie. Obecne deklaracje zgodności
+znajdują się w `installer/module-compatibility.json`; zmiana schematu wymaga
+podpisanej, jawnie zarejestrowanej migracji wykonywanej w osobnym hoście.
+
+Po kliknięciu **Pobierz OCR** launcher i panel WEB pokazują przygotowanie planu,
+pobrane bajty i procent oraz kolejne etapy: oczekiwanie na zadania, kopię bazy,
+instalację i sprawdzanie działania. Licznik obejmuje wyłącznie brakującą,
+unikalną zawartość, z pominięciem zweryfikowanych lokalnych plików. Ponowne
+otwarcie launchera lub panelu przyłącza się do trwającej operacji; nie uruchamia
+drugiej instalacji. Do zakończenia operacji przyciski zmian są zablokowane.
+Jeśli kontroler zrestartuje się przed rozpoczęciem przyjętej operacji, odczyt
+jej stanu informuje o przerwaniu i konieczności zatwierdzenia nowego planu.
+
+Zakładka **Wersje modułów** w instalacji pokazuje zainstalowane moduły i
+podpisany katalog Release. Porównanie wbudowanego buildu z gałęzią GitHub
+pozostaje przeznaczone dla portable. Przy chwilowym braku połączenia z
+kontrolerem przycisk **Ponów połączenie z kontrolerem** ponawia odczyt.
+
+Poprawki samego kontrolera i launchera wymagają uruchomienia nowego pełnego
+instalatora na istniejącej instalacji. Naprawa zachowuje aktywne moduły i ich
+blokady; następnie zaktualizuj moduły przez launcher, aby panel WEB otrzymał
+nowe pliki. Utwórz Release z nowego taga zawierającego poprawki — ponowienie
+Actions dla starego taga buduje stary kod. Dopisek `dev` w nazwie taga jest
+opcjonalny; wydanie testowe z `dev` musi mieć zaznaczone **pre-release**.
+
+Restart backendu i autostart są dostępne z WEB wyłącznie dla administratora.
+Launcher udostępnia również zatrzymanie i ponowne uruchomienie backendu oraz
+wybór autostartu. Jego ikona działa w sesji użytkownika; backend uruchomiony
+przez SYSTEM pozostaje procesem w tle. Zamknięcie okna ukrywa launcher w trayu.
+Menu ikony pozwala otworzyć panel, zatrzymać backend, zatrzymać backend i wyjść
+albo zamknąć sam launcher. Gdy tray jest niedostępny, kontrolki pozostają w oknie.
+
+Setup pyta o skróty na pulpicie i uruchamianie WEB po starcie Windows bez
+logowania użytkownika. Praca w tle korzysta z zadania kontrolera SYSTEM,
+nie z osobnej usługi SCM. Wyłączenie autostartu pozostawia możliwość ręcznego
+uruchomienia panelu w launcherze. Podczas aktualizacji Setup zachowuje wybraną
+bazę i konfigurację oraz zainstalowane opcjonalne moduły i blokady wersji.
+Aktualizuje nieprzypięte moduły obecne w pakiecie; starszy pakiet nie wykonuje
+automatycznego downgrade. Zatrzymanie kontrolera i backendu jest potwierdzane
+przed wymianą plików. LOCAL, Migrator i launcher należy wcześniej zamknąć
+(w przypadku launchera także ikonę w trayu). Przerwaną transakcję modułów należy
+najpierw odzyskać. Konwersja starego osobnego pakietu OCR ze schematu instalacji 1
+wymaga migracji i jest zatrzymywana przed zmianą plików.
+
+Po aktywowaniu modułów Setup sprawdza uruchomienie kontrolera oraz zdrowie
+backendu, jeżeli wybrano autostart lub WEB działał przed instalacją. Ręcznie
+uruchomiony WEB jest wznawiany bez włączania autostartu. Nieudany start uruchamia
+próbę cofnięcia do poprzedniego zestawu i zweryfikowanej kopii danych, przywraca
+poprzednie ustawienie autostartu i wznawia wcześniej działający backend.
+Ponowne uruchomienie Setup odzyskuje przerwaną aktywację przed nową instalacją;
+nie nadpisuje jej kopii i informacji do cofnięcia. Niepowodzenie cofnięcia jest
+pokazywane osobno; instalator nie oznacza takiej instalacji jako udanej.
+
+Kontrola startu backendu podczas aktualizacji, odzyskiwania i instalacji czeka
+do 180 sekund. Pierwszy start po doinstalowaniu OCR obejmuje sprawdzenie plików
+i może trwać dłużej od kolejnego startu. Sonda localhost omija proxy, sprawdza
+nazwę aplikacji i — gdy WEB udostępnia PID — przynależność procesu do backendu
+kontrolera. Błąd rozróżnia zakończenie procesu i przekroczenie czasu gotowości;
+szczegóły zawierają stany lokalnych składników oraz osobną diagnozę odzyskiwania.
+Konflikty `controller_outdated` i `launcher_outdated` wymagają pełnego Setup;
+aktualizator modułów nie zastępuje stabilnego kontrolera ani launchera.
+Starsze EXE nie otrzymają nowego komunikatu i traya przez samą wymianę modułów.
+
+Tag widoczny przy modułach nie określa wersji zainstalowanego kontrolera ani
+launchera. Poprawki pobierania OCR i kontroli startu backendu są w tych
+niezależnych programach. Manifest nowych wydań pobiera wymagane wersje
+infrastruktury ze wspólnych stałych używanych przez Setup, zamiast utrzymywać
+osobne liczby w generatorze. Wymaganie wersji 4 blokuje aktualizację modułów
+na starszym kontrolerze/launcherze przed pobieraniem i wskazuje pełny Setup.
+
+Instalator rejestruje zadanie `PicSyncra Controller primary-installation`,
+które jest właścicielem tylko uruchomionego przez siebie procesu WEB. Kontroler
+najpierw potwierdza żądanie administracyjne, a następnie restartuje WEB z
+aktywnego wydania; nie używa `taskkill` ani nie zatrzymuje procesu zajmującego
+ten sam port.
+
+Lokalne okno zarządzania WEB może zatrzymywać lub uruchamiać backend po
+uruchomieniu jako administrator. Zwykły użytkownik nie ma dostępu do pipe’a
+kontrolera; zdalny restart pozostaje operacją administratora zalogowanego w
+WEB.
+
+Jeżeli menedżer zgłasza błąd kontrolera, uruchom go opcją **Uruchom jako
+administrator** i sprawdź zadanie `PicSyncra Controller primary-installation`
+w Harmonogramie zadań. Instalator sprawdza teraz wynik utworzenia i uruchomienia
+tego zadania; błąd rejestracji przerywa instalację z komunikatem zamiast
+pozostawiać instalację bez kontrolera.

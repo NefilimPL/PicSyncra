@@ -1,0 +1,255 @@
+from dataclasses import replace
+import sqlite3
+import pytest
+from picsyncra.installation.module_executor import ModuleExecutor, ModuleExecutionError
+from picsyncra.installation.module_content import ModuleContentStore
+from picsyncra.installation.module_planner import plan_module_operation
+from picsyncra.installation.module_state import read_module_set, activate_module_set
+from tests.test_module_state import context, staged
+from tests.test_module_planner import ENV
+from picsyncra.installation.module_manifest import parse_module_manifest
+from tests.module_fixtures import release_payload
+
+
+class Controller:
+    def __init__(self): self.running = True
+    def snapshot(self): return {'backend_running': self.running}
+    def stop_backend(self, force=False): self.running = False; return True
+    def start_backend(self): self.running = True
+
+
+def prepare(context):
+    context.config_root.mkdir()
+    (context.config_root / 'config.json').write_text('{"value":1}')
+    with sqlite3.connect(context.database_path) as db:
+        db.executescript('CREATE TABLE schema_version(version INTEGER); INSERT INTO schema_version VALUES(1); CREATE TABLE app_config_values(value TEXT); INSERT INTO app_config_values VALUES("before");')
+    db.close()
+    active = staged(context, 1, frozenset({'core'}))
+    activate_module_set(context, active, expected_revision=0)
+    store = ModuleContentStore(context)
+    store.seed(active)
+    release = parse_module_manifest(release_payload())
+    plan = plan_module_operation(active, (release,), ENV, action='update_all', selected={}, excluded=frozenset(), available_hashes=store.available_hashes())
+    return active, store, plan
+
+
+def test_success_atomically_commits_set_and_unpins_after_backup(context):
+    active, store, plan = prepare(context)
+    executor = ModuleExecutor(context, Controller(), content=store, quiesce=lambda op: None, healthy=lambda: True)
+    result = executor.execute(plan)
+    assert result['state'] == 'committed'
+    assert read_module_set(context) == plan.target
+    assert (context.state_root / 'backups/operations' / plan.plan_id / 'database.sqlite').is_file()
+
+
+def test_download_failure_journals_error_details_and_preserves_verified_cache(context):
+    from urllib.error import HTTPError
+    from tests.module_fixtures import module_payload
+    active, store, _ = prepare(context)
+    payload = release_payload(modules=[module_payload(), module_payload('migrator', 'apps/migrator/PicSyncra-Migrator.exe'),
+                                     module_payload('ftp', 'picsyncra/services/ftp_service.py', b'new')])
+    release = parse_module_manifest(payload)
+    plan = plan_module_operation(active, (release,), ENV, action='update_all', selected={}, excluded=frozenset(), available_hashes=store.available_hashes())
+    def fail(url, *args): raise HTTPError(url, 404, 'not found', {}, None)
+    store.fetch = fail
+    controller = Controller()
+    executor = ModuleExecutor(context, controller, content=store, quiesce=lambda op: pytest.fail('must not drain'), healthy=lambda: True)
+    result = executor.execute(plan)
+    assert result['state'] == 'rolled_back'
+    assert result['error_details']['http_status'] == 404
+    assert result['error_details']['module_id'] == 'ftp'
+    assert executor.status()['error_details'] == result['error_details']
+    assert read_module_set(context) == active and controller.running
+    assert store.available_hashes()
+
+
+@pytest.mark.parametrize('during_transfer', [False, True])
+def test_progress_write_failure_does_not_cancel_verified_ocr(context, monkeypatch, caplog, during_transfer):
+    from picsyncra.installation import module_executor
+    from tests.module_fixtures import module_payload
+    from tests.test_module_content import Response
+    active, store, _ = prepare(context)
+    release = parse_module_manifest(release_payload(modules=[module_payload(),
+        module_payload('migrator', 'apps/migrator/PicSyncra-Migrator.exe'),
+        module_payload('ocr_models', 'models/ocr/model.bin', b'model'),
+        module_payload('ocr_runtime', 'runtime/ocr/engine.bin', b'engine')]))
+    plan = plan_module_operation(active, (release,), ENV, action='install_ocr', selected={},
+        excluded=frozenset(), available_hashes=store.available_hashes())
+    downloaded = []
+    def fetch(url, start, size, total):
+        downloaded.append(url)
+        return Response(b'model' if size == 5 else b'engine', start, total)
+    store.fetch = fetch
+    original = module_executor.atomic_json
+    def write(path, value, **kwargs):
+        if path.parent.name == 'module-progress' and (not during_transfer or value['downloaded_bytes'] > 0):
+            error = PermissionError(13, 'private Windows path')
+            error.winerror = 5
+            raise error
+        return original(path, value, **kwargs)
+    monkeypatch.setattr(module_executor, 'atomic_json', write)
+    executor = ModuleExecutor(context, Controller(), content=store, quiesce=lambda op: None, healthy=lambda: True)
+    result = executor.execute(plan)
+    assert result['state'] == 'committed'
+    assert read_module_set(context) == plan.target
+    assert len(downloaded) == 2
+    snapshot = executor.progress_snapshot(plan.plan_id)
+    assert snapshot['downloaded_bytes'] == snapshot['total_bytes'] == 11
+    snapshot['downloaded_bytes'] = -1
+    assert executor.progress_snapshot(plan.plan_id)['downloaded_bytes'] == 11
+    assert executor.progress_snapshot('different-operation') is None
+    assert 'progress' in caplog.text.lower() and 'private Windows path' not in caplog.text
+
+
+def test_durable_journal_write_failure_still_blocks_installation(context, monkeypatch):
+    from picsyncra.installation import module_executor
+    active, store, plan = prepare(context)
+    def denied(*args, **kwargs): raise PermissionError(13, 'journal write denied')
+    monkeypatch.setattr(module_executor, 'atomic_json', denied)
+    store.assemble = lambda *args, **kwargs: pytest.fail('must not download without a durable transaction journal')
+    executor = ModuleExecutor(context, Controller(), content=store, quiesce=lambda op: None, healthy=lambda: True)
+    with pytest.raises(PermissionError): executor.execute(plan)
+    assert read_module_set(context) == active
+
+
+def test_failed_health_and_crash_recovery_restore_exact_previous_pins(context):
+    active, store, plan = prepare(context)
+    health_results = iter((False, True))
+    executor = ModuleExecutor(context, Controller(), content=store, quiesce=lambda op: None, healthy=lambda: next(health_results))
+    result = executor.execute(plan)
+    assert result['state'] == 'rolled_back'
+    assert read_module_set(context) == active
+    assert executor.recover() is None
+
+
+def test_first_update_can_rollback_offline_using_original_set_files(context):
+    from tests.module_fixtures import module_payload
+    active, store, _ = prepare(context)
+    for path in store.root.iterdir(): path.unlink()
+    modules = [module_payload(content=b'new-code', source=5),
+               module_payload('migrator', 'apps/migrator/PicSyncra-Migrator.exe', b'new-code', source=5)]
+    release = parse_module_manifest(release_payload(5, modules))
+    from tests.test_module_content import Response
+    store.fetch = lambda url, start, size, total: Response(b'new-code', start, total)
+    plan = plan_module_operation(active, (release,), ENV, action='update_all', selected={}, excluded=frozenset(), available_hashes=frozenset())
+    calls = []
+    def healthy():
+        calls.append(True)
+        store.fetch = lambda *_: pytest.fail('rollback must use the intact local previous set')
+        return len(calls) > 1
+    executor = ModuleExecutor(context, Controller(), content=store, quiesce=lambda _: None, healthy=healthy)
+    assert executor.execute(plan)['state'] == 'rolled_back'
+    assert read_module_set(context) == active
+
+
+def test_stale_plan_cannot_backup_or_switch(context):
+    active, store, plan = prepare(context)
+    executor = ModuleExecutor(context, Controller(), content=store, quiesce=lambda op: None, healthy=lambda: True)
+    executor.execute(plan)
+    with pytest.raises(ModuleExecutionError): executor.execute(plan)
+
+
+def test_unacknowledged_database_restore_is_blocked_before_changes(context):
+    active, store, plan = prepare(context)
+    executor = ModuleExecutor(context, Controller(), content=store, quiesce=lambda op: None, healthy=lambda: True)
+    with pytest.raises(ModuleExecutionError): executor.execute(plan, restore_backup_id='old')
+    assert read_module_set(context) == active
+
+
+def test_restart_after_power_loss_restores_database_config_and_marker(context, monkeypatch):
+    active, store, plan = prepare(context)
+    def interrupted():
+        (context.state_root / 'module-maintenance-request.json').write_text('{"operation_id":"stale"}')
+        (context.state_root / 'module-maintenance-ready.json').write_text('{"operation_id":"stale","ready":true}')
+        db = sqlite3.connect(context.database_path)
+        db.execute('UPDATE app_config_values SET value="after"')
+        db.commit()
+        db.close()
+        (context.config_root / 'config.json').write_text('{"value":2}')
+        raise SystemExit('power loss')
+    executor = ModuleExecutor(context, Controller(), content=store, quiesce=lambda op: None, healthy=interrupted)
+    with pytest.raises(SystemExit): executor.execute(plan)
+    assert read_module_set(context) == plan.target
+    import shutil
+    from picsyncra import install_paths
+    from picsyncra.installation.module_state import module_set_root
+    shutil.rmtree(module_set_root(context, plan.target))
+    registration = dict(installation_id=context.installation_id, program_root=str(context.program_root),
+        state_root=str(context.state_root), database_path=str(context.database_path))
+    monkeypatch.setattr(install_paths, '_read_hklm_registrations', lambda: (registration,))
+    assert install_paths.load_registered_install_context(context.installation_id) == context
+    recovered = ModuleExecutor(context, Controller(), content=store, quiesce=lambda op: None, healthy=lambda: True)
+    assert recovered.recover() == 'rolled_back'
+    assert read_module_set(context) == active
+    db = sqlite3.connect(context.database_path)
+    assert db.execute('SELECT value FROM app_config_values').fetchone() == ('before',)
+    db.close()
+    assert (context.config_root / 'config.json').read_text() == '{"value":1}'
+    assert not (context.state_root / 'module-maintenance-request.json').exists()
+    assert not (context.state_root / 'module-maintenance-ready.json').exists()
+
+
+def test_failed_restored_backend_health_keeps_recovery_gate_closed(context):
+    _, store, plan = prepare(context)
+    controller = Controller()
+    executor = ModuleExecutor(context, controller, content=store, quiesce=lambda op: None, healthy=lambda: False)
+    assert executor.execute(plan)['state'] == 'recovery_required'
+    assert not controller.running
+
+
+def test_original_and_recovery_health_diagnostics_survive_failed_rollback(context):
+    _, store, plan = prepare(context)
+    failures = iter([dict(code='backend_health_timeout', components={'sqlite':'critical'}),
+                     dict(code='backend_exited')])
+    def healthy():
+        raise ModuleExecutionError('Readiness failed', details=next(failures))
+    executor = ModuleExecutor(context, Controller(), content=store, quiesce=lambda op: None, healthy=healthy)
+    result = executor.execute(plan)
+    assert result['state']=='recovery_required'
+    assert result['error_details']['components']=={'sqlite':'critical'}
+    assert result['error_details']['recovery']['code']=='backend_exited'
+    assert executor.status()['error_details']==result['error_details']
+
+
+def test_drain_failure_never_stops_a_busy_backend(context):
+    active,store,plan=prepare(context)
+    class Busy(Controller):
+        def stop_backend(self,force=False): raise AssertionError('Busy backend must remain alive')
+    def blocked(op): raise RuntimeError('Writers are still busy')
+    executor=ModuleExecutor(context,Busy(),content=store,quiesce=blocked,healthy=lambda:True)
+    result=executor.execute(plan)
+    assert result['state']=='rolled_back'
+    assert read_module_set(context)==active
+
+
+def test_terminal_recovery_does_not_take_running_standalone_lease(context):
+    from picsyncra.installation.module_sessions import standalone_session
+    _, store, _ = prepare(context)
+    executor = ModuleExecutor(context, Controller(), content=store, quiesce=lambda op: None, healthy=lambda: True)
+    with standalone_session(context):
+        assert executor.recover() is None
+
+
+def test_lost_active_payload_can_be_repaired_from_protected_metadata_and_cache(context):
+    import shutil
+    from picsyncra.installation.module_state import module_set_root
+    active, store, plan = prepare(context)
+    shutil.rmtree(module_set_root(context, active))
+    assert read_module_set(context) == active
+    executor = ModuleExecutor(context, Controller(), content=store, quiesce=lambda op: None, healthy=lambda: True)
+    assert executor.execute(plan)['state'] == 'committed'
+
+
+def test_no_disk_space_blocks_download_backup_and_backend_stop(context, monkeypatch):
+    from collections import namedtuple
+    from picsyncra.installation import module_preflight
+    active, store, plan = prepare(context)
+    monkeypatch.setattr(module_preflight.shutil, 'disk_usage', lambda path: namedtuple('Usage', 'total used free')(100,100,0))
+    store.assemble = lambda target: pytest.fail('No download or staging before preflight')
+    class Running(Controller):
+        def stop_backend(self, force=False): pytest.fail('No stop before preflight')
+    executor = ModuleExecutor(context, Running(), content=store, quiesce=lambda op: None, healthy=lambda: True)
+    with pytest.raises(ModuleExecutionError, match='miejsca'):
+        executor.execute(plan)
+    assert read_module_set(context) == active
+    assert not executor.path.exists()

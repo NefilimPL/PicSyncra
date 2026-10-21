@@ -5,11 +5,13 @@ import threading
 import pytest
 
 from picsyncra.web.process_queue import (
+    MaintenanceInProgress,
     OwnerQueueLimit,
     ProcessQueueFull,
     ProcessQueueService,
     QueueLimits,
 )
+from picsyncra.installation.maintenance import MaintenanceGate
 
 
 def test_reservations_enforce_global_and_owner_limits() -> None:
@@ -75,3 +77,55 @@ def test_cancelled_waiting_job_is_skipped_and_positions_are_recomputed() -> None
             shutdown()
 
     assert started_jobs == ["first", "third"]
+
+
+def test_maintenance_waits_for_admitted_reservation_and_rejects_new_one() -> None:
+    """A drain cannot miss a job admitted immediately before it begins."""
+    gate = MaintenanceGate()
+    queue = ProcessQueueService(start_workers=False, maintenance_gate=gate)
+
+    admitted = queue.reserve("owner-a")
+    gate.begin("update-1", initiator_id="admin")
+
+    assert gate.snapshot()["active_tasks"] == 1
+    with pytest.raises(MaintenanceInProgress):
+        queue.reserve("owner-b")
+
+    assert gate.wait_for_drain(timeout=0.01) is False
+    assert admitted.release() is True
+    assert gate.wait_for_drain(timeout=0.01) is True
+
+
+def test_maintenance_preserves_waiting_job_without_counting_it_as_running() -> None:
+    gate = MaintenanceGate()
+    queue = ProcessQueueService(start_workers=False, maintenance_gate=gate)
+    reservation = queue.reserve("owner-a")
+    queue.submit(reservation, "job-1", lambda _job_id, _cancel: None)
+
+    gate.begin("update-1", initiator_id="admin")
+    assert gate.request_force_cancel() == 0
+    assert gate.wait_for_drain(timeout=0.01) is True
+    assert queue.position("job-1") == 1
+
+
+def test_maintenance_finishes_running_work_and_resumes_pending_only_after_completion():
+    gate = MaintenanceGate()
+    queue = ProcessQueueService(maintenance_gate=gate)
+    started, release, pending = threading.Event(), threading.Event(), threading.Event()
+    def first(_id, _cancel):
+        started.set()
+        assert release.wait(5)
+    try:
+        queue.submit(queue.reserve('a'), 'first', first)
+        assert started.wait(5)
+        queue.submit(queue.reserve('b'), 'next', lambda *_: pending.set())
+        gate.begin('update', initiator_id='admin')
+        release.set()
+        assert gate.wait_for_drain(timeout=5)
+        assert not pending.wait(.25)
+        assert queue.position('next') == 1
+        gate.complete('update')
+        assert pending.wait(5)
+    finally:
+        release.set()
+        queue.shutdown()

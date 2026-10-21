@@ -4,6 +4,10 @@ Ten dokument opisuje główny, lokalny tryb pracy PicSyncra: aplikację desktopo
 
 ## Działanie
 
+Ten dokument opisuje tryb portable/desktop. Pozostaje on niezależny od
+instalowanego pakietu Windows: nie tworzy usług, nie korzysta z rejestracji
+HKLM ani z mechanizmu aktualizacji instalowanej wersji.
+
 W interfejsie wpisujesz nazwę, typ, model, kolory, dodatek i opcjonalny EAN produktu. Do formularza można przeciągać zdjęcia metodą drag-and-drop. Po zatwierdzeniu:
 
 1. Pliki są kopiowane do katalogu `_ZDJECIA PRZEROBIONE_` i układane według struktury `NAZWA/TYP/MODEL/KOLOR1_KOLOR2_KOLOR3/DODATEK`.

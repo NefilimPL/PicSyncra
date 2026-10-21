@@ -97,3 +97,70 @@ Zwykłe artefakty EXE mają retencję siedmiu dni. Release assets są wysyłane 
 9. Aby opublikować pliki przy wydaniu, utwórz i opublikuj release z tagiem, np. `v1.2.3`.
 
 Zależności builda są w `requirements-build.txt`. Zależności panelu webowego są w `requirements-web.txt`.
+
+## Pakiet instalowany dla Windows
+
+Oprócz dotychczasowych plików portable repozytorium zawiera podstawę
+instalowanego pakietu x64. Buduje ona samowystarczalne katalogi `onedir` dla
+WEB, Migratora i LOCAL oraz pomocnika instalatora, a następnie przekazuje je do
+Inno Setup:
+
+```powershell
+powershell -NoProfile -File installer/build_installer.ps1 -ReleaseId 1 -BuildOcr
+```
+
+W Windows można uruchomić ten sam build bez wpisywania polecenia PowerShell:
+
+```text
+Generator exe\BUILD_INSTALLER.bat 1
+```
+
+Skrypt domyślnie umieszcza w instalatorze opcjonalny silnik i modele OCR. Aby zbudować
+sam instalator podstawowy, użyj `Generator exe\BUILD_INSTALLER.bat 1 --without-ocr`.
+Gotowy plik instalatora to `dist\installed\PicSyncra-Setup-<release-id>.exe`,
+na przykład `dist\installed\PicSyncra-Setup-1.exe`. Ponowne budowanie tego samego
+wydania zastępuje przygotowane katalogi komponentów, usuwając stare pliki.
+
+Aby użyć konkretnego interpretera, na przykład środowiska wirtualnego projektu:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File installer/build_installer.ps1 -ReleaseId 1 -BuildOcr -Python .venv/Scripts/python.exe
+```
+
+Polecenie wymaga dostępnych w `PATH` interpretera Python i `ISCC.exe` z Inno
+Setup. LOCAL jest zawarty w artefakcie, ale pozostaje opcją instalatora;
+OCR wybiera się osobnym checkboxem podczas instalacji. Bez zaznaczenia silnik
+i modele nie są instalowane, a zakładka OCR w ustawieniach WEB jest ukryta.
+Pierwszą instalację OCR wykonuje się przez ponowne uruchomienie pełnego Setup
+z zaznaczonym składnikiem OCR, bez pobierania z Internetu. Baza i konfiguracja
+pozostają zachowane. Odznaczenie składnika przy kolejnej instalacji nie usuwa
+wcześniej zainstalowanego OCR. Zwykły aktualizator aktualizuje już zainstalowane
+moduły OCR, ale nie doinstalowuje brakującego składnika.
+Build z `--without-ocr` nie oferuje checkboxa OCR.
+
+Przy pakowaniu OCR hook `installer/hooks/hook-paddlex.py` dołącza metadane
+dystrybucji dla `paddlex[ocr-core]` i jego zależności, także zagnieżdżonych extras.
+Samo zebranie modułów przez `--collect-all` nie wystarcza do kontroli zależności
+wykonywanej przez PaddleX. Brak wymaganej dystrybucji przerywa build.
+Przy błędzie tworzenia pipeline tester OCR pokazuje również przyczynę wyjątku,
+zamiast samego ogólnego komunikatu PaddleOCR.
+
+Hook `installer/hooks/hook-chardet.py` dołącza również wszystkie podmoduły
+`chardet`, dane modeli i rozszerzenia mypyc. W kołach Windows skompilowane
+moduły mogą importować dynamicznie m.in. `chardet.models._format__mypyc`;
+zebranie samego `chardet.pipeline` pomija tę zależność. Wspólny katalog hooków
+jest używany przez lokalny build portable, workflow wydania i komponent OCR
+instalatora. Poprawka wymaga ponownego zbudowania EXE.
+
+Przed kompilacją Setup generator uruchamia skompilowanego pomocnika dla każdej
+dostępnej kombinacji składników i sprawdza bazę oraz aktywowany zestaw.
+Skrypt tworzy `active.json` dla wydania i
+kompiluje `installer/PicSyncra.iss`. Nie uruchamia się go na komputerze z
+produkcyjną instalacją deweloperską — instalację, naprawę i deinstalację należy
+sprawdzić w czystej maszynie wirtualnej bez Pythona.
+
+Instalator zapisuje kod w `Program Files`, a dane instalacji w
+`ProgramData\PicSyncra\primary-installation`. Deinstalacja usuwa rejestrację i
+pliki programu, ale celowo zachowuje konfigurację, bazę oraz kopie w
+`ProgramData`. Dane wejściowe dla pomocnika instalatora przekazywane są tylko
+przez plik żądania JSON; w argumentach procesu nie wolno umieszczać sekretów.

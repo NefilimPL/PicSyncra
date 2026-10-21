@@ -33,6 +33,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Stre
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
+from starlette.requests import ClientDisconnect
 
 from .. import brand, common, config, data_store, encryption, settings, sqlite_backup, storage_settings
 from ..bootstrap import initialize_application_runtime
@@ -61,6 +62,15 @@ from ..database import connect_db
 from ..github_status import github_repository_status
 from ..history_changes import history_change_set
 from ..image_utils import fit_image_to_content
+from ..install_paths import resolve_install_context
+from ..installation.ocr_runtime import create_installed_ocr_worker
+from ..installation.ocr_operation_factory import VerifiedOcrOperationFactory
+from ..installation.launcher import InstallationControlClient
+from ..installation.operation_service import InstalledOperationService
+from ..installation.release_client import list_installed_releases, read_installed_release_record
+from ..installation.release_operation_factory import VerifiedReleaseOperationFactory
+from ..installation.session_epoch import SessionEpochError, read_session_epoch
+from .maintenance_requests import MaintenanceRequestAdmission
 from ..services.image_dimensions import (
     ImageOcrDiagnostics,
     OcrDiagnosticCandidate,
@@ -127,6 +137,7 @@ from .process_models import (
     QueuedUploadFile as _QueuedUploadFile,
 )
 from .runtime_api import RuntimeApiDependencies, build_runtime_router
+from .installation_api import InstallationApiDependencies, build_installation_router
 from .process_queue import (
     ProcessQueueService,
     QueueReservation,
@@ -224,6 +235,7 @@ BROWSER_EXTENSION_DIR = Path(__file__).resolve().parents[1] / "browser_extension
 SESSION_COOKIE = "picsyncra_web_session"
 SESSION_MAX_AGE_SECONDS = 12 * 60 * 60
 BROWSER_EXTENSION_TOKEN_MAX_AGE_SECONDS = 30 * 24 * 60 * 60
+EXTENSION_PROTOCOL_VERSION = 1
 DEFAULT_ADMIN_USERNAME = "admin"
 DEFAULT_ADMIN_PASSWORD = "admin"
 ACTIVE_CLIENT_MAX_AGE_SECONDS = 180
@@ -244,6 +256,15 @@ OCR_FEATURE_ENABLED = os.getenv("PICSYNCRA_OCR_ENABLED", "1").strip().lower() no
     "no",
     "off",
 }
+
+
+def _create_ocr_execution_worker(ocr_settings: dict[str, object]) -> object | None:
+    """Choose the isolated installed OCR component, or the portable worker."""
+
+    context = resolve_install_context(Path(sys.executable))
+    if context is not None:
+        return create_installed_ocr_worker(context, lazy=True)
+    return OcrWorkerProcess(cpu_percent=int(ocr_settings.get("max_cpu_percent") or 35))
 
 
 def _require_ocr_feature() -> None:
@@ -268,7 +289,9 @@ _BROWSER_EXTENSION_IMPORTS_LOCK = threading.Lock()
 _PROCESS_JOB_RETENTION_SECONDS = 6 * 60 * 60
 _PROCESS_JOB_DIRECTORY_TTL_SECONDS = 24 * 60 * 60
 _PROCESS_JOB_DIRECTORY_PREFIX = "job-"
-_PROCESS_JOB_ROOT = Path(tempfile.gettempdir()) / "picsyncra_web_process_jobs"
+_PROCESS_INSTALL_CONTEXT = resolve_install_context(Path(sys.executable))
+_PROCESS_JOB_ROOT = (_PROCESS_INSTALL_CONTEXT.state_root / 'web-process-jobs' if _PROCESS_INSTALL_CONTEXT
+                     else Path(tempfile.gettempdir()) / "picsyncra_web_process_jobs")
 # Active work is never discarded; only the newest terminal jobs stay in memory.
 _PROCESS_JOB_MAX_COMPLETED = 200
 _PROCESS_QUEUE = ProcessQueueService()
@@ -667,7 +690,15 @@ def _validate_mutating_request(request: Request) -> None:
 def _make_session_token(user: Dict[str, Any]) -> str:
     session_version = int(user.get("session_version") or 0)
     user_id = str(user.get("id") or "")
-    payload = f"session-v2|{user_id}|{session_version}|{int(time.time())}|{secrets.token_hex(12)}"
+    context = resolve_install_context(Path(sys.executable))
+    if context is None:
+        payload = f"session-v2|{user_id}|{session_version}|{int(time.time())}|{secrets.token_hex(12)}"
+    else:
+        try:
+            epoch = read_session_epoch(context)
+        except SessionEpochError as exc:
+            raise RuntimeError("Nie mozna utworzyc sesji zainstalowanej aplikacji.") from exc
+        payload = f"session-v3|{user_id}|{session_version}|{epoch}|{int(time.time())}|{secrets.token_hex(12)}"
     token = f"{payload}|{_sign(payload)}"
     return base64.urlsafe_b64encode(token.encode("utf-8")).decode("ascii")
 
@@ -691,13 +722,21 @@ def _read_session_token(token: Optional[str]) -> Optional[str]:
     if not hmac.compare_digest(_sign(payload), signature):
         return None
     parts = payload.split("|")
-    if len(parts) != 5 or parts[0] != "session-v2":
-        return None
-    _marker, user_id, version_raw, issued_raw, _nonce = parts
+    context = resolve_install_context(Path(sys.executable))
+    if context is None:
+        if len(parts) != 5 or parts[0] != "session-v2":
+            return None
+        _marker, user_id, version_raw, issued_raw, _nonce = parts
+    else:
+        if len(parts) != 6 or parts[0] != "session-v3":
+            return None
+        _marker, user_id, version_raw, epoch_raw, issued_raw, _nonce = parts
     try:
         issued = int(issued_raw)
         session_version = int(version_raw)
-    except ValueError:
+        if context is not None and int(epoch_raw) != read_session_epoch(context):
+            return None
+    except (ValueError, SessionEpochError):
         return None
     if int(time.time()) - issued > SESSION_MAX_AGE_SECONDS:
         return None
@@ -829,6 +868,13 @@ def _require_browser_extension_user(request: Request) -> str:
     if not username:
         raise HTTPException(status_code=401, detail="Niepoprawny albo wygasly token rozszerzenia.")
     return username
+
+
+def _browser_extension_protocol_compatible(request: Request) -> bool:
+    """Keep legacy unpacked extensions working until their protocol is retired."""
+
+    protocol = str(request.headers.get("x-picsyncra-extension-protocol") or "")
+    return protocol in {"", str(EXTENSION_PROTOCOL_VERSION)}
 
 
 def _require_user(request: Request) -> str:
@@ -1849,15 +1895,19 @@ def _browser_extension_cors_headers(request: Request) -> Dict[str, str]:
     if origin.startswith(("chrome-extension://", "edge-extension://")):
         return {
             "Access-Control-Allow-Origin": origin,
-            "Access-Control-Allow-Headers": "authorization, content-type",
+            "Access-Control-Allow-Headers": "authorization, content-type, x-picsyncra-extension-protocol",
             "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
             "Vary": "Origin",
         }
     return {}
 
 
-def _browser_extension_json(request: Request, payload: Dict[str, Any]) -> JSONResponse:
-    return JSONResponse(payload, headers=_browser_extension_cors_headers(request))
+def _browser_extension_json(
+    request: Request, payload: Dict[str, Any], *, status_code: int = 200
+) -> JSONResponse:
+    return JSONResponse(
+        payload, status_code=status_code, headers=_browser_extension_cors_headers(request)
+    )
 
 
 def _browser_extension_defaults(request: Request, username: str) -> str:
@@ -2489,7 +2539,7 @@ def _download_ftp_photo_source(
 
 
 def _same_existing_source(source_path: str, upload: WebUploadedSlot, photo: Dict[str, Any]) -> bool:
-    upload_path = str(upload.source_path or "")
+    upload_path = str(upload.original_source_path or upload.source_path or "")
     if source_path and upload_path:
         try:
             return os.path.samefile(source_path, upload_path)
@@ -3075,7 +3125,7 @@ def _logs_response(limit: int) -> Dict[str, Any]:
     return {"logs": logs, "events": events, "summary": _logs_summary(events)}
 
 
-def _snapshot_entry_payload(form: _ProcessFormSnapshot) -> Dict[str, str]:
+def _snapshot_entry_payload(form: Any) -> Dict[str, str]:
     return {
         "product_id": str(form.get("product_id") or ""),
         "name": str(form.get("name") or ""),
@@ -3279,14 +3329,14 @@ def _process_upload_snapshot(
                 }
                 local_token = str(form.get(f"delete_local_slot_{prefix}") or "").strip()
                 if local_token:
-                    delete_item["local_path"] = _path_from_file_token(
+                    delete_item["local_path"] = form.trusted_paths.get(f'delete_local_slot_{prefix}') or _path_from_file_token(
                         local_token,
                         require_exists=False,
                     )
                 delete_requests.append(delete_item)
             token = str(form.get(f"existing_slot_{prefix}") or "").strip()
             if token:
-                source_path = _path_from_file_token(token)
+                source_path = form.trusted_paths.get(f'existing_slot_{prefix}') or _path_from_file_token(token)
                 original_filename = _safe_upload_name(
                     str(form.get(f"existing_slot_name_{prefix}") or ""),
                     os.path.basename(source_path),
@@ -3302,6 +3352,7 @@ def _process_upload_snapshot(
                         original_filename=original_filename,
                         content_fit=_optional_form_bool(form, f"slot_fit_{prefix}"),
                         preprocessed=preprocessed,
+                        original_source_path=form.source_paths.get(f'existing_slot_{prefix}', ''),
                     )
                 )
                 continue
@@ -3333,17 +3384,7 @@ def _process_upload_snapshot(
                     content_fit=_optional_form_bool(form, f"slot_fit_{prefix}"),
                 )
             )
-        product = WebProductForm(
-            name=str(form.get("name") or ""),
-            type_name=str(form.get("type_name") or ""),
-            model=str(form.get("model") or ""),
-            color1=str(form.get("color1") or ""),
-            color2=str(form.get("color2") or ""),
-            color3=str(form.get("color3") or ""),
-            extra=str(form.get("extra") or ""),
-            ean=str(form.get("ean") or ""),
-            product_id=str(form.get("product_id") or ""),
-        )
+        product = WebProductForm(**_snapshot_entry_payload(form))
         product = effective_product_form(product, field_settings)
         errors = validate_product_form(product, field_settings)
         if errors:
@@ -3864,8 +3905,17 @@ async def _stage_process_form(request: Request) -> _ProcessFormSnapshot:
     )
     try:
         resolve_path_within_roots(temp_dir, [_PROCESS_JOB_ROOT])
-        form = await request.form()
-        snapshot = await _materialize_process_form(form, temp_dir)
+        async with request.form() as form:
+            # A queue acknowledgement lets the browser clear its draft. Reject invalid
+            # fields before that acknowledgement and before copying any staged uploads.
+            field_settings = _active_product_field_settings()
+            product = effective_product_form(
+                WebProductForm(**_snapshot_entry_payload(form)), field_settings
+            )
+            errors = validate_product_form(product, field_settings)
+            if errors:
+                raise HTTPException(status_code=400, detail=" ".join(errors))
+            snapshot = await _materialize_process_form(form, temp_dir)
     except Exception:
         _cleanup_process_job_directory(temp_dir)
         raise
@@ -4182,6 +4232,28 @@ def _emit_process_failed(
     )
 
 
+def _restore_pending_process_jobs() -> None:
+    from .process_pending import load_pending
+    def validate_original(path):
+        return resolve_path_within_roots(path, _file_token_roots())
+    try:
+        for saved in load_pending(_PROCESS_JOB_ROOT, issue_token=_FILE_TOKEN_REGISTRY.issue,
+                                  validate_original=validate_original):
+            if saved['id'] in _PROCESS_JOBS:
+                continue
+            reservation = _PROCESS_QUEUE.reserve(saved['cache_scope'], restoring=True)
+            job = _new_process_job(username=saved['username'], cache_scope=saved['cache_scope'],
+                                   form=saved['form'], status='queued')
+            job.update({key: saved[key] for key in ('id', 'created_at', 'created_time')})
+            with _PROCESS_JOBS_LOCK:
+                _PROCESS_JOBS[job['id']] = job
+                _PROCESS_JOB_COMPLETIONS[job['id']] = threading.Event()
+                _advance_process_queue_generation_locked()
+            _PROCESS_QUEUE.submit(reservation, job['id'], _run_process_job)
+    except Exception as exc:
+        log_error(f'Nie udało się wznowić kolejki po restarcie: {exc}')
+
+
 def _queue_process_job(
     *,
     username: str,
@@ -4195,6 +4267,12 @@ def _queue_process_job(
         username=username, cache_scope=cache_scope, form=form, status="queued"
     )
     job_id = str(job["id"])
+    from .process_pending import save_pending, mark_state
+    # This write is required for acceptance, unlike optional job telemetry.
+    if not form.temp_dir:
+        _PROCESS_JOB_ROOT.mkdir(parents=True, exist_ok=True)
+        form.temp_dir = tempfile.mkdtemp(prefix=_PROCESS_JOB_DIRECTORY_PREFIX, dir=_PROCESS_JOB_ROOT)
+    save_pending(job, _PROCESS_JOB_ROOT, resolve_token=_path_from_file_token, state='staged')
     completion = threading.Event()
     with _PROCESS_JOBS_LOCK:
         _PROCESS_JOBS[job_id] = job
@@ -4209,7 +4287,8 @@ def _queue_process_job(
             persisted_job["progress_label"] = "Start zadania"
     _persist_process_job(persisted_job)
     try:
-        queue_position = _PROCESS_QUEUE.submit(reservation, job_id, _run_process_job)
+        queue_position = _PROCESS_QUEUE.submit(reservation, job_id, _run_process_job,
+                                              on_submit=lambda: mark_state(form, 'queued'))
     except Exception:
         with _PROCESS_JOBS_LOCK:
             _PROCESS_JOBS.pop(job_id, None)
@@ -4250,6 +4329,9 @@ def _run_process_job(
         if not start_persisted:
             _persist_process_job(durable_job)
         try:
+            from .process_pending import mark_started
+            if isinstance(form, _ProcessFormSnapshot) and form.temp_dir:
+                mark_started(form)
             if cancel_event is not None and cancel_event.is_set():
                 raise _ProcessJobCancelled()
             payload = _process_upload_snapshot(
@@ -4320,6 +4402,10 @@ def _cancel_process_job_for_user(job_id: str, username: str) -> Optional[Dict[st
             return None
         if job.get("status") not in {"queued", "running"}:
             return None
+        form = job.get('form')
+        if job.get('status') == 'queued' and isinstance(form, _ProcessFormSnapshot) and form.temp_dir:
+            from .process_pending import mark_state
+            mark_state(form, 'cancelled')
     if not _PROCESS_QUEUE.cancel(job_id):
         return None
     temp_dir = ""
@@ -4425,6 +4511,22 @@ def _resource_monitor_context() -> dict[str, int]:
         "queued_jobs": int(active["queued_count"]),
         "active_clients": active_clients,
     }
+
+
+def _memory_diagnostic_context() -> dict[str, int]:
+    """Report sizes of long-lived collections, never their contents."""
+    counters = _resource_monitor_context()
+    with _PROCESS_JOBS_LOCK:
+        counters['retained_process_jobs'] = len(_PROCESS_JOBS)
+        counters['process_completion_events'] = len(_PROCESS_JOB_COMPLETIONS)
+    with _RATE_LIMITS_LOCK:
+        counters['rate_limit_keys'] = len(_RATE_LIMITS)
+    counters['upload_scan_results'] = len(_UPLOAD_SCAN_RESULTS)
+    counters['browser_import_scopes'] = len(_BROWSER_EXTENSION_IMPORTS)
+    execution = _OCR_EXECUTION_SERVICE
+    if execution is not None:
+        counters.update(execution.diagnostic_counts())
+    return counters
 
 
 def _emit_resource_event(
@@ -5032,6 +5134,7 @@ def _health_payload() -> Dict[str, Any]:
     return {
         "ok": local_ready,
         "application": brand.PACKAGE_NAME,
+        "process_id": os.getpid(),
         "version": get_display_version(),
         "time": server_time,
         "components": components,
@@ -5219,6 +5322,40 @@ def create_app() -> FastAPI:
     app.state.ocr_queue_thread = None
     app.state.ocr_execution_service = None
     app.state.ocr_execution_worker = None
+    installed_context = resolve_install_context(Path(sys.executable))
+    installation_service = (
+        InstalledOperationService(
+            installed_context,
+            InstallationControlClient(installed_context.installation_id),
+            release_executor_factory=VerifiedReleaseOperationFactory(
+                installed_context,
+                catalog=lambda channel: tuple(list_installed_releases(channel)),
+                release_record=read_installed_release_record,
+            ),
+            ocr_executor_factory=VerifiedOcrOperationFactory(
+                installed_context,
+                catalog=lambda channel: tuple(list_installed_releases(channel)),
+                release_record=read_installed_release_record,
+            ),
+        )
+        if installed_context is not None
+        else None
+    )
+    app.state.installation_service = installation_service
+    installation_problem_reporter = None
+    app.state.installation_problem_observer = None
+    if installed_context is not None:
+        from .installation_events import InstallationProblemObserver, InstallationProblemReporter
+        installation_problem_reporter = InstallationProblemReporter()
+        app.state.installation_problem_observer = InstallationProblemObserver(installed_context.state_root,
+                                                                             installation_problem_reporter)
+    app.state.maintenance_request_admission = (
+        MaintenanceRequestAdmission(installation_service.maintenance_gate)
+        if installation_service is not None
+        else None
+    )
+    if installation_service is not None:
+        _PROCESS_QUEUE.set_maintenance_gate(installation_service.maintenance_gate)
 
     def _ocr_has_active_requests() -> bool:
         with app.state.ocr_activity_lock:
@@ -5272,6 +5409,11 @@ def create_app() -> FastAPI:
         )
 
     def _run_ocr_queue_once() -> str:
+        execution = app.state.ocr_execution_service
+        if execution is not None:
+            execution.pump()
+        if installation_service is not None and installation_service.maintenance_gate.snapshot()['state'] != 'idle':
+            return 'maintenance'
         _purge_expired_ocr_crop_jobs()
         ocr_settings = normalize_ocr_settings(
             config.CONFIG.get(OCR_SETTINGS_KEY, {})
@@ -5291,7 +5433,19 @@ def create_app() -> FastAPI:
             lease=app.state.ocr_queue_lease,
             now=time.monotonic,
         )
-        return scheduler.run_once()
+        gate = installation_service.maintenance_gate if installation_service else None
+        lease = gate.try_admit('ocr_queue') if gate else None
+        if gate is not None and lease is None:
+            return 'maintenance'
+        try:
+            return scheduler.run_once()
+        finally:
+            if lease: lease.finish()
+
+    @app.exception_handler(ClientDisconnect)
+    async def _client_disconnected(request: Request, exc: ClientDisconnect) -> Response:
+        # Superseded lookups are routinely aborted by the browser while typing.
+        return Response(status_code=499)
 
     @app.exception_handler(Exception)
     async def _unhandled_application_error(
@@ -5369,6 +5523,22 @@ def create_app() -> FastAPI:
         return response
 
     @app.middleware("http")
+    async def _admit_installed_mutating_work(request: Request, call_next):
+        admission = app.state.maintenance_request_admission
+        if admission is None or not admission.requires_admission(request.method, request.url.path):
+            return await call_next(request)
+        lease = admission.admit(request.method, request.url.path)
+        if lease is None:
+            return JSONResponse(
+                status_code=503,
+                content={"detail": "Trwa konserwacja aplikacji. Nowe zmiany są chwilowo wstrzymane."},
+            )
+        try:
+            return await call_next(request)
+        finally:
+            lease.finish()
+
+    @app.middleware("http")
     async def _track_active_clients(request: Request, call_next):
         response = await call_next(request)
         _record_active_client(request, getattr(response, "status_code", 0))
@@ -5394,62 +5564,83 @@ def create_app() -> FastAPI:
     @app.on_event("startup")
     def _startup() -> None:
         global _OCR_EXECUTION_SERVICE
+        if installation_service is not None:
+            request_path = installed_context.state_root / 'module-maintenance-request.json'
+            if request_path.exists():
+                identifier = json.loads(request_path.read_text(encoding='utf-8'))['operation_id']
+                installation_service.maintenance_gate.begin(identifier, initiator_id='module-controller')
+            installation_service.start_module_maintenance_watch()
         os.environ.setdefault("PICSYNCRA_HEADLESS", "1")
+        from ..memory_diagnostics import start_memory_reporting
+
+        start_memory_reporting('backend', context=_memory_diagnostic_context)
         runtime_info = initialize_application_runtime(interactive=False)
         app.state.runtime_info = runtime_info
         _ensure_active_client_registry()
         _RESOURCE_MONITOR.start()
         if OCR_FEATURE_ENABLED:
-            _clear_ocr_crop_queue_on_startup()
             ocr_settings = normalize_ocr_settings(config.CONFIG.get(OCR_SETTINGS_KEY, {}))
-            ocr_worker = OcrWorkerProcess(
-                cpu_percent=int(ocr_settings.get("max_cpu_percent") or 35)
-            )
-            execution_service = OcrExecutionService(
-                worker=ocr_worker,
-                registry=OcrProgressRegistry(),
-                settings=lambda: normalize_ocr_settings(
-                    config.CONFIG.get(OCR_SETTINGS_KEY, {})
-                ),
-                telemetry=_ocr_resource_telemetry,
-                on_worker_ready=(
-                    callback
-                    if callable(
-                        callback := getattr(
-                            _RESOURCE_MONITOR, "register_ocr_worker_pid", None
+            ocr_worker = _create_ocr_execution_worker(ocr_settings)
+            if ocr_worker is not None:
+                if installation_service is None:
+                    _clear_ocr_crop_queue_on_startup()
+                execution_service = OcrExecutionService(
+                    worker=ocr_worker,
+                    registry=OcrProgressRegistry(),
+                    settings=lambda: normalize_ocr_settings(
+                        config.CONFIG.get(OCR_SETTINGS_KEY, {})
+                    ),
+                    telemetry=_ocr_resource_telemetry,
+                    on_worker_ready=(
+                        callback
+                        if callable(
+                            callback := getattr(
+                                _RESOURCE_MONITOR, "register_ocr_worker_pid", None
+                            )
                         )
-                    )
-                    else None
-                ),
-            )
-            execution_service.start()
-            app.state.ocr_execution_worker = ocr_worker
-            app.state.ocr_execution_service = execution_service
-            _OCR_EXECUTION_SERVICE = execution_service
-            app.state.ocr_queue_stop.clear()
-            worker = OcrQueueWorker(
-                run_once=_run_ocr_queue_once,
-                poll_seconds=0.5,
-                stop_event=app.state.ocr_queue_stop,
-            )
-            app.state.ocr_queue_thread = threading.Thread(
-                target=worker.run,
-                name="picsyncra-ocr-queue",
-                daemon=True,
-            )
-            app.state.ocr_queue_thread.start()
+                        else None
+                    ),
+                    maintenance_gate=(
+                        installation_service.maintenance_gate
+                        if installation_service is not None
+                        else None
+                    ),
+                )
+                execution_service.start()
+                app.state.ocr_execution_worker = ocr_worker
+                app.state.ocr_execution_service = execution_service
+                _OCR_EXECUTION_SERVICE = execution_service
+                app.state.ocr_queue_stop.clear()
+                worker = OcrQueueWorker(
+                    run_once=_run_ocr_queue_once,
+                    poll_seconds=0.5,
+                    stop_event=app.state.ocr_queue_stop,
+                )
+                app.state.ocr_queue_thread = threading.Thread(
+                    target=worker.run,
+                    name="picsyncra-ocr-queue",
+                    daemon=True,
+                )
+                app.state.ocr_queue_thread.start()
         cleanup_web_ftp_cache(force=True)
         cleanup_web_upload_cache(force=True)
+        _restore_pending_process_jobs()
         try:
             _prune_live_events_if_due(force=True)
         except Exception as exc:
             log_error(f"WEB observability pruning failed: {exc}\n{traceback.format_exc()}")
         _start_backup_scheduler()
         start_notification_worker()
+        if app.state.installation_problem_observer is not None:
+            app.state.installation_problem_observer.start()
 
     @app.on_event("shutdown")
     def _shutdown() -> None:
         global _OCR_EXECUTION_SERVICE
+        if app.state.installation_problem_observer is not None:
+            app.state.installation_problem_observer.stop()
+        if installation_service is not None:
+            installation_service.stop_module_maintenance_watch()
         app.state.ocr_queue_stop.set()
         worker = app.state.ocr_execution_worker
         if worker is not None:
@@ -5488,6 +5679,31 @@ def create_app() -> FastAPI:
     )
     runtime_routes = {route.path: route for route in runtime_router.routes}
     app.routes.append(runtime_routes["/api/runtime-status"])
+
+    if installation_service is not None:
+        app.include_router(
+            build_installation_router(
+                InstallationApiDependencies(
+                    is_installed=lambda: True,
+                    require_admin=lambda request: _require_admin(request),
+                    require_user=lambda request: _require_user(request),
+                    require_csrf=lambda request: _validate_mutating_request(request),
+                    installation_status=installation_service.status,
+                    list_releases=lambda channel: [
+                        asdict(release) for release in list_installed_releases(channel)
+                    ],
+                    submit_operation=lambda request, actor_id: installation_service.submit(request, actor_id=actor_id),
+                    read_operation=installation_service.read_operation,
+                    record_problem=installation_problem_reporter,
+                    force_operation=installation_service.force_operation,
+                    change_channel=installation_service.change_channel,
+                    set_autostart=installation_service.set_autostart,
+                    heartbeat=installation_service.heartbeat,
+                    public_status=installation_service.public_status,
+                    module_client=InstallationControlClient(installed_context.installation_id),
+                )
+            )
+        )
 
     @app.post("/api/resource-monitor/simulate-safe")
     def resource_monitor_simulate_safe(request: Request) -> Dict[str, Any]:
@@ -5638,6 +5854,7 @@ def create_app() -> FastAPI:
             "processed_dir": settings.l,
             "config_path": runtime_info["config_path"],
             "version": get_display_version(),
+            "release_notice": release_notice_for(request),
             "auto_content_fit": bool(config.CONFIG.get(AUTO_CONTENT_FIT_KEY, False)),
             "processing": _processing_settings(),
             "security": _security_settings(),
@@ -5656,6 +5873,25 @@ def create_app() -> FastAPI:
             **load_web_data(),
             "pimcore": pimcore_runtime_capabilities(),
         }
+
+    def release_notice_for(request):
+        from .release_notices import current_notice
+        user = _current_user_payload(request)
+        return current_notice(installed_context, observability_store(), str(user.get('id') or user['username']))
+
+    @app.get('/api/installation/release-notice')
+    def release_notice_get(request: Request):
+        return {'notice': release_notice_for(request)}
+
+    @app.post('/api/installation/release-notice/read')
+    async def release_notice_read(request: Request):
+        _validate_mutating_request(request)
+        notice = release_notice_for(request)
+        body = await request.json()
+        if notice and body.get('version_id') == notice['version_id']:
+            user = _current_user_payload(request)
+            observability_store().acknowledge_release_notice(str(user.get('id') or user['username']), notice['version_id'])
+        return {'ok': True}
 
     @app.get("/api/github/repository")
     def github_repository_api(request: Request) -> Dict[str, Any]:
@@ -6070,6 +6306,7 @@ def create_app() -> FastAPI:
     @app.get("/api/browser-extension/ping")
     def browser_extension_ping_api(request: Request) -> JSONResponse:
         username = _require_browser_extension_user(request)
+        compatible = _browser_extension_protocol_compatible(request)
         return _browser_extension_json(
             request,
             {
@@ -6077,6 +6314,9 @@ def create_app() -> FastAPI:
                 "username": username,
                 "version": get_display_version(),
                 "token_version": int((find_user(username) or {}).get("extension_token_version") or 0),
+                "extension_protocol": EXTENSION_PROTOCOL_VERSION,
+                "update_required": not compatible,
+                "extension_download": "/api/browser-extension/download" if not compatible else "",
             },
         )
 
@@ -6089,6 +6329,16 @@ def create_app() -> FastAPI:
     async def browser_extension_upload_cache_api(request: Request) -> JSONResponse:
         started = time.perf_counter()
         username = _require_browser_extension_user(request)
+        if not _browser_extension_protocol_compatible(request):
+            return _browser_extension_json(
+                request,
+                {
+                    "detail": "Wymagana aktualizacja rozszerzenia przeglądarki.",
+                    "update_required": True,
+                    "extension_download": "/api/browser-extension/download",
+                },
+                status_code=426,
+            )
         form = await request.form()
         upload = form.get("file")
         if not isinstance(upload, UploadFile) or not upload.filename:

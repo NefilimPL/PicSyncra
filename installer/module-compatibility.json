@@ -1,0 +1,252 @@
+{
+  "schema": 1,
+  "modules": {
+    "core": {
+      "api": 1,
+      "requirements": [
+        {
+          "module_id": "ftp",
+          "minimum_api": 1,
+          "maximum_api": 1
+        },
+        {
+          "module_id": "sql",
+          "minimum_api": 1,
+          "maximum_api": 1
+        },
+        {
+          "module_id": "pimcore",
+          "minimum_api": 1,
+          "maximum_api": 1
+        },
+        {
+          "module_id": "slots",
+          "minimum_api": 1,
+          "maximum_api": 1
+        },
+        {
+          "module_id": "settings",
+          "minimum_api": 1,
+          "maximum_api": 1
+        },
+        {
+          "module_id": "web_ui",
+          "minimum_api": 1,
+          "maximum_api": 1
+        },
+        {
+          "module_id": "ocr",
+          "minimum_api": 1,
+          "maximum_api": 1
+        },
+        {
+          "module_id": "ocr_tester",
+          "minimum_api": 1,
+          "maximum_api": 1
+        }
+      ],
+      "conflicts": [],
+      "database_min": 17,
+      "database_max": 17,
+      "config_min": 1,
+      "config_max": 1,
+      "runtime_abi": "cp313-win-amd64"
+    },
+    "ftp": {
+      "api": 1,
+      "requirements": [
+        {
+          "module_id": "core",
+          "minimum_api": 1,
+          "maximum_api": 1
+        }
+      ],
+      "conflicts": [],
+      "database_min": 17,
+      "database_max": 17,
+      "config_min": 1,
+      "config_max": 1,
+      "runtime_abi": "cp313-win-amd64"
+    },
+    "sql": {
+      "api": 1,
+      "requirements": [
+        {
+          "module_id": "core",
+          "minimum_api": 1,
+          "maximum_api": 1
+        }
+      ],
+      "conflicts": [],
+      "database_min": 17,
+      "database_max": 17,
+      "config_min": 1,
+      "config_max": 1,
+      "runtime_abi": "cp313-win-amd64"
+    },
+    "pimcore": {
+      "api": 1,
+      "requirements": [
+        {
+          "module_id": "core",
+          "minimum_api": 1,
+          "maximum_api": 1
+        }
+      ],
+      "conflicts": [],
+      "database_min": 17,
+      "database_max": 17,
+      "config_min": 1,
+      "config_max": 1,
+      "runtime_abi": "cp313-win-amd64"
+    },
+    "slots": {
+      "api": 1,
+      "requirements": [
+        {
+          "module_id": "core",
+          "minimum_api": 1,
+          "maximum_api": 1
+        }
+      ],
+      "conflicts": [],
+      "database_min": 17,
+      "database_max": 17,
+      "config_min": 1,
+      "config_max": 1,
+      "runtime_abi": "cp313-win-amd64"
+    },
+    "settings": {
+      "api": 1,
+      "requirements": [
+        {
+          "module_id": "core",
+          "minimum_api": 1,
+          "maximum_api": 1
+        }
+      ],
+      "conflicts": [],
+      "database_min": 17,
+      "database_max": 17,
+      "config_min": 1,
+      "config_max": 1,
+      "runtime_abi": "cp313-win-amd64"
+    },
+    "web_ui": {
+      "api": 1,
+      "requirements": [
+        {
+          "module_id": "core",
+          "minimum_api": 1,
+          "maximum_api": 1
+        }
+      ],
+      "conflicts": [],
+      "database_min": 17,
+      "database_max": 17,
+      "config_min": 1,
+      "config_max": 1,
+      "runtime_abi": "cp313-win-amd64"
+    },
+    "ocr": {
+      "api": 1,
+      "requirements": [
+        {
+          "module_id": "core",
+          "minimum_api": 1,
+          "maximum_api": 1
+        }
+      ],
+      "conflicts": [],
+      "database_min": 17,
+      "database_max": 17,
+      "config_min": 1,
+      "config_max": 1,
+      "runtime_abi": "cp313-win-amd64"
+    },
+    "ocr_tester": {
+      "api": 1,
+      "requirements": [
+        {
+          "module_id": "core",
+          "minimum_api": 1,
+          "maximum_api": 1
+        }
+      ],
+      "conflicts": [],
+      "database_min": 17,
+      "database_max": 17,
+      "config_min": 1,
+      "config_max": 1,
+      "runtime_abi": "cp313-win-amd64"
+    },
+    "migrator": {
+      "api": 1,
+      "requirements": [
+        {
+          "module_id": "core",
+          "minimum_api": 1,
+          "maximum_api": 1
+        }
+      ],
+      "conflicts": [],
+      "database_min": 17,
+      "database_max": 17,
+      "config_min": 1,
+      "config_max": 1,
+      "runtime_abi": "cp313-win-amd64"
+    },
+    "local": {
+      "api": 1,
+      "requirements": [
+        {
+          "module_id": "core",
+          "minimum_api": 1,
+          "maximum_api": 1
+        }
+      ],
+      "conflicts": [],
+      "database_min": 17,
+      "database_max": 17,
+      "config_min": 1,
+      "config_max": 1,
+      "runtime_abi": "cp313-win-amd64"
+    },
+    "ocr_runtime": {
+      "api": 1,
+      "requirements": [
+        {
+          "module_id": "core",
+          "minimum_api": 1,
+          "maximum_api": 1
+        },
+        {
+          "module_id": "ocr",
+          "minimum_api": 1,
+          "maximum_api": 1
+        },
+        {
+          "module_id": "ocr_models",
+          "minimum_api": 1,
+          "maximum_api": 1
+        }
+      ],
+      "conflicts": [],
+      "database_min": 17,
+      "database_max": 17,
+      "config_min": 1,
+      "config_max": 1,
+      "runtime_abi": "cp313-win-amd64"
+    },
+    "ocr_models": {
+      "api": 1,
+      "requirements": [],
+      "conflicts": [],
+      "database_min": 17,
+      "database_max": 17,
+      "config_min": 1,
+      "config_max": 1,
+      "runtime_abi": "cp313-win-amd64"
+    }
+  }
+}

@@ -159,6 +159,15 @@ def load_bootstrap_settings_file(settings_path: Path) -> dict[str, Any]:
 
     data: dict[str, Any] = dict(common.BASE_DIR_SETTINGS_TEMPLATE)
     path = Path(settings_path)
+    install_context = getattr(settings, "_INSTALL_CONTEXT", None)
+    try:
+        active_settings_path = Path(settings.BASE_DIR_SETTINGS_PATH).resolve()
+        is_active_settings = path.resolve() == active_settings_path
+    except (OSError, RuntimeError):
+        is_active_settings = False
+    if install_context is not None and is_active_settings and not path.exists():
+        data[DATABASE_LOCATION_MODE_KEY] = DATABASE_LOCATION_CUSTOM
+        data[DATABASE_PATH_KEY] = str(install_context.database_path)
     try:
         if path.exists():
             loaded = json.loads(path.read_text(encoding="utf-8"))
