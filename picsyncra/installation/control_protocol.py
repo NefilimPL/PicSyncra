@@ -7,6 +7,8 @@ the caller: a request can only select one of the controller's fixed actions.
 
 from __future__ import annotations
 
+import base64
+import binascii
 from dataclasses import dataclass
 import json
 import re
@@ -75,7 +77,14 @@ def validate_module_payload(command, payload):
             _reject('Invalid authorization request identifier.')
         if command == 'module_authorize':
             blob = payload['credential_blob']
-            if not isinstance(blob, str) or not 16 <= len(blob) <= 6144 or not re.fullmatch('[A-Za-z0-9+/]+={0,2}', blob):
+            if not isinstance(blob, str) or not 16 <= len(blob) <= 6144:
+                _reject('Invalid protected credential buffer.')
+            # Validate canonical Base64 in linear time, without regex backtracking.
+            try:
+                decoded = base64.b64decode(blob, validate=True)
+            except (binascii.Error, ValueError):
+                _reject('Invalid protected credential buffer.')
+            if base64.b64encode(decoded).decode('ascii') != blob:
                 _reject('Invalid protected credential buffer.')
         return
     if command == 'module_channel':

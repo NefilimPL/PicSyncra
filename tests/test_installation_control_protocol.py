@@ -77,6 +77,64 @@ def test_protocol_rejects_messages_larger_than_its_framing_limit() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "blob",
+    [
+        "abcdefghijklmnop",
+        "abcdefghijklmn+/",
+        "abcdefghijklmnA=",
+        "abcdefghijklAA==",
+        "+" * 6144,
+    ],
+)
+def test_protocol_accepts_base64_credential_buffers(blob: str) -> None:
+    payload = {"request_id": "a" * 32, "credential_blob": blob}
+
+    request = parse_control_request(
+        _message(command="module_authorize", payload=payload),
+        installation_id="primary-installation",
+        peer_identity="S-1-5-21-1000",
+        authorized_identities={"S-1-5-21-1000"},
+    )
+
+    assert request.command == "module_authorize"
+    assert request.payload == payload
+
+
+@pytest.mark.parametrize(
+    "blob",
+    [
+        None,
+        1234,
+        "",
+        "A" * 12,
+        "+" * 6148,
+        "+" * 17,
+        "A" * 16 + "=",
+        "A" * 16 + "====",
+        "abcdefghijklmnB=",
+        "abcdefghijklAB==",
+        "=" + "A" * 15,
+        "A" * 8 + "=" + "A" * 7,
+        "A" * 15 + "\n",
+        "A" * 15 + "\u00e9",
+        "+" * 6143 + "!",
+        "+" * 6141 + "===",
+    ],
+)
+def test_protocol_rejects_malformed_base64_credential_buffers(blob: object) -> None:
+    with pytest.raises(ControlProtocolError, match="Invalid protected credential buffer"):
+        parse_control_request(
+            _message(
+                command="module_authorize",
+                payload={"request_id": "a" * 32, "credential_blob": blob},
+            ),
+            installation_id="primary-installation",
+            peer_identity="S-1-5-21-1000",
+            authorized_identities={"S-1-5-21-1000"},
+        )
+
+
 def test_dispatcher_exposes_only_a_confirmed_controller_result() -> None:
     """Catches a pipe handler leaking controller internals or accepting dynamic calls."""
 
